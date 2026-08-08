@@ -1,0 +1,294 @@
+"""M2 verification — happy paths for all 15 tools (pytest -m tools)."""
+
+from __future__ import annotations
+
+import pytest
+from sqlalchemy import text
+
+from server.db import session_scope
+from server.mcp import tools as T
+from server.mcp.errors import ToolError
+
+pytestmark = pytest.mark.tools
+
+
+def test_registry_has_exactly_fifteen_tools():
+    assert len(T.TOOLS) == 15
+    assert sorted(s.number for s in T.TOOLS.values()) == list(range(1, 16))
+    assert len(T.WRITE_TOOLS) == 4
+    assert set(T.WRITE_TOOLS) == {
+        "create_onboarding_request", "create_service_request",
+        "request_booking", "generate_document",
+    }
+
+
+# --- read tools -------------------------------------------------------------------
+
+
+def test_1_get_user_profile_self(ctxs):
+    out = T.get_user_profile(ctxs["alice"], user_id="u-alice")
+    assert out["user_id"] == "u-alice"
+    assert out["lab"]["id"] == "lab-a"
+    assert out["account_codes"] == ["ACC-A1"]
+
+
+def test_1_get_user_profile_defaults_to_caller(ctxs):
+    assert T.get_user_profile(ctxs["bob"])["user_id"] == "u-bob"
+
+
+def test_2_get_facility_catalog(ctxs):
+    out = T.get_facility_catalog(ctxs["alice"])
+    assert len(out["facilities"]) == 3
+    assert len(out["instruments"]) == 12
+    assert len(out["templates"]) == 8
+    assert any(i["name"] == "Confocal C2" for i in out["instruments"])
+
+
+def test_2_get_facility_catalog_filtered(ctxs):
+    out = T.get_facility_catalog(ctxs["alice"], facility_id="fac-genomics")
+    assert [f["id"] for f in out["facilities"]] == ["fac-genomics"]
+    assert all(i["facility_id"] == "fac-genomics" for i in out["instruments"])
+
+
+def test_3_check_availability_returns_free_slots(ctxs):
+    out = T.check_availability(
+        ctxs["alice"], instrument_id="ins-miseq",
+        date_from="2027-02-01T00:00:00Z", date_to="2027-02-03T00:00:00Z",
+    )
+    assert out["instrument"]["name"] == "MiSeq M3"
+    assert out["free_slots"], "a wide-open future window should have free slots"
+    for slot in out["free_slots"]:
+        assert slot["starts_at"] < slot["ends_at"]
+
+
+def test_3_check_availability_rejects_backwards_window(ctxs):
+    with pytest.raises(ToolError) as exc:
+        T.check_availability(ctxs["alice"], instrument_id="ins-miseq",
+                             date_from="2027-02-03T00:00:00Z", date_to="2027-02-01T00:00:00Z")
+    assert exc.value.code == "invalid_params"
+
+
+def test_4_get_my_bookings(ctxs):
+    out = T.get_my_bookings(ctxs["alice"])
+    assert out["user_id"] == "u-alice"
+    assert out["count"] > 0
+    with session_scope() as s:
+        expected = s.execute(
+            text("SELECT count(*) FROM infinity.bookings WHERE user_id = 'u-alice'")
+        ).scalar_one()
+    assert out["count"] == expected
+
+
+def test_5_get_usage_records_user_scope(ctxs):
+    out = T.get_usage_records(ctxs["alice"], scope="user")
+    assert out["scope"] == "user"
+    assert out["id"] == "u-alice"
+    assert out["totals"]["scheduled_hours"] >= 0
+    assert all(r["user_id"] == "u-alice" for r in out["rows"])
+
+
+def test_5_get_usage_records_lab_scope_for_pi(ctxs):
+    out = T.get_usage_records(ctxs["asha"], scope="lab", id="lab-a")
+    assert all(r["lab_id"] == "lab-a" for r in out["rows"])
+
+
+def test_6_get_request_status_mine(ctxs):
+    out = T.get_request_status(ctxs["alice"], mine=True)
+    assert out["count"] > 0
+    assert all("status" in r for r in out["requests"])
+
+
+def test_6_get_request_status_by_id(ctxs):
+    mine = T.get_request_status(ctxs["alice"], mine=True)["requests"][0]
+    out = T.get_request_status(ctxs["alice"], request_id=mine["id"])["request"]
+    assert out["id"] == mine["id"]
+    assert out["user_id"] == "u-alice"
+    assert isinstance(out["samples"], list)
+
+
+def test_7_track_sample(ctxs):
+    with session_scope() as s:
+        barcode = s.execute(
+            text(
+                """SELECT s.barcode FROM infinity.samples s
+                   JOIN infinity.service_requests sr ON sr.id = s.request_id
+                   WHERE sr.user_id = 'u-alice' LIMIT 1"""
+            )
+        ).scalar_one()
+    out = T.track_sample(ctxs["alice"], barcode=barcode)
+    assert out["sample"]["barcode"] == barcode
+    assert out["timeline"]
+
+
+def test_8_get_billing_summary_own_code(ctxs):
+    out = T.get_billing_summary(ctxs["alice"], account_code="ACC-A1", period="2026-03")
+    assert out["lab_id"] == "lab-a"
+    assert out["total"] > 0
+    assert abs(sum(ln["amount"] for ln in out["lines"]) - out["total"]) < 0.01
+
+
+def test_8_billing_march_confocal_story(ctxs):
+    """The demo's precise number, straight from the tool."""
+    out = T.get_billing_summary(ctxs["asha"], account_code="ACC-A1", period="2026-03")
+    confocal = sum(ln["amount"] for ln in out["lines"] if ln["instrument"] == "Confocal C2")
+    assert confocal == 412.00
+
+
+def test_9_get_project_overview_admin(ctxs):
+    out = T.get_project_overview(ctxs["cora"], project_id="prj-neuro-atlas")
+    assert out["project"]["id"] == "prj-neuro-atlas"
+    assert out["members"]
+    assert "spend_basis" in out
+
+
+def test_10_get_instrument_health_status_is_t0(ctxs):
+    out = T.get_instrument_health(ctxs["alice"], instrument_id="ins-lightsheet")
+    assert out["instrument"]["status"] == "maintenance"
+    assert "history" not in out, "non-admins must not receive maintenance history"
+
+
+def test_10_get_instrument_health_history_is_admin_only(ctxs):
+    out = T.get_instrument_health(ctxs["cora"], instrument_id="ins-lightsheet")
+    assert "history" in out
+    assert out["downtime_hours_total"] >= 0
+
+
+def test_11_run_readonly_sql_admin(ctxs):
+    out = T.run_readonly_sql(ctxs["cora"], sql="SELECT * FROM v_bookings")
+    assert out["row_count"] > 0
+    assert "LIMIT 200" in out["executed_sql"]
+    assert out["lab_filtered"] is False
+
+
+# --- write tools: all four must only ever produce a pending action ------------------
+
+
+def _pending_count() -> int:
+    with session_scope() as s:
+        return s.execute(
+            text("SELECT count(*) FROM echomind.actions WHERE status = 'pending'")
+        ).scalar_one()
+
+
+def test_12_create_onboarding_request_is_pending_only(ctxs):
+    before = _pending_count()
+    out = T.create_onboarding_request(
+        ctxs["asha"], name="New Person", email="new.person@example.edu",
+        lab_id="lab-a", pi_ack=True, account_code="ACC-A1",
+    )
+    assert out["status"] == "pending"
+    assert out["kind"] == "onboarding"
+    assert _pending_count() == before + 1
+    with session_scope() as s:
+        assert s.execute(
+            text("SELECT count(*) FROM infinity.users WHERE email = 'new.person@example.edu'")
+        ).scalar_one() == 0, "nothing may be written before approval"
+
+
+def test_12_onboarding_requires_pi_ack(ctxs):
+    with pytest.raises(ToolError) as exc:
+        T.create_onboarding_request(ctxs["asha"], name="X", email="x@example.edu",
+                                    lab_id="lab-a", pi_ack=False)
+    assert exc.value.code == "invalid_params"
+
+
+def test_13_create_service_request_validates_required_fields(ctxs):
+    with pytest.raises(ToolError) as exc:
+        T.create_service_request(ctxs["alice"], template_id="tpl-rna-seq", fields={})
+    assert exc.value.code == "invalid_params"
+    assert "sample_count" in exc.value.message
+
+    out = T.create_service_request(
+        ctxs["alice"], template_id="tpl-rna-seq",
+        fields={"sample_count": 8, "organism": "Mus musculus", "read_length": "100bp"},
+    )
+    assert out["status"] == "pending"
+    assert out["kind"] == "service_request"
+
+
+def test_13_create_service_request_rejects_bad_enum(ctxs):
+    with pytest.raises(ToolError) as exc:
+        T.create_service_request(
+            ctxs["alice"], template_id="tpl-rna-seq",
+            fields={"sample_count": 8, "organism": "Mus musculus", "read_length": "999bp"},
+        )
+    assert exc.value.code == "invalid_params"
+
+
+def test_14_request_booking_is_pending_only(ctxs):
+    before = _pending_count()
+    out = T.request_booking(
+        ctxs["alice"], instrument_id="ins-confocal-c2",
+        starts_at="2027-03-04T09:00:00Z", ends_at="2027-03-04T11:00:00Z",
+        account_code="ACC-A1",
+    )
+    assert out["status"] == "pending"
+    assert out["kind"] == "booking"
+    assert "Confocal C2" in out["payload_preview"]
+    assert _pending_count() == before + 1
+    with session_scope() as s:
+        assert s.execute(
+            text(
+                "SELECT count(*) FROM infinity.bookings "
+                "WHERE starts_at = '2027-03-04T09:00:00Z'"
+            )
+        ).scalar_one() == 0
+
+
+def test_14_request_booking_rejects_unavailable_instrument(ctxs):
+    with pytest.raises(ToolError) as exc:
+        T.request_booking(ctxs["alice"], instrument_id="ins-lightsheet",
+                          starts_at="2027-03-05T09:00:00Z", ends_at="2027-03-05T11:00:00Z",
+                          account_code="ACC-A1")
+    assert exc.value.code == "conflict"
+
+
+def test_15_generate_document_is_pending_only(ctxs):
+    out = T.generate_document(ctxs["alice"], template="usage_report", params={"month": "2026-03"})
+    assert out["status"] == "pending"
+    assert out["kind"] == "document"
+
+
+def test_15_generate_document_rejects_unknown_template(ctxs):
+    with pytest.raises(ToolError) as exc:
+        T.generate_document(ctxs["alice"], template="salary_export")
+    assert exc.value.code == "invalid_params"
+
+
+# --- dispatch + errors --------------------------------------------------------------
+
+
+def test_call_dispatch_matches_direct_call(ctxs):
+    assert T.call(ctxs["alice"], "get_user_profile") == T.get_user_profile(ctxs["alice"])
+
+
+def test_unknown_tool_is_invalid_params(ctxs):
+    with pytest.raises(ToolError) as exc:
+        T.call(ctxs["alice"], "drop_everything")
+    assert exc.value.code == "invalid_params"
+
+
+def test_error_object_shape():
+    err = ToolError("forbidden", "nope", "hint").to_dict()
+    assert set(err["error"]) == {"code", "message", "hint"}
+
+
+# --- MCP surface --------------------------------------------------------------------
+
+
+def test_mcp_exposes_every_registry_tool():
+    import asyncio
+
+    from server.mcp.server import mcp
+
+    names = {t.name for t in asyncio.run(mcp.list_tools())}
+    assert names == set(T.TOOLS)
+
+
+def test_mcp_requires_a_bearer_token():
+    """No ambient HTTP request => no identity => refusal. There is no anonymous access."""
+    from server.mcp.server import _ctx_from_headers
+
+    with pytest.raises(ToolError) as exc:
+        _ctx_from_headers()
+    assert exc.value.code == "unauthenticated"

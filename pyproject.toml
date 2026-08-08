@@ -1,0 +1,63 @@
+[project]
+name = "echomind"
+version = "0.1.0"
+description = "EchoMind Local — fully local, audited AI assistant for the Infinity X core-facility platform"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "pydantic>=2.7",
+    "pydantic-settings>=2.3",
+    "sqlalchemy>=2.0",
+    "psycopg[binary]>=3.1",
+    "pgvector>=0.3",
+    "sqlglot>=25.0",
+    "PyJWT>=2.8",
+    "httpx>=0.27",
+    "openai>=1.40",
+    "python-multipart>=0.0.9",
+    "pypdf>=4.2",
+    "fastmcp>=2.0",
+    "langgraph>=0.2",
+    "langgraph-checkpoint-postgres>=2.0",
+    "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.2",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.5",
+]
+# `make eval` needs nothing beyond the core install: the RAGAS metric definitions are
+# implemented in evals/metrics.py against JUDGE_MODEL. The `ragas` package itself cannot
+# be installed here — it imports a langchain-community module that was removed in 0.4,
+# and pinning back to 0.3 breaks LangGraph, which requires langchain-core >= 1.
+# See DECISIONS.md.
+evals = []
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["server*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+filterwarnings = ["ignore::DeprecationWarning"]
+markers = [
+    "seed_counts: M1 — seeded row counts and read-only role enforcement",
+    "tools: M2 — MCP tool happy paths",
+    "sql_guard: M2 — SQL validator rejections",
+    "tiers: M2 — permission tier enforcement",
+    "rag_isolation: M3 — permission-filtered retrieval isolation",
+    "gate: M4 — confidence gate and faithfulness",
+    "agent: M5 — end-to-end LangGraph agent",
+    "llm: requires a live LLM endpoint",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"

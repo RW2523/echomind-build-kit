@@ -1,0 +1,218 @@
+"""RAGAS metrics, implemented directly against JUDGE_MODEL.
+
+Spec 06 asks for faithfulness, answer_correctness and context_precision "using
+JUDGE_MODEL via the OpenAI-compatible endpoint". The `ragas` package cannot be installed
+alongside LangGraph in this project (see DECISIONS.md), so the three metrics are
+implemented here to RAGAS's published definitions:
+
+  faithfulness        statements in the answer that the retrieved contexts support,
+                      over all statements in the answer.
+  answer_correctness  F1 over statement-level TP/FP/FN against the reference answer,
+                      blended 0.75/0.25 with embedding cosine similarity.
+  context_precision   mean precision@k over the retrieved contexts, weighted by whether
+                      each context was relevant to reaching the reference answer.
+
+Deliberately independent of server/agent/faithfulness.py: an evaluation should not grade
+the system with the same code the system used to check itself.
+"""
+
+from __future__ import annotations
+
+import logging
+import math
+from dataclasses import dataclass
+
+from server.agent.llm import chat_json
+from server.config import settings
+from server.rag.embeddings import embed
+
+log = logging.getLogger("echomind.evals.metrics")
+
+CORRECTNESS_F1_WEIGHT = 0.75
+CORRECTNESS_SIM_WEIGHT = 0.25
+
+
+@dataclass
+class MetricScores:
+    faithfulness: float = float("nan")
+    answer_correctness: float = float("nan")
+    context_precision: float = float("nan")
+
+
+def _statements(text: str) -> list[str]:
+    """Break an answer into atomic factual statements (RAGAS step 1)."""
+    if not text.strip():
+        return []
+    result = chat_json(
+        [
+            {
+                "role": "system",
+                "content": (
+                    "Break the text into atomic factual statements. Each statement must "
+                    "stand alone, contain exactly one fact, and use no pronouns. Ignore "
+                    "pleasantries and framing sentences.\n"
+                    'Reply only as JSON: {"statements": ["...", "..."]}'
+                ),
+            },
+            {"role": "user", "content": text},
+        ],
+        model=settings.judge_model,
+        default={"statements": []},
+        max_tokens=600,
+    )
+    out = [str(s).strip() for s in result.get("statements", []) if str(s).strip()]
+    return out or [text.strip()]
+
+
+def _verdicts(statements: list[str], context: str, question: str) -> list[bool]:
+    """For each statement, can it be inferred from the context?"""
+    if not statements:
+        return []
+    numbered = "\n".join(f"{i}. {s}" for i, s in enumerate(statements, start=1))
+    result = chat_json(
+        [
+            {
+                "role": "system",
+                "content": (
+                    "For each numbered statement, decide whether it can be inferred from "
+                    "the CONTEXT. Answer 1 only if the context supports it; answer 0 if "
+                    "the context is silent or contradicts it. Do not use outside "
+                    "knowledge.\n"
+                    'Reply only as JSON: {"verdicts": [{"id": 1, "verdict": 0 or 1}]}'
+                ),
+            },
+            {
+                "role": "user",
+                "content": f"CONTEXT:\n{context}\n\nQUESTION:\n{question}\n\nSTATEMENTS:\n{numbered}",
+            },
+        ],
+        model=settings.judge_model,
+        default={"verdicts": []},
+        max_tokens=700,
+    )
+    by_id: dict[int, bool] = {}
+    for v in result.get("verdicts", []):
+        try:
+            by_id[int(v["id"])] = bool(int(v["verdict"]))
+        except (KeyError, TypeError, ValueError):
+            continue
+    # A statement the judge skipped counts as unsupported: fail closed.
+    return [by_id.get(i, False) for i in range(1, len(statements) + 1)]
+
+
+def faithfulness(answer: str, contexts: list[str], question: str) -> float:
+    statements = _statements(answer)
+    if not statements:
+        return float("nan")
+    verdicts = _verdicts(statements, "\n\n".join(contexts), question)
+    return round(sum(verdicts) / len(verdicts), 3)
+
+
+def _classify(answer: str, reference: str, question: str) -> tuple[int, int, int]:
+    """TP / FP / FN over statements, RAGAS's answer-correctness decomposition."""
+    result = chat_json(
+        [
+            {
+                "role": "system",
+                "content": (
+                    "Compare an ANSWER with the REFERENCE answer to a question, at the "
+                    "level of individual facts.\n"
+                    "  TP: a fact present in the answer and supported by the reference\n"
+                    "  FP: a fact present in the answer but NOT supported by the reference\n"
+                    "  FN: a fact present in the reference but missing from the answer\n"
+                    "Wording may differ; judge meaning, not phrasing.\n"
+                    'Reply only as JSON: {"TP": ["..."], "FP": ["..."], "FN": ["..."]}'
+                ),
+            },
+            {
+                "role": "user",
+                "content": f"QUESTION:\n{question}\n\nANSWER:\n{answer}\n\nREFERENCE:\n{reference}",
+            },
+        ],
+        model=settings.judge_model,
+        default={"TP": [], "FP": [], "FN": []},
+        max_tokens=700,
+    )
+    counts = []
+    for key in ("TP", "FP", "FN"):
+        value = result.get(key) or []
+        counts.append(len(value) if isinstance(value, list) else 0)
+    return counts[0], counts[1], counts[2]
+
+
+def _cosine(a: list[float], b: list[float]) -> float:
+    dot = sum(x * y for x, y in zip(a, b, strict=True))
+    na = math.sqrt(sum(x * x for x in a))
+    nb = math.sqrt(sum(y * y for y in b))
+    return dot / (na * nb) if na and nb else 0.0
+
+
+def answer_similarity(answer: str, reference: str) -> float:
+    if not answer.strip() or not reference.strip():
+        return 0.0
+    vectors = embed([answer, reference])
+    return max(0.0, min(1.0, _cosine(vectors[0], vectors[1])))
+
+
+def answer_correctness(answer: str, reference: str, question: str) -> float:
+    tp, fp, fn = _classify(answer, reference, question)
+    denominator = tp + 0.5 * (fp + fn)
+    f1 = tp / denominator if denominator else 0.0
+    similarity = answer_similarity(answer, reference)
+    score = CORRECTNESS_F1_WEIGHT * f1 + CORRECTNESS_SIM_WEIGHT * similarity
+    return round(max(0.0, min(1.0, score)), 3)
+
+
+def context_precision(contexts: list[str], reference: str, question: str) -> float:
+    """Mean precision@k, weighted by per-context relevance to the reference answer."""
+    if not contexts:
+        return float("nan")
+
+    relevances: list[int] = []
+    for context in contexts:
+        result = chat_json(
+            [
+                {
+                    "role": "system",
+                    "content": (
+                        "Was this context useful for arriving at the reference answer? "
+                        'Reply only as JSON: {"useful": 0 or 1}. Answer 1 only if it '
+                        "contains information the reference answer relies on."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"QUESTION:\n{question}\n\nCONTEXT:\n{context}\n\n"
+                        f"REFERENCE ANSWER:\n{reference}"
+                    ),
+                },
+            ],
+            model=settings.judge_model,
+            default={"useful": 0},
+            max_tokens=60,
+        )
+        try:
+            relevances.append(1 if int(result.get("useful", 0)) else 0)
+        except (TypeError, ValueError):
+            relevances.append(0)
+
+    total_relevant = sum(relevances)
+    if total_relevant == 0:
+        return 0.0
+
+    weighted = 0.0
+    seen = 0
+    for k, relevant in enumerate(relevances, start=1):
+        if relevant:
+            seen += 1
+            weighted += seen / k
+    return round(weighted / total_relevant, 3)
+
+
+def score_all(answer: str, contexts: list[str], reference: str, question: str) -> MetricScores:
+    return MetricScores(
+        faithfulness=faithfulness(answer, contexts, question),
+        answer_correctness=answer_correctness(answer, reference, question),
+        context_precision=context_precision(contexts, reference, question),
+    )
