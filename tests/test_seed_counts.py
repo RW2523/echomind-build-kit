@@ -148,6 +148,59 @@ def test_readonly_role_cannot_create_objects(rodb):
     rodb.rollback()
 
 
+# --- app role (runtime) ---------------------------------------------------------
+
+
+def test_app_role_can_do_its_job_but_owns_nothing(db):
+    """`echomind_app` must be able to run the application and nothing more.
+
+    Asserted against the role directly rather than through `engine`, so the guarantee
+    holds even on a dev checkout where APP_DATABASE_URL is unset and the API still
+    connects as the owner.
+    """
+    from sqlalchemy import create_engine
+    from sqlalchemy.exc import SQLAlchemyError
+
+    from server.config import settings
+
+    url = settings.readonly_database_url.replace(
+        f"{settings.readonly_db_user}:{settings.readonly_db_password}",
+        "echomind_app:echomind_app",
+    ).replace("postgresql://", "postgresql+psycopg://", 1)
+    app_engine = create_engine(url, pool_pre_ping=True, future=True)
+
+    try:
+        with app_engine.connect() as conn:
+            # It can read the platform, the reporting views and its own state...
+            conn.execute(text("SELECT count(*) FROM infinity.bookings"))
+            conn.execute(text("SELECT count(*) FROM reporting.v_billing_lines"))
+            conn.execute(text("SELECT count(*) FROM echomind.actions"))
+            # ...including the checkpointer tables, wherever search_path puts them.
+            conn.execute(text("SELECT count(*) FROM checkpoints"))
+
+        # ...and it can write application state.
+        with app_engine.begin() as conn:
+            conn.execute(
+                text("INSERT INTO echomind.audit_log (event, actor_id) "
+                     "VALUES ('role_probe', 'test')")
+            )
+            conn.execute(text("DELETE FROM echomind.audit_log WHERE event = 'role_probe'"))
+
+        # But it cannot reshape the database or write the platform's own tables.
+        for statement in (
+            "CREATE TABLE public.role_probe (id int)",
+            "DROP TABLE infinity.bookings",
+            "ALTER TABLE infinity.users ADD COLUMN role_probe int",
+            "INSERT INTO infinity.users (id, email, name, role) "
+            "VALUES ('u-probe', 'p@x.io', 'P', 'admin')",
+        ):
+            with pytest.raises(SQLAlchemyError):
+                with app_engine.begin() as conn:
+                    conn.execute(text(statement))
+    finally:
+        app_engine.dispose()
+
+
 def test_readonly_session_is_read_only_and_time_limited(rodb):
     assert rodb.execute(text("SHOW default_transaction_read_only")).scalar_one() == "on"
     assert rodb.execute(text("SHOW statement_timeout")).scalar_one() in ("5s", "5000ms")

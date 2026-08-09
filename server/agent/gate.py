@@ -23,6 +23,22 @@ from server.rag.retrieval import RetrievedChunk
 
 log = logging.getLogger("echomind.gate")
 
+COVERAGE_SCHEMA = {
+    "title": "coverage",
+    "type": "object",
+    "properties": {"source": {"type": "integer"}, "quote": {"type": "string"}},
+    "required": ["source", "quote"],
+    "additionalProperties": False,
+}
+
+AGREEMENT_SCHEMA = {
+    "title": "agreement",
+    "type": "object",
+    "properties": {"conflict": {"type": "boolean"}, "detail": {"type": "string"}},
+    "required": ["conflict", "detail"],
+    "additionalProperties": False,
+}
+
 # Which role owns which kind of question, for the redirect's "ask this person" line.
 TOPIC_OWNER = [
     (("billing", "invoice", "charge", "cost", "account code", "spend", "price", "rate"),
@@ -92,6 +108,7 @@ def _coverage_check(question: str, chunks: list[RetrievedChunk]) -> bool:
         ],
         default={"source": 0, "quote": ""},
         max_tokens=150,
+        schema=COVERAGE_SCHEMA,
     )
     try:
         picked = int(verdict.get("source") or 0)
@@ -127,6 +144,7 @@ def _agreement_check(question: str, chunks: list[RetrievedChunk]) -> tuple[bool,
         ],
         default={"conflict": False, "detail": "judge unavailable"},
         max_tokens=120,
+        schema=AGREEMENT_SCHEMA,
     )
     conflict = bool(verdict.get("conflict"))
     return True, not conflict

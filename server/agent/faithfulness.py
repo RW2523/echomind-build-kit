@@ -35,6 +35,34 @@ JUDGE_SYSTEM = (
 )
 
 
+def verdict_schema(count: int) -> dict:
+    """Exactly `count` verdicts, each with an id and a boolean. The decoder enforces the
+    array length, so the judge cannot stop early — which is what it used to do."""
+    return {
+        "title": "faithfulness_verdicts",
+        "type": "object",
+        "properties": {
+            "verdicts": {
+                "type": "array",
+                "minItems": count,
+                "maxItems": count,
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "id": {"type": "integer"},
+                        "supported": {"type": "boolean"},
+                        "why": {"type": "string"},
+                    },
+                    "required": ["id", "supported", "why"],
+                    "additionalProperties": False,
+                },
+            }
+        },
+        "required": ["verdicts"],
+        "additionalProperties": False,
+    }
+
+
 def _parse_verdicts(payload: dict) -> dict[int, dict]:
     out: dict[int, dict] = {}
     for v in (payload or {}).get("verdicts", []) or []:
@@ -130,6 +158,7 @@ def check(
         model=settings.judge_model,
         default={"verdicts": []},
         max_tokens=800,
+        schema=verdict_schema(len(claims)),
     )
 
     by_id = _parse_verdicts(verdict)
@@ -160,6 +189,7 @@ def check(
                 model=settings.judge_model,
                 default={"verdicts": []},
                 max_tokens=200,
+                schema=verdict_schema(1),
             )
             retried = _parse_verdicts(single)
             if 1 in retried:

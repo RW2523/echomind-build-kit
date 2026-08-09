@@ -39,6 +39,25 @@ class MetricScores:
     context_precision: float = float("nan")
 
 
+def _verdict_schema(count: int) -> dict:
+    return {
+        "title": "statement_verdicts",
+        "type": "object",
+        "properties": {
+            "verdicts": {
+                "type": "array", "minItems": count, "maxItems": count,
+                "items": {
+                    "type": "object",
+                    "properties": {"id": {"type": "integer"},
+                                   "verdict": {"type": "integer", "enum": [0, 1]}},
+                    "required": ["id", "verdict"], "additionalProperties": False,
+                },
+            }
+        },
+        "required": ["verdicts"], "additionalProperties": False,
+    }
+
+
 def _statements(text: str) -> list[str]:
     """Break an answer into atomic factual statements (RAGAS step 1)."""
     if not text.strip():
@@ -119,6 +138,7 @@ def _verdicts(statements: list[str], context: str, question: str) -> list[bool]:
                 model=settings.judge_model,
                 default={"verdicts": []},
                 max_tokens=80,
+                schema=_verdict_schema(1),
             )
             retried = _parse(single)
             if 1 in retried:
@@ -248,9 +268,25 @@ def context_precision(contexts: list[str], reference: str, question: str) -> flo
     return round(weighted / total_relevant, 3)
 
 
-def score_all(answer: str, contexts: list[str], reference: str, question: str) -> MetricScores:
+def score_all(
+    answer: str,
+    contexts: list[str],
+    reference: str,
+    question: str,
+    retrieved_contexts: list[str] | None = None,
+) -> MetricScores:
+    """`contexts` are the ones the answer cited; `retrieved_contexts` is everything
+    retrieval returned.
+
+    Context precision is scored over the RETRIEVED set, per RAGAS — scoring it over the
+    cited set makes it trivially 1.000, because an answer rarely cites a source it did
+    not use. That is what hid the metric's uselessness on a small corpus.
+
+    Faithfulness stays on the cited set, which is stricter than RAGAS and matches what
+    the product actually promises: every claim supported by the source it points at.
+    """
     return MetricScores(
         faithfulness=faithfulness(answer, contexts, question),
         answer_correctness=answer_correctness(answer, reference, question),
-        context_precision=context_precision(contexts, reference, question),
+        context_precision=context_precision(retrieved_contexts or contexts, reference, question),
     )

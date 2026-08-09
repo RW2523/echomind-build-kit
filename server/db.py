@@ -1,10 +1,18 @@
 """Database engines.
 
-Two roles, deliberately:
-  * `engine`    — owner role. Migrations, seeding, writes to app tables (actions, audit,
-                  chunks, checkpoints).
-  * `ro_engine` — read-only role. EVERY piece of agent-generated SQL runs here, so a
-                  validator bug cannot mutate data. Golden rule 3.
+Three roles, deliberately, in decreasing order of privilege:
+
+  * `owner_engine` — schema owner. Migrations, seeding, checkpointer DDL. Nothing that
+                     serves a request touches it.
+  * `engine`       — `echomind_app`: CRUD on the echomind schema, read on infinity and
+                     reporting, NO DDL. This is what the running API uses, so a bug in
+                     application code cannot alter the schema or drop a table.
+  * `ro_engine`    — `echomind_readonly`: SELECT on the four reporting views and nothing
+                     else. EVERY piece of agent-generated SQL runs here, so a validator
+                     bug cannot mutate data. Golden rule 3.
+
+On a clean dev checkout APP_DATABASE_URL is unset and `engine` falls back to the owner,
+so nothing has to be provisioned before `make seed` works.
 """
 
 from __future__ import annotations
@@ -25,8 +33,14 @@ def _sqlalchemy_url(url: str) -> str:
     return url.replace("postgresql://", "postgresql+psycopg://", 1)
 
 
-engine: Engine = create_engine(
+owner_engine: Engine = create_engine(
     _sqlalchemy_url(settings.database_url),
+    pool_pre_ping=True,
+    future=True,
+)
+
+engine: Engine = create_engine(
+    _sqlalchemy_url(settings.runtime_database_url),
     pool_pre_ping=True,
     future=True,
 )
@@ -48,7 +62,22 @@ ro_engine: Engine = create_engine(
 )
 
 SessionLocal = sessionmaker(bind=engine, expire_on_commit=False, future=True)
+OwnerSessionLocal = sessionmaker(bind=owner_engine, expire_on_commit=False, future=True)
 ROSessionLocal = sessionmaker(bind=ro_engine, expire_on_commit=False, future=True)
+
+
+@contextmanager
+def owner_session() -> Iterator[Session]:
+    """Owner-role session. Migrations and seeding only — never a request path."""
+    s = OwnerSessionLocal()
+    try:
+        yield s
+        s.commit()
+    except Exception:
+        s.rollback()
+        raise
+    finally:
+        s.close()
 
 
 @contextmanager

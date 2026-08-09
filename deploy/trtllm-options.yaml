@@ -1,0 +1,6 @@
+# TensorRT-LLM extra options for EchoMind.
+#
+# guided_decoding_backend is the important one: it makes response_format=json_schema
+# actually constrain the decoder, so a judge physically cannot omit a verdict or emit
+# a markdown fence. Without it trtllm-serve accepts the parameter and ignores it.
+guided_decoding_backend: xgrammar

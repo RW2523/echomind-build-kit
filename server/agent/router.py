@@ -14,6 +14,17 @@ log = logging.getLogger("echomind.router")
 
 ROUTES = ("knowledge", "data", "action", "smalltalk", "out_of_scope")
 
+ROUTE_SCHEMA = {
+    "title": "route",
+    "type": "object",
+    "properties": {
+        "route": {"type": "string", "enum": list(ROUTES)},
+        "why": {"type": "string"},
+    },
+    "required": ["route", "why"],
+    "additionalProperties": False,
+}
+
 SYSTEM = """You classify one user message for an assistant that serves the Infinity X
 core-facility platform (a shared scientific instrument facility).
 
@@ -91,6 +102,7 @@ def route(message: str, history: str = "") -> tuple[str, str]:
         ],
         default={"route": "knowledge", "why": "router unavailable"},
         max_tokens=80,
+        schema=ROUTE_SCHEMA,
     )
     chosen = str(verdict.get("route", "")).strip().lower()
     if chosen not in ROUTES:

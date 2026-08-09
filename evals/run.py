@@ -95,6 +95,7 @@ def _score_knowledge(item: dict, response) -> dict[str, float]:
             contexts=contexts,
             reference=item["expected_answer"],
             question=item["question"],
+            retrieved_contexts=_retrieved_contexts(item),
         )
     except Exception as exc:  # noqa: BLE001 — a judging failure must not abort the run
         print(f"    metrics failed: {type(exc).__name__}: {str(exc)[:120]}")
@@ -104,6 +105,17 @@ def _score_knowledge(item: dict, response) -> dict[str, float]:
         "answer_correctness": scores.answer_correctness,
         "context_precision": scores.context_precision,
     }
+
+
+def _retrieved_contexts(item: dict) -> list[str]:
+    """Everything retrieval returned for this item — the input context precision needs."""
+    from server.rag.retrieval import retrieve
+
+    try:
+        chunks = retrieve(item["question"], _ctx(item["user"]), k=8)
+    except Exception:  # noqa: BLE001
+        return []
+    return [f"{c.breadcrumb}\n{c.text}" for c in chunks]
 
 
 def _chunk_text(citation) -> str:

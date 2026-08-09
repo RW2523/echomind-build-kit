@@ -68,9 +68,27 @@ def test_lab_a_doc_is_retrievable_by_alice_and_asha(ctxs, corpus_ingested):
 
 
 def test_lab_a_doc_is_not_retrievable_by_bob(ctxs, corpus_ingested):
+    """Bob may see his OWN lab's protocols — what he must never see is Lab A's.
+
+    Asserting "no lab-scoped chunks at all" only held while Lab A was the single
+    lab-scoped document in the corpus; it started failing the moment every lab had
+    protocols, on a result set that was in fact perfectly isolated. The invariant that
+    actually matters is the lab id.
+    """
     hits = retrieve(LAB_QUERY, ctxs["bob"], k=8)
-    assert not any(h.visibility == "lab" for h in hits)
+    assert hits, "bob should still retrieve something"
+    assert not any(h.lab_id == "lab-a" for h in hits), "no Lab A chunk may reach bob"
+    assert all(h.lab_id in (None, "lab-b") for h in hits), "only public or bob's own lab"
     assert not any("1:400" in h.text for h in hits)
+
+
+def test_every_lab_sees_only_its_own_protocols(ctxs, corpus_ingested):
+    """The same isolation, checked in both directions across the corpus."""
+    for handle, own_lab in (("alice", "lab-a"), ("bob", "lab-b")):
+        for hit in retrieve(LAB_QUERY, ctxs[handle], k=8):
+            assert hit.lab_id in (None, own_lab), (
+                f"{handle} ({own_lab}) retrieved a chunk from {hit.lab_id}"
+            )
 
 
 # --- public ----------------------------------------------------------------------

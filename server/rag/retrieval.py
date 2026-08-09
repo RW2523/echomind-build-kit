@@ -40,6 +40,8 @@ class RetrievedChunk:
     fts_rank: int | None
     title: str
     visibility: str
+    lab_id: str | None = None
+    owner_user_id: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -70,7 +72,8 @@ def permission_predicate(ctx: Ctx) -> tuple[str, dict[str, Any]]:
 
 
 _VECTOR_SQL = """
-SELECT c.id, c.doc_id, c.text, c.breadcrumb, c.visibility, d.title,
+SELECT c.id, c.doc_id, c.text, c.breadcrumb, c.visibility, c.lab_id,
+       c.owner_user_id, d.title,
        1 - (c.embedding <=> CAST(:qvec AS vector)) AS similarity
 FROM echomind.chunks c
 JOIN echomind.knowledge_docs d ON d.id = c.doc_id
@@ -80,7 +83,8 @@ LIMIT :limit
 """
 
 _FTS_SQL = """
-SELECT c.id, c.doc_id, c.text, c.breadcrumb, c.visibility, d.title,
+SELECT c.id, c.doc_id, c.text, c.breadcrumb, c.visibility, c.lab_id,
+       c.owner_user_id, d.title,
        1 - (c.embedding <=> CAST(:qvec AS vector)) AS similarity,
        ts_rank(c.tsv, websearch_to_tsquery('english', :q)) AS rank
 FROM echomind.chunks c
@@ -140,6 +144,8 @@ def retrieve(query: str, ctx: Ctx, k: int = 8) -> list[RetrievedChunk]:
             fts_rank=e["fts_rank"],
             title=e["row"]["title"],
             visibility=e["row"]["visibility"],
+            lab_id=e["row"]["lab_id"],
+            owner_user_id=e["row"]["owner_user_id"],
         )
         for e in merged.values()
     ]

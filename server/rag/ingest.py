@@ -243,8 +243,10 @@ def main(argv: list[str] | None = None) -> int:
         }.items() if v
     }
 
+    # Recursive: db/corpus holds the authored documents and db/corpus/generated the
+    # bulk corpus, and ingesting only one of them is never what anyone wants.
     files = (
-        sorted(f for f in target.iterdir() if f.suffix.lower() in (".md", ".markdown", ".pdf"))
+        sorted(f for f in target.rglob("*") if f.suffix.lower() in (".md", ".markdown", ".pdf"))
         if target.is_dir() else [target]
     )
     if target.is_dir() and args.title:

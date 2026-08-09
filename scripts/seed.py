@@ -18,11 +18,14 @@ from pathlib import Path
 
 from sqlalchemy import text
 
-from server.config import REPO_ROOT
-from server.db import engine
+from server.config import REPO_ROOT, settings
+from server.db import owner_engine as engine
 from server.demo_identities import DEMO_USERS
 
 MIGRATIONS = REPO_ROOT / "db" / "migrations"
+
+# Where LangGraph's checkpoint tables live. Pinned so it never depends on role names.
+CHECKPOINT_SCHEMA = "echomind"
 
 # Everything is generated relative to this instant. 2026-03-31 makes the three invoice
 # periods 2026-01/02/03 and the 90-day booking window line up exactly.
@@ -169,6 +172,36 @@ def apply_migrations(conn) -> None:
     for path in sorted(MIGRATIONS.glob("*.sql")):
         print(f"  applying {path.name}")
         conn.exec_driver_sql(path.read_text())
+
+
+def setup_checkpointer() -> None:
+    """Create LangGraph's checkpoint tables, as the owner.
+
+    The running API connects as echomind_app, which has no DDL — so it cannot create
+    these itself, and its own setup() call is expected to be a no-op. Migration 003 sets
+    default privileges in `public` for the owner, so the tables the saver creates here
+    are readable and writable by the app without a second grant step.
+    """
+    from langgraph.checkpoint.postgres import PostgresSaver
+
+    conn_string = settings.database_url.replace("postgresql+psycopg://", "postgresql://", 1)
+    # Pin the schema. The saver issues unqualified CREATE TABLE, so without this the
+    # tables follow `"$user"` and land in a schema named after whoever ran the migration.
+    # %3D is the '=' inside the libpq options parameter.
+    separator = "&" if "?" in conn_string else "?"
+    conn_string += f"{separator}options=-csearch_path%3D{CHECKPOINT_SCHEMA}"
+
+    with PostgresSaver.from_conn_string(conn_string) as saver:
+        saver.setup()
+
+    with engine.begin() as conn:
+        conn.exec_driver_sql(
+            """GRANT SELECT, INSERT, UPDATE, DELETE
+               ON {s}.checkpoints, {s}.checkpoint_writes,
+                  {s}.checkpoint_blobs, {s}.checkpoint_migrations
+               TO echomind_app""".format(s=CHECKPOINT_SCHEMA)
+        )
+    print(f"  checkpointer tables ready in schema {CHECKPOINT_SCHEMA}")
 
 
 def truncate(conn) -> None:
@@ -527,6 +560,7 @@ def seed() -> None:
             events,
         )
 
+    setup_checkpointer()
     verify()
 
 

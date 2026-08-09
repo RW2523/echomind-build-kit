@@ -26,6 +26,9 @@ from server.observability import tracer
 
 log = logging.getLogger("echomind.graph")
 
+# Must match scripts/seed.py — that is where these tables are created.
+CHECKPOINT_SCHEMA = "echomind"
+
 SMALLTALK = (
     "I'm EchoMind, the assistant for this core facility. I can answer questions about "
     "facility policies and SOPs, look up your bookings, usage and invoices, track "
@@ -258,8 +261,17 @@ _cm = None
 
 
 def _checkpointer_conn_string() -> str:
-    # PostgresSaver speaks psycopg directly, so it wants the plain libpq URL.
-    return settings.database_url.replace("postgresql+psycopg://", "postgresql://", 1)
+    """Plain libpq URL for PostgresSaver, with the checkpoint schema pinned.
+
+    The saver uses unqualified table names. Left to the default search_path they resolve
+    against a schema named after the connecting role, so the owner and the app would look
+    in two different places — the app in one that does not exist.
+    """
+    url = settings.runtime_database_url.replace("postgresql+psycopg://", "postgresql://", 1)
+    separator = "&" if "?" in url else "?"
+    return f"{url}{separator}options=-csearch_path%3Decho_schema".replace(
+        "echo_schema", CHECKPOINT_SCHEMA
+    )
 
 
 def get_graph():
@@ -268,9 +280,18 @@ def get_graph():
     if _graph is None:
         _cm = PostgresSaver.from_conn_string(_checkpointer_conn_string())
         _checkpointer = _cm.__enter__()
-        _checkpointer.setup()
+        try:
+            _checkpointer.setup()
+        except Exception as exc:  # noqa: BLE001
+            # setup() is DDL. When the API runs as echomind_app it has none, by design —
+            # the seeder created these tables as owner. Only a genuinely missing table
+            # is a problem, and that surfaces on the first turn with a clear error.
+            log.info("checkpointer setup skipped (%s: %s)", type(exc).__name__, exc)
         _graph = build_graph(_checkpointer)
-        log.info("agent graph compiled with Postgres checkpointer")
+        log.info(
+            "agent graph compiled with Postgres checkpointer (role=%s)",
+            "owner" if settings.runs_as_owner else "echomind_app",
+        )
     return _graph
 
 

@@ -57,6 +57,56 @@ services:
       TELEMETRY_ENABLED: "false"
       LANGFUSE_ENABLE_EXPERIMENTAL_FEATURES: "false"
 
+  # Optional local inference on a Blackwell box (DGX Spark / GB10).
+  #   COMPOSE_PROFILES=trtllm make up
+  #
+  # The public vllm/vllm-openai image does NOT work here: it ships a CUDA 12.9 runtime
+  # that does not know sm_121 and dies with "CUDA error 803". Use an NVIDIA CUDA-13
+  # container (NGC) if you want vLLM on this hardware.
+  #
+  # Benchmark first: eval_reports/bench-*.md records what these models actually score on
+  # EchoMind's tasks. As of 2026-08-09 neither local NVFP4 checkpoint beat Ollama.
+  trtllm:
+    image: echomind-trtllm:1.2.0rc6
+    container_name: echomind-trtllm
+    profiles: ["trtllm"]
+    restart: unless-stopped
+    ipc: host
+    shm_size: 8gb
+    ports:
+      - "8001:8000"
+    volumes:
+      - ${HOME}/.cache/huggingface:/root/.cache/huggingface
+      - ./deploy:/deploy:ro
+    environment:
+      # trtllm-serve's own entrypoint sets this, but an explicit entrypoint bypasses it
+      # and tensorrt_llm then fails to import libnvinfer.
+      LD_LIBRARY_PATH: /usr/local/tensorrt/targets/aarch64-linux-gnu/lib:/opt/nvidia/nvda_nixl/lib/aarch64-linux-gnu:/usr/local/tensorrt/lib:/usr/local/cuda/lib64:/usr/local/lib/python3.12/dist-packages/torch/lib:/usr/local/cuda/compat/lib:/usr/local/nvidia/lib:/usr/local/nvidia/lib64
+    entrypoint: ["trtllm-serve"]
+    command:
+      - serve
+      - ${TRTLLM_MODEL:-nvidia/Llama-3.1-8B-Instruct-FP4}
+      - --host=0.0.0.0
+      - --port=8000
+      - --max_batch_size=8
+      - --max_num_tokens=16384
+      - --max_seq_len=16384
+      - --kv_cache_free_gpu_memory_fraction=0.2
+      - --extra_llm_api_options=/deploy/trtllm-options.yaml
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8000/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 40
+      start_period: 180s
+
 volumes:
   pgdata:
   langfusedata:

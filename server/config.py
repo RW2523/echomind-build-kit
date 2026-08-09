@@ -24,7 +24,13 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
+    # Owner role: migrations, seeding, checkpointer DDL. Never used to serve requests
+    # once APP_DATABASE_URL is set.
     database_url: str = "postgresql://echomind:echomind@localhost:5432/echomind"
+    # Runtime role for the API (echomind_app: CRUD on echomind, read on infinity and
+    # reporting, no DDL). Empty falls back to the owner so a clean dev checkout still
+    # works; any deployment should set it.
+    app_database_url: str = ""
     jwt_secret: str = "dev-only-change-me"
 
     llm_base_url: str = "http://localhost:11434/v1"
@@ -67,6 +73,15 @@ class Settings(BaseSettings):
     llm_timeout_s: float = 120.0
     llm_temperature: float = 0.0
 
+    # Extra JSON merged into every chat request, for options that are model- or
+    # engine-specific rather than ours — e.g. Qwen3's
+    # {"chat_template_kwargs": {"enable_thinking": false}}. Kept in env so switching
+    # models stays a config change (spec 06: code must not branch on profile).
+    llm_extra_body: str = ""
+    # Structured-output mode for judge calls: auto | json_schema | json_object | off.
+    # "auto" probes the endpoint once and uses the strongest mode it supports.
+    llm_structured_output: str = "auto"
+
     logs_dir: Path = Field(default=REPO_ROOT / "logs")
 
     @field_validator("reranker", mode="before")
@@ -77,6 +92,27 @@ class Settings(BaseSettings):
         if isinstance(v, str) and "#" in v:
             v = v.split("#", 1)[0]
         return v.strip() if isinstance(v, str) else v
+
+    @property
+    def extra_body(self) -> dict:
+        import json as _json
+
+        if not self.llm_extra_body.strip():
+            return {}
+        try:
+            parsed = _json.loads(self.llm_extra_body)
+            return parsed if isinstance(parsed, dict) else {}
+        except ValueError:
+            return {}
+
+    @property
+    def runtime_database_url(self) -> str:
+        """What the API actually connects as."""
+        return self.app_database_url or self.database_url
+
+    @property
+    def runs_as_owner(self) -> bool:
+        return not self.app_database_url
 
     @property
     def readonly_database_url(self) -> str:
