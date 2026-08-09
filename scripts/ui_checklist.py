@@ -21,6 +21,7 @@ TIMEOUT = 180.0
 
 PASS, FAIL = "PASS", "FAIL"
 results: list[tuple[str, str, str]] = []
+created_action_ids: list[str] = []
 
 
 def check(name: str, ok: bool, detail: str = "") -> bool:
@@ -64,6 +65,30 @@ def stream(client: httpx.Client, headers: dict, message: str,
                 if event == "final":
                     final = json.loads("\n".join(data))
     return events, final
+
+
+def cleanup(client: httpx.Client, admin_headers: dict) -> None:
+    """Undo the writes this checklist made, so the seeded state is restored."""
+    from sqlalchemy import text as sql_text
+
+    from server.db import session_scope
+
+    removed = {"bookings": 0, "actions": 0}
+    with session_scope() as db:
+        for action_id in created_action_ids:
+            action = db.execute(
+                sql_text("SELECT result FROM echomind.actions WHERE id = :id"),
+                {"id": action_id},
+            ).scalar_one_or_none()
+            if action and action.get("created") == "booking":
+                removed["bookings"] += db.execute(
+                    sql_text("DELETE FROM infinity.bookings WHERE id = :id"),
+                    {"id": action["booking_id"]},
+                ).rowcount
+            removed["actions"] += db.execute(
+                sql_text("DELETE FROM echomind.actions WHERE id = :id"), {"id": action_id}
+            ).rowcount
+    print(f"\ncleanup: removed {removed['bookings']} booking(s), {removed['actions']} action(s)")
 
 
 def main() -> int:
@@ -119,6 +144,7 @@ def main() -> int:
         "Book Confocal C2 from 2027-11-03T09:00:00Z to 2027-11-03T11:00:00Z on account ACC-A1",
     )
     approved_id = (proposal.get("pending_action") or {}).get("action_id")
+    created_action_ids.append(approved_id)
     check("booking request yields an approval_request card",
           proposal.get("response_type") == "approval_request" and bool(approved_id),
           str(approved_id))
@@ -134,6 +160,7 @@ def main() -> int:
         "Book MiSeq M3 from 2027-11-04T09:00:00Z to 2027-11-04T10:00:00Z on account ACC-A1",
     )
     declined_id = (proposal2.get("pending_action") or {}).get("action_id")
+    created_action_ids.append(declined_id)
     declined = client.post(f"{BASE}/actions/{declined_id}/decline", headers=alice).json()
     check("decline cancels politely and changes nothing",
           declined.get("status") == "declined"
@@ -205,6 +232,11 @@ def main() -> int:
           summary.status_code == 200
           and summary.json().get("latest_eval") is not None
           and summary.json().get("trace_sink") in ("console", "langfuse"))
+
+    # The approve check creates a real booking. Like the demo script, this has to undo
+    # what it made, or running the checklist leaves the seeded row counts wrong and the
+    # next `pytest -m seed_counts` fails on state this script created.
+    cleanup(client, cora)
 
     failures = [r for r in results if r[0] == FAIL]
     print(f"\n{len(results) - len(failures)}/{len(results)} checklist items passed")

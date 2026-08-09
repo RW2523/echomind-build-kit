@@ -25,6 +25,26 @@ SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+(?=[A-Z0-9])")
 FACTUAL_HINT_RE = re.compile(r"\d|must|never|always|required|charged|hours?|days?|%|\$")
 
 
+JUDGE_SYSTEM = (
+    "You verify whether each claim is fully supported by the sources it cites. A claim is "
+    "supported only if the sources state it — not if they merely suggest it, and not if "
+    "the claim adds a number, name or condition the sources do not contain.\n\n"
+    'Reply only as JSON: {{"verdicts": [{{"id": 1, "supported": true, "why": "<12 words"}}]}}\n\n'
+    "You must return exactly {count} verdict(s), one per claim, using the claim's number "
+    "as its id. Do not stop early."
+)
+
+
+def _parse_verdicts(payload: dict) -> dict[int, dict]:
+    out: dict[int, dict] = {}
+    for v in (payload or {}).get("verdicts", []) or []:
+        try:
+            out[int(v["id"])] = v
+        except (KeyError, TypeError, ValueError):
+            continue
+    return out
+
+
 @dataclass
 class ClaimVerdict:
     claim: str
@@ -82,56 +102,73 @@ def check(
                                   unsupported=["answer contained no checkable claim"])
 
     numbered = {i: chunks[i - 1] for i in range(1, len(chunks) + 1)}
-    payload = []
-    for n, (claim, cited) in enumerate(claims, start=1):
-        # An uncited claim is judged against everything retrieved, so the model cannot
-        # dodge the check by simply omitting the marker.
-        sources = cited or list(numbered)
-        payload.append(
-            {
-                "id": n,
-                "claim": claim,
-                "sources": "\n\n".join(
-                    f"[{i}] {numbered[i].text}" for i in sources if i in numbered
-                ),
-            }
-        )
 
-    blocks = "\n\n---\n\n".join(
-        f"CLAIM {p['id']}: {p['claim']}\nCITED SOURCES:\n{p['sources']}" for p in payload
+    # An uncited claim is judged against everything retrieved, so the model cannot dodge
+    # the check by simply omitting the marker.
+    cited_for = {
+        n: (cited or list(numbered)) for n, (_, cited) in enumerate(claims, start=1)
+    }
+    used = sorted({i for indices in cited_for.values() for i in indices if i in numbered})
+
+    # Each source appears ONCE. Repeating the full chunk under every claim tripled the
+    # prompt and made the 7B judge stop after the first verdict — which then read as
+    # "unsupported" and suppressed a correct, properly-cited answer.
+    sources_block = "\n\n".join(f"[{i}] {numbered[i].text}" for i in used)
+    claims_block = "\n".join(
+        f"{n}. (cites {', '.join(f'[{i}]' for i in cited_for[n])}) {claim}"
+        for n, (claim, _) in enumerate(claims, start=1)
     )
 
     verdict = chat_json(
         [
+            {"role": "system", "content": JUDGE_SYSTEM.format(count=len(claims))},
             {
-                "role": "system",
-                "content": (
-                    "You verify whether each claim is fully supported by its cited "
-                    "sources. A claim is supported only if the sources state it — not if "
-                    "they merely suggest it, and not if the claim adds a number, name or "
-                    "condition the sources do not contain. Reply only as JSON: "
-                    '{"verdicts": [{"id": 1, "supported": true|false, '
-                    '"why": "<12 words"}]}. Judge every claim.'
-                ),
+                "role": "user",
+                "content": f"SOURCES:\n{sources_block}\n\nCLAIMS:\n{claims_block}",
             },
-            {"role": "user", "content": blocks},
         ],
         model=settings.judge_model,
         default={"verdicts": []},
         max_tokens=800,
     )
 
-    by_id = {}
-    for v in verdict.get("verdicts", []):
-        try:
-            by_id[int(v["id"])] = v
-        except (KeyError, TypeError, ValueError):
-            continue
+    by_id = _parse_verdicts(verdict)
+
+    # A claim the judge skipped is re-asked on its own — one claim at a time is far easier
+    # for a small model. Only after that does silence count as unsupported, so the
+    # fail-closed guarantee survives without a flaky judge silencing good answers.
+    missing = [n for n in range(1, len(claims) + 1) if n not in by_id]
+    if missing:
+        log.info("judge omitted %d verdict(s); re-asking individually", len(missing))
+        for n in missing:
+            claim = claims[n - 1][0]
+            single = chat_json(
+                [
+                    {"role": "system", "content": JUDGE_SYSTEM.format(count=1)},
+                    {
+                        "role": "user",
+                        "content": (
+                            "SOURCES:\n"
+                            + "\n\n".join(
+                                f"[{i}] {numbered[i].text}"
+                                for i in cited_for[n] if i in numbered
+                            )
+                            + f"\n\nCLAIMS:\n1. {claim}"
+                        ),
+                    },
+                ],
+                model=settings.judge_model,
+                default={"verdicts": []},
+                max_tokens=200,
+            )
+            retried = _parse_verdicts(single)
+            if 1 in retried:
+                by_id[n] = retried[1]
 
     verdicts: list[ClaimVerdict] = []
     for n, (claim, cited) in enumerate(claims, start=1):
         v = by_id.get(n)
-        # A claim the judge did not rule on is not assumed good.
+        # A claim the judge still did not rule on is not assumed good.
         supported = bool(v.get("supported")) if v else False
         why = str(v.get("why", "")) if v else "judge returned no verdict"
         verdicts.append(ClaimVerdict(claim=claim, cited=cited, supported=supported, why=why))

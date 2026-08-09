@@ -138,6 +138,28 @@ def test_every_citation_points_at_a_real_retrieved_chunk(in_corpus_answer, ctxs)
         assert citation.breadcrumb
 
 
+def test_private_content_is_answered_not_refused_on_confidentiality_grounds():
+    """Regression: the generator refused to read out a source marked "private/secret".
+
+    Everything in the context has already been permission-filtered for this caller, so
+    declining on confidentiality grounds is always wrong — and it silently turned a
+    correct answer into a redirect.
+    """
+    chunks = [
+        _chunk(
+            "The private upload verification marker is ZEPHYR-5512. It appears in no "
+            "other document in this corpus, and only Alice uploaded it.",
+            score=0.9,
+        )
+    ]
+    text, citations, sufficient = gen.generate(
+        "What is the private upload verification marker?", chunks
+    )
+    assert sufficient is True
+    assert "ZEPHYR-5512" in text
+    assert citations
+
+
 def test_out_of_corpus_question_yields_a_redirect_not_a_guess(out_of_corpus_answer):
     r = out_of_corpus_answer
     assert r.response_type == "redirect"
@@ -195,3 +217,30 @@ def test_faithfulness_rejects_a_number_the_source_does_not_contain():
     chunks = [_chunk("Lasers must warm up for 30 minutes before quantitative imaging.")]
     verdict = faith.check("The lasers warm up for 90 minutes [1].", chunks, [])
     assert verdict.passed is False
+
+
+def test_every_claim_gets_a_verdict_even_with_a_long_source():
+    """Regression: the judge used to stop after the first verdict on a long prompt.
+
+    Each claim's source was repeated in full underneath it, tripling the prompt; the 7B
+    judge then returned one verdict, and the unjudged claims were failed closed — which
+    silently suppressed correct, properly-cited answers.
+    """
+    long_source = _chunk(
+        "Guidance on choosing between instruments. "
+        "Confocal C2 - the workhorse point scanner, best for fixed samples. "
+        "Spinning Disk SD1 - the right choice for live-cell imaging and anything faster "
+        "than roughly one frame per second. Gentler on the sample than a point scanner. "
+        "Light Sheet LS7 - cleared whole-mount specimens and large volumes. "
+        + ("Additional catalogue guidance text. " * 40)
+    )
+    answer_text = (
+        "For live-cell imaging you should use the Spinning Disk SD1 [1]. It is recommended "
+        "for anything faster than roughly one frame per second [1]."
+    )
+    verdict = faith.check(answer_text, [long_source], [])
+    assert verdict.checked == 2
+    assert all(
+        v.why != "judge returned no verdict" for v in verdict.verdicts
+    ), "every claim must get a real verdict, not a fail-closed default"
+    assert verdict.passed is True

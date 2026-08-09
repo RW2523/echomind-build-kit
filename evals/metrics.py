@@ -90,14 +90,52 @@ def _verdicts(statements: list[str], context: str, question: str) -> list[bool]:
         default={"verdicts": []},
         max_tokens=700,
     )
-    by_id: dict[int, bool] = {}
-    for v in result.get("verdicts", []):
+    by_id = _parse(result)
+
+    # The judge silently stops early on long contexts, and treating those omissions as
+    # "unsupported" understated faithfulness badly — the same failure the runtime checker
+    # hit. Re-ask the skipped statements one at a time before failing them closed.
+    missing = [i for i in range(1, len(statements) + 1) if i not in by_id]
+    if missing:
+        log.info("judge omitted %d verdict(s); re-asking individually", len(missing))
+        for i in missing:
+            single = chat_json(
+                [
+                    {
+                        "role": "system",
+                        "content": (
+                            "Decide whether the statement can be inferred from the "
+                            "CONTEXT. Answer 1 only if the context supports it; 0 if the "
+                            "context is silent or contradicts it. Do not use outside "
+                            'knowledge.\nReply only as JSON: {"verdicts": [{"id": 1, '
+                            '"verdict": 0 or 1}]}'
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": f"CONTEXT:\n{context}\n\nSTATEMENTS:\n1. {statements[i - 1]}",
+                    },
+                ],
+                model=settings.judge_model,
+                default={"verdicts": []},
+                max_tokens=80,
+            )
+            retried = _parse(single)
+            if 1 in retried:
+                by_id[i] = retried[1]
+
+    # A statement the judge still skipped counts as unsupported: fail closed.
+    return [by_id.get(i, False) for i in range(1, len(statements) + 1)]
+
+
+def _parse(payload: dict) -> dict[int, bool]:
+    out: dict[int, bool] = {}
+    for v in (payload or {}).get("verdicts", []) or []:
         try:
-            by_id[int(v["id"])] = bool(int(v["verdict"]))
+            out[int(v["id"])] = bool(int(v["verdict"]))
         except (KeyError, TypeError, ValueError):
             continue
-    # A statement the judge skipped counts as unsupported: fail closed.
-    return [by_id.get(i, False) for i in range(1, len(statements) + 1)]
+    return out
 
 
 def faithfulness(answer: str, contexts: list[str], question: str) -> float:

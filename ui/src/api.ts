@@ -163,7 +163,15 @@ export async function adminTraces(): Promise<{
   return json(r);
 }
 
+/**
+ * The run row wraps its scores in `metrics` — unlike /admin/summary, which returns the
+ * metrics object directly. Unwrap here so callers only ever see the scores.
+ */
 export async function adminEvals(): Promise<{ latest: Record<string, unknown> | null }> {
   const r = await fetch("/admin/evals", { headers: headers() });
-  return json(r);
+  const body = await json<{
+    latest: { ran_at?: string; metrics?: Record<string, unknown> } | null;
+  }>(r);
+  if (!body.latest) return { latest: null };
+  return { latest: { ...(body.latest.metrics ?? {}), ran_at: body.latest.ran_at } };
 }

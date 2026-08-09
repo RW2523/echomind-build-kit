@@ -40,8 +40,12 @@ export function Admin() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status, kind]);
 
-  const metric = (key: string) =>
-    evals && evals[key] !== null && evals[key] !== undefined ? String(evals[key]) : "n/a";
+  const metric = (key: string) => {
+    const value = evals?.[key];
+    if (value === null || value === undefined) return "n/a";
+    // Always three decimals: "1" and "1.000" read very differently on a metric card.
+    return typeof value === "number" ? value.toFixed(3) : String(value);
+  };
 
   return (
     <div className="admin">
