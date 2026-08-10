@@ -79,12 +79,34 @@ def _parse_verdicts(payload: dict) -> dict[int, dict]:
     return out
 
 
+REPAIR_SYSTEM = (
+    "You locate which source states a claim. Reply supported=true only if one of the "
+    "numbered sources actually states it, and give that source's number as source_id. "
+    "If no source states the claim, reply supported=false with source_id 0. Do not "
+    "reward a source that merely mentions the topic.\n\n"
+    'Reply only as JSON: {"supported": true, "source_id": 2, "why": "<12 words"}'
+)
+
+REPAIR_SCHEMA = {
+    "title": "citation_repair",
+    "type": "object",
+    "properties": {
+        "supported": {"type": "boolean"},
+        "source_id": {"type": "integer"},
+        "why": {"type": "string"},
+    },
+    "required": ["supported", "source_id", "why"],
+    "additionalProperties": False,
+}
+
+
 @dataclass
 class ClaimVerdict:
     claim: str
     cited: list[int]
     supported: bool
     why: str = ""
+    corrected_source: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -97,6 +119,9 @@ class FaithfulnessResult:
     checked: int
     unsupported: list[str] = field(default_factory=list)
     verdicts: list[ClaimVerdict] = field(default_factory=list)
+    # (claim text, source index that actually states it) for claims the generator hung
+    # on the wrong source. The caller repoints the marker before showing the answer.
+    corrections: list[tuple[str, int]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -105,6 +130,9 @@ class FaithfulnessResult:
             "checked": self.checked,
             "unsupported": self.unsupported,
             "verdicts": [v.to_dict() for v in self.verdicts],
+            "corrections": [
+                {"claim": c, "corrected_to": i} for c, i in self.corrections
+            ],
         }
 
 
@@ -152,6 +180,9 @@ def check(
     # prompt and made the 7B judge stop after the first verdict — which then read as
     # "unsupported" and suppressed a correct, properly-cited answer.
     sources_block = "\n\n".join(f"[{i}] {numbered[i].text}" for i in used)
+    # Every permitted source, for the repair pass below — which has to be able to find a
+    # statement in a chunk the claim did not cite.
+    sources_all_block = "\n\n".join(f"[{i}] {numbered[i].text}" for i in sorted(numbered))
     claims_block = "\n".join(
         f"{n}. (cites {', '.join(f'[{i}]' for i in cited_for[n])}) {claim}"
         for n, (claim, _) in enumerate(claims, start=1)
@@ -217,6 +248,50 @@ def check(
         why = str(v.get("why", "")) if v else "judge returned no verdict"
         verdicts.append(ClaimVerdict(claim=claim, cited=cited, supported=supported, why=why))
 
+    # A claim can be true, present in the context, and still fail — because the generator
+    # hung it on the wrong source number. "Each invoice covers one account code for one
+    # calendar month" was cited to the onboarding guide, which mentions first invoices in
+    # passing, while the Billing FAQ that states it verbatim sat at [1] in the same
+    # context. Suppressing the whole answer for that is a false negative: the reader loses
+    # a correct, fully sourced answer over a misplaced bracket.
+    #
+    # Only claims that carried a citation are re-checked, and only against chunks already
+    # retrieved and permission-filtered for this caller — the evidence bar is unchanged.
+    # What changes is that we repoint the citation instead of discarding the answer. A
+    # claim no permitted source states still fails, which is the guarantee that matters.
+    corrections: list[tuple[str, int]] = []
+    for v in verdicts:
+        if v.supported or not v.cited or len(numbered) <= len(v.cited):
+            continue
+        found = chat_json(
+            [
+                {"role": "system", "content": REPAIR_SYSTEM},
+                {
+                    "role": "user",
+                    "content": (
+                        (f"QUESTION THE USER ASKED:\n{question}\n\n" if question else "")
+                        + f"SOURCES:\n{sources_all_block}\n\nCLAIM:\n{v.claim}"
+                    ),
+                },
+            ],
+            model=settings.judge_model,
+            default={"supported": False, "source_id": 0},
+            max_tokens=200,
+            schema=REPAIR_SCHEMA,
+        )
+        source_id = found.get("source_id")
+        if (
+            found.get("supported")
+            and isinstance(source_id, int)
+            and source_id in numbered
+            and source_id not in v.cited
+        ):
+            log.info("claim cited %s but is stated in [%d]; repointing", v.cited, source_id)
+            v.supported = True
+            v.corrected_source = source_id
+            v.why = f"stated in [{source_id}], not in the source it cited"
+            corrections.append((v.claim, source_id))
+
     supported_count = sum(1 for v in verdicts if v.supported)
     score = supported_count / len(verdicts)
     unsupported = [v.claim for v in verdicts if not v.supported]
@@ -228,5 +303,5 @@ def check(
     )
     return FaithfulnessResult(
         passed=passed, score=score, checked=len(verdicts),
-        unsupported=unsupported, verdicts=verdicts,
+        unsupported=unsupported, verdicts=verdicts, corrections=corrections,
     )

@@ -82,6 +82,47 @@ def build_citations(chunks: list[RetrievedChunk], indices: list[int]) -> list[Ci
     return out
 
 
+def _match_key(sentence: str) -> str:
+    """Compare sentences ignoring citations, spacing and trailing punctuation.
+
+    Stripping "[4]" out of "…month [4]." leaves "…month ." — a space before the period.
+    Matching on the raw result would only ever work for claims that came through the
+    splitter carrying the same artifact, so both sides are normalised instead.
+    """
+    bare = re.sub(r"\s+", " ", CITATION_RE.sub("", sentence)).strip()
+    return bare.rstrip(" .!?").strip().lower()
+
+
+def apply_citation_corrections(text: str, corrections: list[tuple[str, int]]) -> str:
+    """Repoint the citation on sentences the judge traced to a different source.
+
+    Matching is done on the citation-stripped sentence, using the same splitter the claim
+    extractor uses, so the two always agree on sentence boundaries. A sentence whose text
+    is not found is left exactly as it was — a correction that cannot be located must not
+    silently rewrite a different sentence.
+    """
+    if not corrections:
+        return text
+
+    from server.agent.faithfulness import SENTENCE_SPLIT_RE
+
+    wanted = {_match_key(claim): index for claim, index in corrections}
+    out: list[str] = []
+    for sentence in SENTENCE_SPLIT_RE.split(text.strip()):
+        index = wanted.get(_match_key(sentence))
+        if index is None:
+            out.append(sentence)
+            continue
+        # Drop the wrong marker(s) and attach the right one before the final punctuation.
+        stripped = CITATION_RE.sub("", sentence).rstrip()
+        if stripped and stripped[-1] in ".!?":
+            repointed = f"{stripped[:-1].rstrip()} [{index}]{stripped[-1]}"
+        else:
+            repointed = f"{stripped} [{index}]"
+        out.append(repointed)
+    return " ".join(s.strip() for s in out if s.strip())
+
+
 def generate(question: str, chunks: list[RetrievedChunk]) -> tuple[str, list[Citation], bool]:
     """Return (text, citations, sufficient).
 

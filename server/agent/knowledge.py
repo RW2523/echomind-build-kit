@@ -46,6 +46,16 @@ def answer(question: str, ctx: Ctx, k: int = 8) -> AgentResponse:
         return _redirect(question, gate, {"declined_at": "generation"})
 
     verdict = faith.check(text, chunks, citations, question=question)
+
+    # Claims the judge traced to a source other than the one cited: repoint the marker and
+    # rebuild the citation list, so what the reader clicks is the document that actually
+    # states the sentence. Nothing here can rescue an unsupported claim — only a claim the
+    # judge found, verbatim, in another chunk this caller was already permitted to see.
+    if verdict.corrections:
+        log.info("repointing %d mis-cited claim(s)", len(verdict.corrections))
+        text = gen.apply_citation_corrections(text, verdict.corrections)
+        citations = gen.build_citations(chunks, gen.cited_indices(text, len(chunks)))
+
     if not verdict.passed:
         log.info("faithfulness downgraded answer: %s", verdict.unsupported)
         gate.passed = False

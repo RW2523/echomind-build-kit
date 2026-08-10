@@ -274,3 +274,65 @@ def test_every_claim_gets_a_verdict_even_with_a_long_source():
         v.why != "judge returned no verdict" for v in verdict.verdicts
     ), "every claim must get a real verdict, not a fail-closed default"
     assert verdict.passed is True
+
+
+# --- mis-cited claims are repointed, never rescued ------------------------------------
+
+
+def test_a_claim_cited_to_the_wrong_source_is_repointed_not_suppressed():
+    """Regression (k07): a true, in-context claim was suppressed over a misplaced bracket.
+
+    "Each invoice covers one account code for one calendar month" was cited to the
+    onboarding guide, which mentions first invoices in passing, while the Billing FAQ
+    that states it verbatim sat in the same context. The judge was right that the cited
+    source did not support it — but discarding the whole answer costs the reader a
+    correct, fully sourced reply. The citation is repointed instead.
+    """
+    onboarding = _chunk("Your first invoice arrives in the first week of the "
+                        "following month.", idx=1)
+    billing = _chunk("Invoices are issued monthly, in arrears, in the first week of the "
+                     "following month. Each invoice covers one account code for one "
+                     "calendar month.", idx=2)
+    verdict = faith.check(
+        "Each invoice covers one account code for one calendar month [1].",
+        [onboarding, billing], [],
+        question="When are invoices issued?",
+    )
+    assert verdict.passed is True
+    assert verdict.corrections, "the claim should have been traced to the other source"
+    claim, corrected_to = verdict.corrections[0]
+    assert corrected_to == 2, "it is source [2] that states this"
+
+
+def test_repair_cannot_rescue_a_claim_no_source_states():
+    """The repair pass must widen where we look, never lower the bar for what counts."""
+    onboarding = _chunk("Your first invoice arrives in the first week of the "
+                        "following month.", idx=1)
+    billing = _chunk("Invoices are issued monthly, in arrears.", idx=2)
+    verdict = faith.check(
+        "Invoices are issued every fortnight and carry a 12% surcharge [1].",
+        [onboarding, billing], [],
+        question="When are invoices issued?",
+    )
+    assert verdict.passed is False
+    assert verdict.unsupported
+    assert not verdict.corrections
+
+
+def test_repointing_rewrites_only_the_sentence_it_names():
+    corrected = gen.apply_citation_corrections(
+        "First claim [1]. Second claim [1]. Third claim [2].",
+        [("Second claim", 3)],
+    )
+    assert corrected == "First claim [1]. Second claim [3]. Third claim [2]."
+
+
+def test_repointing_leaves_a_sentence_it_cannot_find_untouched():
+    """A correction that does not match must not rewrite some other sentence."""
+    original = "The warm-up is 30 minutes [1]. Bookings need an account code [2]."
+    assert gen.apply_citation_corrections(original, [("Nothing like this", 3)]) == original
+
+
+def test_repointing_is_a_no_op_without_corrections():
+    original = "The warm-up is 30 minutes [1]."
+    assert gen.apply_citation_corrections(original, []) == original
