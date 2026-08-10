@@ -45,7 +45,7 @@ def answer(question: str, ctx: Ctx, k: int = 8) -> AgentResponse:
         gate.reason = "no_coverage"
         return _redirect(question, gate, {"declined_at": "generation"})
 
-    verdict = faith.check(text, chunks, citations)
+    verdict = faith.check(text, chunks, citations, question=question)
     if not verdict.passed:
         log.info("faithfulness downgraded answer: %s", verdict.unsupported)
         gate.passed = False

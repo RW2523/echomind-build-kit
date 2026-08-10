@@ -309,6 +309,48 @@ def bench_terseness(repeat: int) -> TaskScore:
     return s
 
 
+def bench_concurrency(candidate: "Candidate", levels=(1, 4, 8)) -> list[dict[str, Any]]:
+    """Throughput and latency under load.
+
+    Single-request wall clock flatters whichever engine has the smallest per-call
+    overhead, but this assistant serves a whole facility. Continuous batching is the
+    thing that separates a serving engine from a local runner, and it only shows up
+    once more than one person is asking.
+    """
+    import asyncio
+
+    source = (
+        "The Confocal C2 is a point-scanning confocal microscope charged at $42.00/hour. "
+        "Allow the lasers to warm up for 30 minutes before acquiring quantitative data."
+    )
+    body = json.loads(candidate.extra_body) if candidate.extra_body else {}
+
+    async def one(client):
+        t = time.time()
+        r = await client.post(
+            candidate.base_url.rstrip("/") + "/chat/completions", timeout=300,
+            json={"model": candidate.model, "max_tokens": 120, "temperature": 0,
+                  "messages": [
+                      {"role": "system", "content": "Answer only from the source."},
+                      {"role": "user", "content":
+                       f"SOURCE: {source}\n\nHow long must the lasers warm up? Two sentences."}],
+                  **body},
+        )
+        return time.time() - t, r.json().get("usage", {}).get("completion_tokens", 0)
+
+    async def at(n):
+        async with httpx.AsyncClient() as client:
+            await one(client)  # warm
+            t0 = time.time()
+            results = await asyncio.gather(*[one(client) for _ in range(n)])
+            wall = time.time() - t0
+        return {"concurrency": n, "wall_s": round(wall, 3),
+                "p50_latency_s": round(statistics.median(r[0] for r in results), 3),
+                "aggregate_tok_s": round(sum(r[1] for r in results) / wall, 1)}
+
+    return [asyncio.run(at(n)) for n in levels]
+
+
 TASKS = {
     "router": bench_router,
     "coverage": bench_coverage,
@@ -335,6 +377,14 @@ def run_candidate(candidate: Candidate, repeat: int) -> dict[str, Any]:
         print(f"{colour}{score.accuracy:6.1%}{RESET}  p50 {score.p50:5.2f}s"
               f"   {DIM}{score.correct}/{score.total}{RESET}")
 
+    print("    concurrency ", end="", flush=True)
+    try:
+        concurrency = bench_concurrency(candidate)
+        print("  ".join(f"n={c['concurrency']}:{c['aggregate_tok_s']:.0f}tok/s" for c in concurrency))
+    except Exception as exc:  # noqa: BLE001
+        concurrency = []
+        print(f"failed ({type(exc).__name__})")
+
     weighted = sum(WEIGHTS[k] * (s.accuracy if s.accuracy == s.accuracy else 0)
                    for k, s in scores.items())
     total_p50 = sum(s.p50 for s in scores.values() if s.p50 == s.p50)
@@ -351,6 +401,7 @@ def run_candidate(candidate: Candidate, repeat: int) -> dict[str, Any]:
             for k, s in scores.items()
         },
         "sum_p50_s": round(total_p50, 3),
+        "concurrency": concurrency,
     }
 
 
@@ -387,6 +438,23 @@ def render(results: list[dict[str, Any]], repeat: int) -> str:
             f"| `{r['candidate']}` | {t['router']['p50_s']:.2f} | {t['coverage']['p50_s']:.2f} "
             f"| {t['verdicts']['p50_s']:.2f} | {t['generation']['p50_s']:.2f} "
             f"| {t['terseness']['p50_s']:.2f} |"
+        )
+
+    lines += ["", "## Under concurrency", "",
+              "Single-request wall clock flatters the engine with the least per-call "
+              "overhead. This assistant serves a facility, so what matters is what "
+              "happens when several people ask at once.", "",
+              "| Candidate | n=1 tok/s | n=4 tok/s | n=8 tok/s | n=8 p50 latency |",
+              "|---|---:|---:|---:|---:|"]
+    for r in sorted(results, key=lambda x: -x["weighted_score"]):
+        c = {x["concurrency"]: x for x in r.get("concurrency", [])}
+        if not c:
+            continue
+        lines.append(
+            f"| `{r['candidate']}` | {c.get(1,{}).get('aggregate_tok_s','—')} "
+            f"| {c.get(4,{}).get('aggregate_tok_s','—')} "
+            f"| {c.get(8,{}).get('aggregate_tok_s','—')} "
+            f"| {c.get(8,{}).get('p50_latency_s','—')}s |"
         )
 
     lines += ["", "## Where each candidate failed", ""]
@@ -438,9 +506,29 @@ def main() -> int:
     for r in sorted(results, key=lambda x: -x["weighted_score"]):
         print(f"  {r['weighted_score']:.3f}  {r['candidate']:26} "
               f"{DIM}Σp50 {r['sum_p50_s']:5.2f}s · structured={r['structured_output']}{RESET}")
-    best = max(results, key=lambda x: x["weighted_score"])
-    print(f"\n{GREEN}{BOLD}winner: {best['candidate']}{RESET} "
-          f"({best['engine']}, score {best['weighted_score']:.3f})")
+    # The weighted score measures accuracy only. When candidates tie there — which is the
+    # common case once the obvious defects are fixed — the honest tiebreak is throughput
+    # under load, not single-request wall clock, because this serves a whole facility.
+    top = max(r["weighted_score"] for r in results)
+    tied = [r for r in results if abs(r["weighted_score"] - top) < 1e-9]
+
+    def peak(r):
+        return max((c["aggregate_tok_s"] for c in r.get("concurrency", [])), default=0.0)
+
+    if len(tied) == 1:
+        best = tied[0]
+        print(f"\n{GREEN}{BOLD}winner: {best['candidate']}{RESET} "
+              f"({best['engine']}, score {best['weighted_score']:.3f})")
+    else:
+        names = ", ".join(r["candidate"] for r in tied)
+        best = max(tied, key=peak)
+        print(f"\n{BOLD}tie on accuracy ({top:.3f}): {names}{RESET}")
+        print(f"{GREEN}{BOLD}best under load: {best['candidate']}{RESET} "
+              f"({best['engine']}, {peak(best):.0f} tok/s at peak concurrency vs "
+              f"{min(peak(r) for r in tied):.0f} for the slowest)")
+        print(f"{DIM}single-request Σp50 favours "
+              f"{min(tied, key=lambda r: r['sum_p50_s'])['candidate']}; that metric only "
+              f"describes one user at a time.{RESET}")
     print(f"report: eval_reports/bench-{stamp}.md")
     return 0
 

@@ -219,6 +219,36 @@ def test_faithfulness_rejects_a_number_the_source_does_not_contain():
     assert verdict.passed is False
 
 
+def test_applying_a_source_rule_to_the_users_own_value_is_supported():
+    """The source gives a threshold; the user asks about a specific value under it.
+
+    Answering "12 hours before start is charged 50%" from "cancellations inside 24 hours
+    are charged 50%" is the assistant doing its job, not inventing a number — but without
+    the question the judge only sees an unfamiliar "12 hours" and refuses, which turned a
+    correct answer into a redirect.
+    """
+    source = _chunk(
+        "Bookings may be cancelled free of charge up to 24 hours before the session "
+        "start. Cancellations inside 24 hours are charged at 50% of the booked time."
+    )
+    verdict = faith.check(
+        "If you cancel 12 hours before it starts, you are charged 50% of the booked time [1].",
+        [source], [],
+        question="What am I charged if I cancel a booking 12 hours before it starts?",
+    )
+    assert verdict.passed is True
+
+
+def test_a_value_in_neither_source_nor_question_is_still_refused():
+    """The exception above must not become a licence to invent."""
+    source = _chunk("Cancellations inside 24 hours are charged at 50% of the booked time.")
+    verdict = faith.check(
+        "Cancelling inside 24 hours is charged at 80% of the booked time [1].",
+        [source], [], question="What am I charged for a late cancellation?",
+    )
+    assert verdict.passed is False
+
+
 def test_every_claim_gets_a_verdict_even_with_a_long_source():
     """Regression: the judge used to stop after the first verdict on a long prompt.
 

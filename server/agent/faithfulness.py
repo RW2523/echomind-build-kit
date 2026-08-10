@@ -29,6 +29,12 @@ JUDGE_SYSTEM = (
     "You verify whether each claim is fully supported by the sources it cites. A claim is "
     "supported only if the sources state it — not if they merely suggest it, and not if "
     "the claim adds a number, name or condition the sources do not contain.\n\n"
+    "One exception, because it is the assistant's job and not a fabrication: applying a "
+    "rule or threshold FROM the sources to a value the USER supplied in the question is "
+    "supported. If the user asks about 12 hours and the sources say cancellations inside "
+    "24 hours are charged 50%, then '12 hours before start is charged 50%' is supported — "
+    "the rule and the rate both come from the sources. A value that appears in neither "
+    "the sources nor the question is never supported.\n\n"
     'Reply only as JSON: {{"verdicts": [{{"id": 1, "supported": true, "why": "<12 words"}}]}}\n\n'
     "You must return exactly {count} verdict(s), one per claim, using the claim's number "
     "as its id. Do not stop early."
@@ -123,7 +129,11 @@ def check(
     answer: str,
     chunks: list[RetrievedChunk],
     citations: list[Citation],
+    question: str = "",
 ) -> FaithfulnessResult:
+    """`question` lets the judge tell "applied the source's rule to what the user asked"
+    apart from "invented a number" — without it, every specific answer to a specific
+    question reads as unsupported."""
     claims = split_claims(answer)
     if not claims:
         return FaithfulnessResult(passed=False, score=0.0, checked=0,
@@ -152,7 +162,10 @@ def check(
             {"role": "system", "content": JUDGE_SYSTEM.format(count=len(claims))},
             {
                 "role": "user",
-                "content": f"SOURCES:\n{sources_block}\n\nCLAIMS:\n{claims_block}",
+                "content": (
+                    (f"QUESTION THE USER ASKED:\n{question}\n\n" if question else "")
+                    + f"SOURCES:\n{sources_block}\n\nCLAIMS:\n{claims_block}"
+                ),
             },
         ],
         model=settings.judge_model,
@@ -177,7 +190,8 @@ def check(
                     {
                         "role": "user",
                         "content": (
-                            "SOURCES:\n"
+                            (f"QUESTION THE USER ASKED:\n{question}\n\n" if question else "")
+                            + "SOURCES:\n"
                             + "\n\n".join(
                                 f"[{i}] {numbered[i].text}"
                                 for i in cited_for[n] if i in numbered

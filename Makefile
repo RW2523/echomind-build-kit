@@ -32,6 +32,7 @@ help:
 	@echo "  make ui      run frontend dev server"
 	@echo "  make test    pytest (markers: tools, rag_isolation, gate, sql_guard, tiers, agent)"
 	@echo "  make eval    evals on evals/golden_set.jsonl -> eval_reports/"
+	@echo "  make bench   score engines/models on the real tasks -> eval_reports/"
 	@echo "  make demo    scripted six-scene run, prints PASS/FAIL per scene"
 
 $(VENV)/.installed: pyproject.toml
@@ -86,6 +87,11 @@ test: venv
 
 eval: venv
 	$(PY) -m evals.run
+
+# Score candidate engines/models on EchoMind's own tasks. Endpoints that are not
+# listening are skipped, so this works with whatever you happen to have running.
+bench: venv
+	$(PY) -m scripts.bench_llm --repeat 3
 
 demo: venv
 	$(PY) -m scripts.demo

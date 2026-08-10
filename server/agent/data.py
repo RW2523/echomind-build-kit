@@ -17,7 +17,7 @@ from server.agent.llm import chat, chat_json
 from server.agent.responses import AgentResponse
 from server.auth import Ctx
 from server.mcp import tools as tools_mod
-from server.mcp.errors import ToolError
+from server.mcp.errors import ToolError, forbidden
 
 log = logging.getLogger("echomind.data")
 
@@ -57,9 +57,8 @@ Use the caller's own id when the question says "my", "me" or "I".
 Rules:
 - Never silently answer about the caller when the question named someone else. Name them
   in subject_user_id and let the server decide whether access is permitted.
-- Pick ONE mode. Tool names are not SQL functions: never write a tool name inside SQL.
-- In sql mode the only relations that exist are the four views above. No other table,
-  no function-as-table, no CTE, no subquery against anything else.
+- Tool names are not SQL functions: never write a tool name inside SQL.
+{sql_rules}
 - Prefer a direct tool for anything about the caller's own records ("my bookings",
   "my requests", "my invoice"). Tools are cheaper and already scoped to the caller.
 - If the question asks for a total, sum, count or average, compute it IN SQL with an
@@ -81,6 +80,15 @@ SQL_SECTION = """
 Read-only SQL is also available, over exactly these four views:
 {schema}
 """
+
+SQL_RULES = """- Pick ONE mode. In sql mode the only relations that exist are the four views above.
+  No other table, no function-as-table, no CTE, no subquery against anything else."""
+
+# Callers without SQL rights are never shown the SQL mode, so proposing it wastes a
+# round-trip and used to produce a wrong tool substitution.
+NO_SQL_RULE = """- There is no SQL mode available to you. Every question must be answered
+  with one of the tools above. An invoice total is get_billing_summary(account_code,
+  period); a usage rollup is get_usage_records."""
 
 SQL_OPTION = """or a single read-only SELECT:
   {"mode": "sql", "sql": "SELECT ..."}
@@ -132,6 +140,7 @@ def _plan(question: str, ctx: Ctx, history: str = "") -> dict[str, Any]:
         menu=TOOL_MENU,
         sql_section=SQL_SECTION.format(schema=VIEW_SCHEMA) if may_sql else "",
         sql_option=SQL_OPTION if may_sql else "",
+        sql_rules=SQL_RULES if may_sql else NO_SQL_RULE,
     )
     system += "\n\nInstrument ids (tools take the id, never the display name):\n" + _instrument_catalog()
     plan = chat_json(
@@ -152,8 +161,33 @@ def _plan(question: str, ctx: Ctx, history: str = "") -> dict[str, Any]:
         max_tokens=300,
     )
     if plan.get("mode") == "sql" and not may_sql:
-        # Fail closed if the planner ignores the menu.
-        plan = {"mode": "tool", "tool": "get_my_bookings", "arguments": {}}
+        # The planner proposed SQL for a caller who has no SQL rights. Substituting a
+        # fixed tool here (which this used to do) answers a billing question with
+        # bookings — worse than useless, because the reply looks confident. Re-ask with
+        # the refusal made explicit instead, and only then give up.
+        log.info("planner proposed SQL for a %s; re-planning tool-only", ctx.role)
+        plan = chat_json(
+            [
+                {"role": "system", "content": system},
+                {
+                    "role": "user",
+                    "content": (
+                        f"Caller user_id: {ctx.user_id}\n"
+                        f"Caller role: {ctx.role}\n"
+                        f"Caller labs: {', '.join(ctx.lab_ids) or 'none'}\n"
+                        + (f"\n{history}\n" if history else "")
+                        + f"\nQUESTION: {question}\n\n"
+                        "You proposed SQL. This caller may not run SQL. Choose the TOOL "
+                        "from the list that answers the question — for an invoice total "
+                        "that is get_billing_summary(account_code, period)."
+                    ),
+                },
+            ],
+            default={},
+            max_tokens=300,
+        )
+        if plan.get("mode") == "sql" or not plan.get("tool"):
+            raise forbidden()
     return plan
 
 
