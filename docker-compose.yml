@@ -135,6 +135,10 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
+    # Must be overridden explicitly: the TensorRT-LLM image carries a baked-in HEALTHCHECK
+    # probing the LLM's own /v1/models on 8355. Start this container by hand instead of
+    # through compose and it inherits that probe, then reports "unhealthy" forever while
+    # serving perfectly — which makes a real outage indistinguishable from the noise.
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8006/health || exit 1"]
       interval: 10s
