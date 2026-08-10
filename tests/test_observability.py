@@ -410,3 +410,65 @@ def test_a_context_carrying_the_fact_is_still_counted_useful():
         "Biosafety Level 2 certification is valid for 24 months.",
         "How long is Biosafety Level 2 certification valid for?",
     ) == 1.0
+
+
+# --- claimed omissions and inventions are checked, not taken on trust ------------------
+
+
+def test_a_missing_fact_whose_number_is_in_the_answer_is_not_missing():
+    """Regression: an answer quoting its reference verbatim was charged a phantom FN.
+    Three rewordings and a source-free judging call each fixed some cases and broke
+    others — the prompt is the wrong tool. The numbers settle it: "retained for 30 days"
+    and "deleted 30 days after acquisition" are one fact from opposite ends.
+    """
+    from evals.metrics import _omission_is_real
+
+    assert not _omission_is_real(
+        "deleted 30 days after acquisition", "Data is retained for 30 days after acquisition."
+    )
+    assert not _omission_is_real("valid for 24 months", "Certification is valid for 24 months.")
+
+
+def test_a_genuinely_absent_fact_is_still_counted():
+    from evals.metrics import _omission_is_real
+
+    assert _omission_is_real(
+        "deleted 30 days after acquisition", "The transfer share is retained for 90 days."
+    )
+    assert _omission_is_real("valid for 24 months", "Certification must be kept current.")
+
+
+def test_citation_markers_do_not_count_as_numbers():
+    """Regression: "[1]" put a stray 1 into the claim's numbers, which no source
+    contained, so every cited sentence looked unsupported."""
+    from evals.metrics import _omission_is_real
+
+    assert not _omission_is_real(
+        "the transfer share is retained for 90 days [1].",
+        "Data on the transfer share is retained for 90 days, then deleted.",
+    )
+
+
+def test_claims_without_numbers_fall_back_to_substance():
+    from evals.metrics import _omission_is_real
+
+    claim = "the Spinning Disk SD1 is right for live-cell imaging"
+    assert not _omission_is_real(claim, "For live-cell imaging use the Spinning Disk SD1.")
+    assert _omission_is_real(claim, "Bookings require an account code.")
+
+
+@pytest.mark.llm
+def test_correctness_separates_fuller_from_wrong():
+    """The whole point: more detail must score well, invention and omission must not."""
+    fuller = _correctness(
+        "Data on the instrument PCs is deleted 30 days after acquisition [1]. "
+        "Data on the transfer share is retained for 90 days [1]."
+    )
+    invented = _correctness(
+        "Data on the instrument PCs is deleted 30 days after acquisition [1]. "
+        "A 12% surcharge applies after 45 days [1]."
+    )
+    omits = _correctness("Data on the transfer share is retained for 90 days [1].")
+    assert fuller >= 0.90, f"correct sourced detail must score well, got {fuller}"
+    assert invented < 0.85, f"an invented figure must cost the score, got {invented}"
+    assert omits < 0.85, f"omitting the reference fact must cost the score, got {omits}"

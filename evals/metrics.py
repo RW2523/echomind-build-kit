@@ -254,6 +254,8 @@ def _classify(
                     "reference states must still be charged an FN, however much other "
                     "sourced material it contains.\n"
                     "Wording may differ; judge meaning, not phrasing.\n"
+                    "Each FN entry must be quoted from the REFERENCE, so that what is "
+                    "claimed missing can be checked against the answer.\n"
                     'Reply only as JSON: {"TP": ["..."], "FP": ["..."], "FN": ["..."]}'
                 ),
             },
@@ -270,11 +272,65 @@ def _classify(
         default={"TP": [], "FP": [], "FN": []},
         max_tokens=700,
     )
-    counts = []
-    for key in ("TP", "FP", "FN"):
+
+    def count(key: str) -> list[str]:
         value = result.get(key) or []
-        counts.append(len(value) if isinstance(value, list) else 0)
-    return counts[0], counts[1], counts[2]
+        return [str(v) for v in value] if isinstance(value, list) else []
+
+    # Every claimed omission is checked against the answer before it costs anything.
+    # Asking the judge to be careful about FN did not work — three rewordings and a
+    # source-free call each fixed some cases and broke others, and one charged an FN
+    # against an answer that WAS the reference verbatim. What worked for context
+    # relevance was demanding evidence and then verifying it in code, so the same here.
+    real_fn = [f for f in count("FN") if _omission_is_real(f, answer)]
+    # The same check the other way round. Telling the judge that sourced detail is not an
+    # error held on a short context and lapsed on a longer one, marking "the transfer
+    # share is retained for 90 days" an invention with that sentence sitting in the
+    # sources it was given. A claimed invention is only counted if its substance is
+    # absent from both the reference and the sources.
+    grounding = f"{reference}\n{sources}"
+    real_fp = [f for f in count("FP") if _omission_is_real(f, grounding)]
+    dropped_fn = len(count("FN")) - len(real_fn)
+    dropped_fp = len(count("FP")) - len(real_fp)
+    if dropped_fn or dropped_fp:
+        log.info("dropped %d unfounded FN and %d unfounded FP", dropped_fn, dropped_fp)
+    return len(count("TP")) + dropped_fp, len(real_fp), len(real_fn)
+
+
+_NUMBER_RE = re.compile(r"\d+(?:\.\d+)?")
+_CITATION_RE = re.compile(r"\[\d+\]")
+# Words that carry no fact on their own, so their absence proves nothing.
+_FN_STOPWORDS = frozenset(
+    "a an and are as at be been but by for from has have how in is it its of on or that "
+    "the their there these this to was were what when which who will with within after "
+    "before must may can not no than then they you your our".split()
+)
+
+
+def _omission_is_real(claim: str, answer: str) -> bool:
+    """Is this claimed missing fact genuinely absent from the answer?
+
+    The numbers decide it when there are any: a reference fact turning on "24 months" or
+    "30 days" is conveyed if that figure is in the answer, whatever words surround it —
+    "retained for 30 days" and "deleted 30 days after acquisition" are the same fact from
+    opposite ends, and the judge kept charging the second as missing from the first.
+    Without numbers, fall back to how much of the claim's substance the answer repeats.
+    """
+    # Strip citation markers first: "[1]" contributed a stray 1 to the claim's numbers,
+    # which no source contained, so every cited sentence looked unsupported.
+    claim_numbers = set(_NUMBER_RE.findall(_CITATION_RE.sub(" ", claim)))
+    if claim_numbers:
+        haystack = set(_NUMBER_RE.findall(_CITATION_RE.sub(" ", answer)))
+        return not claim_numbers.issubset(haystack)
+
+    def content(text: str) -> set[str]:
+        words = re.findall(r"[a-z]+", text.lower())
+        return {w for w in words if w not in _FN_STOPWORDS and len(w) > 2}
+
+    wanted = content(claim)
+    if not wanted:
+        return False
+    return len(wanted & content(answer)) / len(wanted) < 0.6
 
 
 def _cosine(a: list[float], b: list[float]) -> float:
