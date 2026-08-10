@@ -227,3 +227,110 @@ def test_rerank_failure_keeps_the_original_order(monkeypatch):
 
     monkeypatch.setattr(R.httpx, "post", boom)
     assert [c.chunk_id for c in R._rerank("q", chunks)] == [1, 2, 3]
+
+
+# --- duplicate suppression and the far-tail cut ---------------------------------------
+
+
+def _mk(chunk_id: int, text: str, rerank: float | None = None):
+    import server.rag.retrieval as R
+
+    return R.RetrievedChunk(
+        chunk_id=chunk_id, doc_id=f"d{chunk_id}", text=text, breadcrumb=f"b{chunk_id}",
+        score=0.5, rrf=1.0 / chunk_id, vector_rank=chunk_id, fts_rank=chunk_id,
+        title=f"t{chunk_id}", visibility="public", rerank_score=rerank,
+    )
+
+
+def test_identical_chunks_collapse_to_the_best_ranked_copy():
+    """22 of 134 corpus chunks are byte-identical to another — three "FAQ — Scheduling"
+    documents carry the same words. Returning all three spends three of eight context
+    slots on one piece of information."""
+    import server.rag.retrieval as R
+
+    chunks = [_mk(1, "same words"), _mk(2, "same words"), _mk(3, "different")]
+    kept = R._dedupe(chunks)
+    assert [c.chunk_id for c in kept] == [1, 3], "the better-ranked copy survives"
+
+
+def test_dedupe_ignores_whitespace_and_case():
+    import server.rag.retrieval as R
+
+    kept = R._dedupe([_mk(1, "Same  Words\n"), _mk(2, "same words")])
+    assert len(kept) == 1
+
+
+def test_dedupe_keeps_genuinely_different_chunks():
+    import server.rag.retrieval as R
+
+    chunks = [_mk(1, "alpha"), _mk(2, "beta"), _mk(3, "gamma")]
+    assert len(R._dedupe(chunks)) == 3
+
+
+def _pin_cut(monkeypatch, margin: float, min_keep: int) -> None:
+    """Pin the cut's parameters so these tests describe the logic, not today's tuning."""
+    import server.rag.retrieval as R
+
+    monkeypatch.setattr(R.settings, "rerank_margin", margin)
+    monkeypatch.setattr(R.settings, "rerank_min_keep", min_keep)
+
+
+def test_far_tail_is_cut_relative_to_the_best_score(monkeypatch):
+    """These are unnormalised logits — the right chunk for a real question scores -2.17 —
+    so the cut has to be a gap from the best, never an absolute floor."""
+    import server.rag.retrieval as R
+
+    _pin_cut(monkeypatch, margin=6.0, min_keep=2)
+    chunks = [_mk(1, "a", -2.0), _mk(2, "b", -3.0), _mk(3, "c", -20.0), _mk(4, "d", -21.0)]
+    kept = R._drop_far_tail(chunks, k=8)
+    assert [c.chunk_id for c in kept] == [1, 2], "the two far below the best are dropped"
+
+
+def test_min_keep_floors_the_cut(monkeypatch):
+    """However wide the gap, a single chunk leaves the answer with no corroboration."""
+    import server.rag.retrieval as R
+
+    _pin_cut(monkeypatch, margin=1.0, min_keep=3)
+    chunks = [_mk(1, "a", -2.0), _mk(2, "b", -30.0), _mk(3, "c", -31.0), _mk(4, "d", -32.0)]
+    assert len(R._drop_far_tail(chunks, k=8)) == 3
+
+
+def test_a_negative_top_score_does_not_empty_the_context(monkeypatch):
+    """An absolute threshold would discard every source on most real questions."""
+    import server.rag.retrieval as R
+
+    _pin_cut(monkeypatch, margin=6.0, min_keep=5)
+    chunks = [_mk(i, f"c{i}", -2.0 - i) for i in range(1, 7)]
+    assert R._drop_far_tail(chunks, k=8), "must never return nothing"
+
+
+def test_tail_cut_is_skipped_when_the_reranker_did_not_score():
+    """No scores means the reranker was unreachable; there is nothing to threshold on."""
+    import server.rag.retrieval as R
+
+    chunks = [_mk(i, f"c{i}") for i in range(1, 9)]
+    assert len(R._drop_far_tail(chunks, k=8)) == 8
+
+
+def test_rerank_records_its_score_on_the_chunk(monkeypatch):
+    """Regression: the reranker reordered but never wrote its score back, so `score` was
+    a cosine similarity while the position came from a different signal — a trace could
+    show the top chunk scoring below the chunk beneath it."""
+    import server.rag.retrieval as R
+
+    chunks = [_mk(1, "a"), _mk(2, "b")]
+
+    class FakeResponse:
+        status_code = 200
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self):
+            return [{"index": 1, "score": 4.0}, {"index": 0, "score": -1.0}]
+
+    monkeypatch.setattr(R.httpx, "post", lambda *a, **k: FakeResponse())
+    ordered = R._rerank("q", chunks)
+    assert [c.chunk_id for c in ordered] == [2, 1]
+    assert [c.rerank_score for c in ordered] == [4.0, -1.0]
+    assert ordered[0].score == 0.5, "cosine must stay untouched — the gate reads it"

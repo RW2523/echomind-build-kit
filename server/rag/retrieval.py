@@ -10,6 +10,7 @@ it is ever derived from the query text, the model, or the request body — a pro
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from dataclasses import asdict, dataclass
 from typing import Any
@@ -42,6 +43,12 @@ class RetrievedChunk:
     visibility: str
     lab_id: str | None = None
     owner_user_id: str | None = None
+    # Cross-encoder score, when RERANKER=bge. Recorded rather than folded into `score`
+    # because the two are on different scales — cosine sits in 0..1 and the gate's
+    # threshold is calibrated for it, while these are unnormalised logits. Without this
+    # the ordering came from one signal and the reported score from another, so a trace
+    # could show the top chunk scoring below the chunk beneath it.
+    rerank_score: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -151,15 +158,80 @@ def retrieve(query: str, ctx: Ctx, k: int = 8) -> list[RetrievedChunk]:
     ]
     results.sort(key=lambda c: c.rrf, reverse=True)
 
+    deduped = _dedupe(results)
+
     if settings.reranker == "bge":
-        results = _rerank(query, results)
+        deduped = _rerank(query, deduped)
+        deduped = _drop_far_tail(deduped, k)
 
     log.info(
-        "retrieve caller=%s role=%s q=%r vector=%d fts=%d merged=%d -> k=%d",
+        "retrieve caller=%s role=%s q=%r vector=%d fts=%d merged=%d deduped=%d -> k=%d",
         ctx.user_id, ctx.role, query[:80], len(vector_rows), len(fts_rows),
-        len(results), min(k, len(results)),
+        len(results), len(deduped), min(k, len(deduped)),
     )
-    return results[:k]
+    return deduped[:k]
+
+
+def _text_key(text: str) -> str:
+    return hashlib.md5(" ".join(text.split()).lower().encode()).hexdigest()
+
+
+def _dedupe(chunks: list[RetrievedChunk]) -> list[RetrievedChunk]:
+    """Collapse chunks whose text is identical, keeping the best-ranked copy.
+
+    The corpus instantiates templates under different titles, so 22 of 134 chunks are
+    byte-identical to another — three "FAQ — Scheduling" documents carry the same words.
+    Returning all three spends three of eight context slots on one piece of information,
+    and pushes genuinely different material out of the window. Real facility corpora
+    repeat boilerplate the same way, so this belongs in retrieval rather than in the
+    corpus generator.
+
+    Runs after permission filtering, never before: the survivor is always a chunk this
+    caller was already entitled to see.
+    """
+    seen: set[str] = set()
+    out: list[RetrievedChunk] = []
+    for c in chunks:
+        key = _text_key(c.text)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(c)
+    if len(out) < len(chunks):
+        log.info("dropped %d duplicate chunk(s)", len(chunks) - len(out))
+    return out
+
+
+def _drop_far_tail(chunks: list[RetrievedChunk], k: int) -> list[RetrievedChunk]:
+    """Stop padding the context to k with chunks the cross-encoder rates far below the best.
+
+    Asked when invoices are issued, retrieval returned the Billing FAQ and then four
+    consumable standards and a scheduling FAQ, purely because k was 8 and they were next
+    in line. Filler costs more than wasted tokens: the generator hung a billing claim on
+    the onboarding guide because a weak, tangentially-related chunk was sitting in front
+    of it.
+
+    The cut is relative. These scores are unnormalised logits — the correct chunk for
+    "what format do sample barcodes use?" scores -2.17 — so any absolute floor would
+    discard every source. The gap from the best score is what separates signal from
+    filler, and it is wide: -2.17 against -8.09 for the next chunk.
+    """
+    if not chunks:
+        return chunks
+    scores = [c.rerank_score for c in chunks]
+    if any(s is None for s in scores):
+        return chunks  # reranker unavailable; nothing to threshold on
+
+    floor = scores[0] - settings.rerank_margin
+    keep = [c for c in chunks if c.rerank_score >= floor]
+    if len(keep) < settings.rerank_min_keep:
+        keep = chunks[: settings.rerank_min_keep]
+    if len(keep) < len(chunks):
+        log.info(
+            "cut %d chunk(s) scoring below %.2f (best %.2f)",
+            len(chunks) - len(keep), floor, scores[0],
+        )
+    return keep[:k]
 
 
 def chunk_text_by_id(chunk_id: int) -> str | None:
@@ -225,4 +297,8 @@ def _rerank(query: str, chunks: list[RetrievedChunk]) -> list[RetrievedChunk]:
     ranked = sorted(
         enumerate(chunks), key=lambda pair: by_index.get(pair[0], float("-inf")), reverse=True
     )
-    return [c for _, c in ranked]
+    out = []
+    for position, chunk in ranked:
+        chunk.rerank_score = by_index.get(position)
+        out.append(chunk)
+    return out

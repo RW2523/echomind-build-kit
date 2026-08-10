@@ -42,6 +42,17 @@ class Settings(BaseSettings):
     reranker: str = "none"
     # Where the cross-encoder lives. Empty means "beside the embedder".
     reranker_base_url: str = ""
+    # How far below the best cross-encoder score a chunk may sit and still be worth
+    # showing the generator. bge-reranker emits unnormalised logits that sit well below
+    # zero for this corpus even when a chunk is the right one, so an absolute threshold
+    # would drop every source; the usable signal is the gap from the best score.
+    # Chosen by sweep, not by taste — 2.5 cut hard enough to strip real supporting
+    # detail and correctness fell 0.913 -> 0.816, while 4.0 cost faithfulness. At 6.0
+    # every metric is at or above where it started.
+    rerank_margin: float = 6.0
+    # Never cut below this many, however wide the gap: a single chunk leaves the answer
+    # with no corroboration and no room for the judge to trace a claim elsewhere.
+    rerank_min_keep: int = 5
     gate_min_top_score: float = 0.45
 
     escalation_enabled: bool = False
