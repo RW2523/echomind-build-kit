@@ -236,3 +236,75 @@ def test_omitting_what_the_reference_states_is_still_punished():
     everything it said happened to be sourced."""
     off_topic = _correctness("Instrument PCs are working space, not an archive [1].")
     assert off_topic < 0.80, f"missing the reference fact must cost the score, got {off_topic}"
+
+
+# --- splitting a list of alternatives must keep the direction of the relation ---------
+
+BILLING_CTX = [
+    "Billing FAQ > How am I charged? (v2.0)\n"
+    "Invoices are issued monthly, in arrears, in the first week of the following month. "
+    "Each invoice covers one account code for one calendar month, and its total is the "
+    "sum of its lines. A line corresponds to a chargeable item: instrument time, a "
+    "service request, or a consumable."
+]
+BILLING_Q = "When are invoices issued?"
+
+
+@pytest.mark.llm
+def test_enumerations_are_split_with_the_member_as_the_subject():
+    """Regression (k07): "a line ... : instrument time, a service request, or a
+    consumable" was split into "A chargeable item is a consumable" — which claims every
+    chargeable item is one, and is false. The judge rejected it, correctly, and a
+    sentence quoting its source verbatim lost a tenth of its faithfulness. The bug was in
+    the decomposition, not the judging.
+    """
+    from evals.metrics import _statements
+
+    statements = _statements(
+        "A line corresponds to a chargeable item: instrument time, a service request, "
+        "or a consumable [1]."
+    )
+    inverted = [s for s in statements if s.lower().startswith("a chargeable item is")]
+    assert not inverted, f"relation inverted into a false universal: {inverted}"
+    assert any("consumable" in s.lower() for s in statements), "the member must survive"
+
+
+@pytest.mark.llm
+def test_a_sentence_quoting_its_source_scores_full_faithfulness():
+    from evals.metrics import faithfulness
+
+    score = faithfulness(
+        "Invoices are issued monthly, in arrears, in the first week of the following "
+        "month. A line corresponds to a chargeable item: instrument time, a service "
+        "request, or a consumable [1].",
+        BILLING_CTX, BILLING_Q,
+    )
+    assert score >= 0.95, f"a verbatim-sourced answer should score ~1.0, got {score}"
+
+
+@pytest.mark.llm
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "Invoices are issued every fortnight, in the first week of the following month [1].",
+        "Invoices are issued monthly, in arrears [1]. A 12% late-payment surcharge "
+        "applies after 30 days [1].",
+        "Invoices are emailed by the finance office every Friday afternoon [1].",
+    ],
+)
+def test_unfaithful_answers_are_still_caught(answer):
+    """The splitter fix must not make the metric blind to invention."""
+    from evals.metrics import faithfulness
+
+    assert faithfulness(answer, BILLING_CTX, BILLING_Q) < 0.90
+
+
+@pytest.mark.llm
+def test_a_false_universal_the_answer_actually_asserts_is_still_rejected():
+    """The fix stops the splitter manufacturing that claim — not the metric accepting it."""
+    from evals.metrics import faithfulness
+
+    score = faithfulness(
+        "Every chargeable item on an invoice is a consumable [1].", BILLING_CTX, BILLING_Q
+    )
+    assert score < 0.50, f"the answer itself asserts something false, got {score}"

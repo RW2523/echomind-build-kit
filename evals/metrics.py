@@ -59,7 +59,15 @@ def _verdict_schema(count: int) -> dict:
 
 
 def _statements(text: str) -> list[str]:
-    """Break an answer into atomic factual statements (RAGAS step 1)."""
+    """Break an answer into atomic factual statements (RAGAS step 1).
+
+    Splitting a list of alternatives has to keep the direction of the relation. "A line
+    corresponds to a chargeable item: instrument time, a service request, or a
+    consumable" was being split into "A chargeable item is a consumable" — which asserts
+    that every chargeable item is one, and is false. The judge rejected it, correctly,
+    and k07 lost a tenth of its faithfulness for a sentence quoting its source verbatim.
+    The failure was in the decomposition, not the judging.
+    """
     if not text.strip():
         return []
     result = chat_json(
@@ -70,6 +78,10 @@ def _statements(text: str) -> list[str]:
                     "Break the text into atomic factual statements. Each statement must "
                     "stand alone, contain exactly one fact, and use no pronouns. Ignore "
                     "pleasantries and framing sentences.\n"
+                    "When the text lists alternatives — \"X can be a, b, or c\" — write "
+                    "one statement per member with the MEMBER as the subject: \"a is a "
+                    "kind of X\". Never write \"X is a\", which claims every X is an a "
+                    "and is false. Preserve the direction of every relation you split.\n"
                     'Reply only as JSON: {"statements": ["...", "..."]}'
                 ),
             },
