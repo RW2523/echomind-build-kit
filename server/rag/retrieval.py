@@ -222,14 +222,18 @@ def _drop_far_tail(chunks: list[RetrievedChunk], k: int) -> list[RetrievedChunk]
     if any(s is None for s in scores):
         return chunks  # reranker unavailable; nothing to threshold on
 
-    floor = scores[0] - settings.rerank_margin
+    # The best score, not the first one: blending with the fusion order means position 1
+    # is no longer guaranteed to hold the highest cross-encoder score, and measuring the
+    # gap from whatever happens to be on top would move the floor for unrelated reasons.
+    best = max(scores)
+    floor = best - settings.rerank_margin
     keep = [c for c in chunks if c.rerank_score >= floor]
     if len(keep) < settings.rerank_min_keep:
         keep = chunks[: settings.rerank_min_keep]
     if len(keep) < len(chunks):
         log.info(
             "cut %d chunk(s) scoring below %.2f (best %.2f)",
-            len(chunks) - len(keep), floor, scores[0],
+            len(chunks) - len(keep), floor, best,
         )
     return keep[:k]
 

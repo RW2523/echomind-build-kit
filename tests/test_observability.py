@@ -308,3 +308,105 @@ def test_a_false_universal_the_answer_actually_asserts_is_still_rejected():
         "Every chargeable item on an invoice is a consumable [1].", BILLING_CTX, BILLING_Q
     )
     assert score < 0.50, f"the answer itself asserts something false, got {score}"
+
+
+# --- context relevance must be evidence-backed ----------------------------------------
+
+
+def test_quote_matching_tolerates_punctuation_and_reflow():
+    """The judge rewrites dashes and reflows line breaks. Rejecting a correct sentence on
+    an em dash made k06 score 0.0 with the right document sitting at rank 1."""
+    from evals.metrics import _quotes_the_context
+
+    assert _quotes_the_context(
+        "Spinning Disk SD1 — the right choice for live-cell imaging",
+        "Spinning Disk SD1 - the right choice for live-cell imaging and more",
+    )
+    assert _quotes_the_context(
+        "the right choice for live-cell\nimaging", "the right choice for live-cell imaging"
+    )
+
+
+def test_quote_matching_rejects_evidence_that_is_not_there():
+    from evals.metrics import _quotes_the_context
+
+    assert not _quotes_the_context(
+        "invoices are issued every fortnight", "invoices are issued monthly in arrears"
+    )
+    assert not _quotes_the_context(
+        "spinning disk imaging faster second",
+        "Spinning Disk SD1 is good. Imaging faster than one frame per second.",
+    ), "the span has to be contiguous, not words gathered from across the document"
+
+
+def test_quote_matching_rejects_a_fragment_too_short_to_prove_anything():
+    from evals.metrics import _quotes_the_context
+
+    assert not _quotes_the_context("live-cell imaging", "the right choice for live-cell imaging")
+
+
+def _corpus_chunk(breadcrumb_like: str) -> str:
+    """The real chunk, as the metric sees it in a run.
+
+    Deliberately not a hand-written excerpt: the judgement depends on the whole chunk,
+    and a two-sentence stand-in is a different question from the one the eval asks.
+    """
+    from sqlalchemy import text as sql_text
+
+    from server.db import session_scope
+
+    with session_scope() as s:
+        row = s.execute(
+            sql_text(
+                "SELECT breadcrumb || E'\\n' || text FROM echomind.chunks "
+                "WHERE breadcrumb LIKE :p LIMIT 1"
+            ),
+            {"p": breadcrumb_like},
+        ).scalar()
+    if not row:
+        pytest.skip("corpus not ingested — run `python -m server.rag.ingest db/corpus`")
+    return row
+
+
+@pytest.mark.llm
+@pytest.mark.parametrize(
+    "breadcrumb,reference,question",
+    [
+        (
+            "Confocal C2 Standard%",
+            "Biosafety Level 2 certification is valid for 24 months.",
+            "How long is Biosafety Level 2 certification valid for?",
+        ),
+        (
+            "Training Module 2%",
+            "Data on an instrument PC is deleted 30 days after acquisition.",
+            "How long is data kept on the instrument PCs?",
+        ),
+    ],
+)
+def test_a_context_on_the_topic_without_the_fact_is_not_counted_useful(
+    breadcrumb, reference, question
+):
+    """Regression: the Confocal SOP requires "current Biosafety Level 2 certification"
+    but never says how long one lasts, and Training Module 2 says data has a lifetime
+    without giving it. Both were credited, which dragged k03 and k04 to 0.833."""
+    from evals.metrics import context_precision
+
+    score = context_precision([_corpus_chunk(breadcrumb)], reference, question)
+    assert score == 0.0, f"on-topic is not fact-bearing ({breadcrumb}), got {score}"
+
+
+@pytest.mark.llm
+def test_a_context_carrying_the_fact_is_still_counted_useful():
+    """The tightening must not stop crediting the document that answers the question."""
+    from evals.metrics import context_precision
+
+    bearing = (
+        "Training Requirements and Certification > General rule (v1.4)\n"
+        "Biosafety Level 2 certification is valid for 24 months from the date of award."
+    )
+    assert context_precision(
+        [bearing],
+        "Biosafety Level 2 certification is valid for 24 months.",
+        "How long is Biosafety Level 2 certification valid for?",
+    ) == 1.0

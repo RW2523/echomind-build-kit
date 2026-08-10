@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import logging
 import math
+import re
 from dataclasses import dataclass
 
 from server.agent.llm import chat_json
@@ -56,6 +57,42 @@ def _verdict_schema(count: int) -> dict:
         },
         "required": ["verdicts"], "additionalProperties": False,
     }
+
+
+_RELEVANCE_SCHEMA = {
+    "title": "context_relevance",
+    "type": "object",
+    "properties": {
+        "quote": {"type": "string"},
+        "useful": {"type": "integer", "enum": [0, 1]},
+    },
+    "required": ["quote", "useful"],
+    "additionalProperties": False,
+}
+
+
+def _normalise_quote(value: str) -> str:
+    """Fold everything that is not a word, so a quote is compared on its words alone.
+
+    The judge reflows line breaks and rewrites punctuation: it returned "Spinning Disk
+    SD1 — the right choice for live-cell imaging" for a source written with a plain
+    hyphen. That is the right sentence, and rejecting it on the dash made k06 score 0
+    with the correct document sitting at rank 1.
+    """
+    return " ".join(re.sub(r"[^0-9a-z]+", " ", value.lower()).split())
+
+
+def _quotes_the_context(quote: str, context: str) -> bool:
+    """Is the claimed evidence actually in the context?
+
+    A contiguous run of at least four words has to appear in the context. Shorter
+    fragments prove nothing — two words match almost any document — and requiring the
+    span to be contiguous is what stops the judge assembling evidence that is not there.
+    """
+    cleaned = _normalise_quote(quote)
+    if len(cleaned.split()) < 4:
+        return False
+    return cleaned in _normalise_quote(context)
 
 
 def _statements(text: str) -> list[str]:
@@ -277,9 +314,23 @@ def context_precision(contexts: list[str], reference: str, question: str) -> flo
                 {
                     "role": "system",
                     "content": (
-                        "Was this context useful for arriving at the reference answer? "
-                        'Reply only as JSON: {"useful": 0 or 1}. Answer 1 only if it '
-                        "contains information the reference answer relies on."
+                        "Decide whether a context carries the reference answer.\n\n"
+                        "First find the exact sentence in the CONTEXT that states, in "
+                        "substance, something the REFERENCE ANSWER asserts, and copy it "
+                        "verbatim into `quote`. Then set useful=1.\n"
+                        "If no single sentence in the context states it, set `quote` to "
+                        '"" and useful=0. A context that raises the subject without '
+                        "giving the fact — naming a certification but not its validity "
+                        "period, saying data does not live forever without saying how "
+                        "long — has no such sentence, however relevant it looks. Being "
+                        "on topic is not the same as carrying the answer.\n"
+                        "The quote must appear word for word in the context. Do not "
+                        "paraphrase it, and do not quote the reference answer.\n"
+                        "If the reference answer turns on a value — a number, a "
+                        "duration, a format, a name — the quote must contain that value "
+                        "or an equivalent wording of it. A sentence that gestures at the "
+                        "value without giving it does not qualify.\n\n"
+                        'Reply only as JSON: {"quote": "...", "useful": 0 or 1}'
                     ),
                 },
                 {
@@ -291,13 +342,20 @@ def context_precision(contexts: list[str], reference: str, question: str) -> flo
                 },
             ],
             model=settings.judge_model,
-            default={"useful": 0},
-            max_tokens=60,
+            default={"quote": "", "useful": 0},
+            max_tokens=220,
+            schema=_RELEVANCE_SCHEMA,
         )
         try:
-            relevances.append(1 if int(result.get("useful", 0)) else 0)
+            useful = 1 if int(result.get("useful", 0)) else 0
         except (TypeError, ValueError):
-            relevances.append(0)
+            useful = 0
+        # The quote has to be real. Asking for evidence only helps if the evidence is
+        # checked — otherwise "useful" is still a bare opinion with a sentence next to it.
+        if useful and not _quotes_the_context(str(result.get("quote", "")), context):
+            log.info("relevance claimed a quote that is not in the context; not counted")
+            useful = 0
+        relevances.append(useful)
 
     total_relevant = sum(relevances)
     if total_relevant == 0:
