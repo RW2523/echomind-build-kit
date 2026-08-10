@@ -13,7 +13,7 @@ import pytest
 from sqlalchemy import text
 
 from server.auth import mint
-from server.db import engine, ro_engine
+from server.db import engine, owner_engine, ro_engine
 from server.demo_identities import DEMO_USERS
 
 
@@ -62,7 +62,9 @@ def restore_seeded_state():
         before = set(conn.execute(text("SELECT id FROM echomind.actions")).scalars().all())
     yield
 
-    with engine.begin() as conn:
+    # As the owner: echomind_app may create a booking on approval and is deliberately
+    # not allowed to delete one, so the tear-down cannot borrow the application's role.
+    with owner_engine.begin() as conn:
         rows = conn.execute(
             text("SELECT id, result FROM echomind.actions WHERE id <> ALL(:before)"),
             {"before": list(before)},

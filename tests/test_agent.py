@@ -15,7 +15,7 @@ from server.agent import escalation
 from server.agent.data import column_totals, verify_numbers
 from server.agent.graph import run_turn, resume_turn
 from server.agent.responses import SCOPE_MESSAGE
-from server.db import session_scope
+from server.db import owner_session, session_scope
 from server.mcp import actions as actions_mod
 
 pytestmark = pytest.mark.agent
@@ -91,7 +91,9 @@ def booking_thread(ctxs):
         f"Book Confocal C2 from {slot} to {end} on account ACC-A1", ctxs["alice"], thread_id
     )
     yield thread_id, response, slot
-    with session_scope() as s:
+    # Owner, not the application: creating a booking is something echomind_app may do,
+    # removing one is not.
+    with owner_session() as s:
         s.execute(text("DELETE FROM infinity.bookings WHERE starts_at = :t"), {"t": slot})
 
 

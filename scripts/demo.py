@@ -25,7 +25,7 @@ import httpx
 from sqlalchemy import text
 
 from server.config import REPO_ROOT, settings
-from server.db import session_scope
+from server.db import owner_session, session_scope
 
 BASE = f"http://localhost:{settings.api_port}"
 FIXTURES = REPO_ROOT / "scripts" / "fixtures"
@@ -371,13 +371,18 @@ class Demo:
     # --- lifecycle ---------------------------------------------------------------
 
     def cleanup(self) -> None:
-        """Undo everything this run created, so the next run starts from the seed."""
+        """Undo everything this run created, so the next run starts from the seed.
+
+        Runs as the owner, not as the application. Removing platform rows is scaffolding:
+        echomind_app may create a booking on approval and must never be able to delete
+        one, so the tear-down cannot borrow its connection.
+        """
         for doc_id, headers in self.created_docs:
             try:
                 self.client.delete(f"{BASE}/uploads/{doc_id}", headers=headers)
             except Exception:  # noqa: BLE001
                 pass
-        with session_scope() as db:
+        with owner_session() as db:
             for booking_id in self.created_bookings:
                 db.execute(text("DELETE FROM infinity.bookings WHERE id = :id"), {"id": booking_id})
             for request_id in self.created_requests:

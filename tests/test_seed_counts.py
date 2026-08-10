@@ -216,19 +216,45 @@ def test_app_role_can_do_its_job_but_owns_nothing(db):
             )
             conn.execute(text("DELETE FROM echomind.audit_log WHERE event = 'role_probe'"))
 
-        # But it cannot reshape the database or write the platform's own tables.
+        # Approving an action creates a platform record, so INSERT on exactly those three
+        # tables is part of the job. This used to assert the opposite, which held only
+        # because APP_DATABASE_URL was unset and nothing ever ran an approval as this
+        # role — pointing the API at it turned every approval into InsufficientPrivilege.
+        for statement in (
+            "INSERT INTO infinity.bookings (id, user_id, instrument_id, starts_at, "
+            "ends_at, status, account_code) VALUES ('bk-roleprobe', 'u-alice', "
+            "'ins-confocal-c2', '2030-01-01T09:00:00Z', '2030-01-01T10:00:00Z', "
+            "'requested', 'ACC-A1')",
+            "INSERT INTO infinity.users (id, email, name, role) "
+            "VALUES ('u-roleprobe', 'p@x.io', 'P', 'user')",
+        ):
+            with app_engine.begin() as conn:
+                conn.execute(text(statement))
+
+        # ...but creating is the whole of it. It may not rewrite or remove platform
+        # history, touch a table outside those three, or reshape the database.
         for statement in (
             "CREATE TABLE public.role_probe (id int)",
             "DROP TABLE infinity.bookings",
             "ALTER TABLE infinity.users ADD COLUMN role_probe int",
-            "INSERT INTO infinity.users (id, email, name, role) "
-            "VALUES ('u-probe', 'p@x.io', 'P', 'admin')",
+            "UPDATE infinity.bookings SET status = 'cancelled'",
+            "DELETE FROM infinity.bookings WHERE id = 'bk-roleprobe'",
+            "UPDATE infinity.users SET role = 'admin'",
+            "INSERT INTO infinity.invoices (id, account_code, period, total) "
+            "VALUES ('inv-probe', 'ACC-A1', '2026-01', 0)",
         ):
             with pytest.raises(SQLAlchemyError):
                 with app_engine.begin() as conn:
                     conn.execute(text(statement))
     finally:
         app_engine.dispose()
+        # As the owner: the probe rows are scaffolding, and the role under test is
+        # deliberately unable to remove them.
+        from server.db import owner_engine
+
+        with owner_engine.begin() as conn:
+            conn.execute(text("DELETE FROM infinity.bookings WHERE id = 'bk-roleprobe'"))
+            conn.execute(text("DELETE FROM infinity.users WHERE id = 'u-roleprobe'"))
 
 
 def test_readonly_session_is_read_only_and_time_limited(rodb):

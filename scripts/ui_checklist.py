@@ -68,13 +68,17 @@ def stream(client: httpx.Client, headers: dict, message: str,
 
 
 def cleanup(client: httpx.Client, admin_headers: dict) -> None:
-    """Undo the writes this checklist made, so the seeded state is restored."""
+    """Undo the writes this checklist made, so the seeded state is restored.
+
+    As the owner: deleting platform rows is scaffolding, and the application role is
+    deliberately not allowed to do it.
+    """
     from sqlalchemy import text as sql_text
 
-    from server.db import session_scope
+    from server.db import owner_session
 
     removed = {"bookings": 0, "actions": 0}
-    with session_scope() as db:
+    with owner_session() as db:
         for action_id in created_action_ids:
             action = db.execute(
                 sql_text("SELECT result FROM echomind.actions WHERE id = :id"),
