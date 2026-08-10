@@ -39,8 +39,11 @@ class Settings(BaseSettings):
     embed_base_url: str = "http://localhost:11434/v1"
     embed_model: str = "bge-m3"
 
+    # Any value other than "none"/"off"/"" turns the rerank endpoint on. The value used
+    # to name the model, which stopped being true once the endpoint could serve either a
+    # bge cross-encoder or Qwen3-Reranker — the model is RERANK_MODEL, server-side.
     reranker: str = "none"
-    # Where the cross-encoder lives. Empty means "beside the embedder".
+    # Where the reranker lives. Empty means "beside the embedder".
     reranker_base_url: str = ""
     # How far below the best cross-encoder score a chunk may sit and still be worth
     # showing the generator. bge-reranker emits unnormalised logits that sit well below
@@ -51,8 +54,11 @@ class Settings(BaseSettings):
     # every metric is at or above where it started.
     rerank_margin: float = 6.0
     # Never cut below this many, however wide the gap: a single chunk leaves the answer
-    # with no corroboration and no room for the judge to trace a claim elsewhere.
-    rerank_min_keep: int = 5
+    # with no corroboration and no room for the judge to trace a claim elsewhere. Swept
+    # against the eval for Qwen3-Reranker, whose scores are calibrated around zero and
+    # separate far better than bge's: 5 let marginal chunks back in and cost precision,
+    # 4 made k04 redirect outright, 3 and 2 both give faithfulness and precision 1.000.
+    rerank_min_keep: int = 3
     gate_min_top_score: float = 0.45
 
     escalation_enabled: bool = False
@@ -105,6 +111,10 @@ class Settings(BaseSettings):
         if isinstance(v, str) and "#" in v:
             v = v.split("#", 1)[0]
         return v.strip() if isinstance(v, str) else v
+
+    @property
+    def reranker_enabled(self) -> bool:
+        return self.reranker.strip().lower() not in ("", "none", "off", "false", "0")
 
     @property
     def extra_body(self) -> dict:

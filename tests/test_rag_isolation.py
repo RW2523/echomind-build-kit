@@ -136,10 +136,18 @@ def test_prompt_injection_does_not_change_the_sql_predicate(ctxs, injection):
 
 @pytest.mark.parametrize("injection", INJECTIONS)
 def test_prompt_injection_returns_no_forbidden_chunks(ctxs, corpus_ingested, injection):
+    """What must hold is that bob sees nothing he is not entitled to.
+
+    This asserted "only public chunks may come back", on the reasoning that bob owns
+    nothing in the corpus — true when lab-a held the only lab-scoped document, false once
+    every lab had protocols. It went red when a change of reranker surfaced two of bob's
+    OWN lab-b protocols, which he is perfectly entitled to read. Asserting on the lab id
+    tests the isolation rather than the shape of the corpus.
+    """
     for hit in retrieve(f"{injection} {CODEWORD}", ctxs["bob"], k=8):
-        # bob is in lab-b and owns nothing in the corpus, so only public may come back.
         assert CODEWORD not in hit.text
-        assert hit.visibility == "public"
+        assert hit.visibility != "private", "no private chunk may reach a non-owner"
+        assert hit.lab_id in (None, "lab-b"), f"bob retrieved a chunk from {hit.lab_id}"
 
 
 def test_admin_predicate_adds_facilities_but_still_excludes_private(ctxs):
@@ -430,3 +438,15 @@ def test_pruning_never_touches_documents_from_another_directory(tmp_path):
     empty = tmp_path / "unrelated"
     empty.mkdir()
     assert prune_missing(empty, []) == [], "the real corpus lives elsewhere and must survive"
+
+
+def test_the_reranker_flag_no_longer_names_a_model():
+    """`RERANKER=bge` used to be checked literally, so pointing the endpoint at
+    Qwen3-Reranker silently disabled reranking. The model is chosen server-side by
+    RERANK_MODEL; this flag only says whether to call the endpoint at all."""
+    from server.config import Settings
+
+    for value in ("bge", "qwen3", "on", "BGE", " bge "):
+        assert Settings(reranker=value).reranker_enabled, value
+    for value in ("none", "off", "", "false", "0", "NONE"):
+        assert not Settings(reranker=value).reranker_enabled, value

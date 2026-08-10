@@ -125,7 +125,7 @@ services:
       - ${HOME}/.cache/huggingface:/root/.cache/huggingface
       - ./deploy:/deploy:ro
     environment:
-      RERANK_MODEL: ${RERANK_MODEL:-BAAI/bge-reranker-large}
+      RERANK_MODEL: ${RERANK_MODEL:-Qwen/Qwen3-Reranker-4B}
       LD_LIBRARY_PATH: /usr/local/tensorrt/targets/aarch64-linux-gnu/lib:/usr/local/cuda/lib64:/usr/local/lib/python3.12/dist-packages/torch/lib:/usr/local/cuda/compat/lib:/usr/local/nvidia/lib:/usr/local/nvidia/lib64
     entrypoint: ["python3", "/deploy/rerank_server.py"]
     deploy:

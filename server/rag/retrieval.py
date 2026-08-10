@@ -160,7 +160,7 @@ def retrieve(query: str, ctx: Ctx, k: int = 8) -> list[RetrievedChunk]:
 
     deduped = _dedupe(results)
 
-    if settings.reranker == "bge":
+    if settings.reranker_enabled:
         deduped = _rerank(query, deduped)
         deduped = _drop_far_tail(deduped, k)
 
@@ -222,9 +222,23 @@ def _drop_far_tail(chunks: list[RetrievedChunk], k: int) -> list[RetrievedChunk]
     if any(s is None for s in scores):
         return chunks  # reranker unavailable; nothing to threshold on
 
-    # The best score, not the first one: blending with the fusion order means position 1
-    # is no longer guaranteed to hold the highest cross-encoder score, and measuring the
-    # gap from whatever happens to be on top would move the floor for unrelated reasons.
+    # A reranker that puts any chunk above zero is telling us, on a calibrated scale,
+    # which chunks answer the question and which do not — Qwen3-Reranker scores the
+    # log-odds of "yes". Take it at its word and drop the rest, min_keep included:
+    # padding the context back out with chunks it declined is what put a second private
+    # note in front of the generator, which then answered with both markers and lost the
+    # whole reply to the faithfulness check. bge's logits are negative throughout, so no
+    # positive score exists, the rule never fires, and its behaviour is unchanged.
+    if any(s > 0 for s in scores):
+        confident = [c for c in chunks if c.rerank_score > 0]
+        if len(confident) < len(chunks):
+            log.info("reranker is positive about %d of %d chunk(s); dropping the rest",
+                     len(confident), len(chunks))
+        return confident[:k]
+
+    # The best score, not the first one: position 1 is not guaranteed to hold the highest
+    # score if anything reorders, and measuring the gap from whatever happens to be on
+    # top would move the floor for unrelated reasons.
     best = max(scores)
     floor = best - settings.rerank_margin
     keep = [c for c in chunks if c.rerank_score >= floor]
