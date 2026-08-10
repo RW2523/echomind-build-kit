@@ -166,8 +166,23 @@ def faithfulness(answer: str, contexts: list[str], question: str) -> float:
     return round(sum(verdicts) / len(verdicts), 3)
 
 
-def _classify(answer: str, reference: str, question: str) -> tuple[int, int, int]:
-    """TP / FP / FN over statements, RAGAS's answer-correctness decomposition."""
+def _classify(
+    answer: str, reference: str, question: str, contexts: list[str] | None = None
+) -> tuple[int, int, int]:
+    """TP / FP / FN over statements, RAGAS's answer-correctness decomposition.
+
+    RAGAS assumes the reference is a complete answer. Ours are deliberately one-liners,
+    so a correct, sourced sentence the reference happens not to mention was scored as a
+    false positive: k04 answered the retention question exactly as the document states
+    it, added the transfer-share figure the same document gives, and lost a third of its
+    score for the extra sentence. That is measuring verbosity, not correctness.
+
+    Passing the sources fixes it without going soft. An added fact still has to be
+    supported by the context the answer cited; a fact supported by neither the reference
+    nor the sources is invention and stays a false positive, which is the thing this
+    metric exists to catch.
+    """
+    sources = "\n\n".join(contexts or [])
     result = chat_json(
         [
             {
@@ -175,16 +190,31 @@ def _classify(answer: str, reference: str, question: str) -> tuple[int, int, int
                 "content": (
                     "Compare an ANSWER with the REFERENCE answer to a question, at the "
                     "level of individual facts.\n"
-                    "  TP: a fact present in the answer and supported by the reference\n"
-                    "  FP: a fact present in the answer but NOT supported by the reference\n"
-                    "  FN: a fact present in the reference but missing from the answer\n"
+                    "  TP: a fact in the answer that the reference supports, OR that the "
+                    "sources support and the reference does not contradict\n"
+                    "  FP: a fact in the answer that contradicts the reference, or that "
+                    "neither the reference nor the sources support\n"
+                    "  FN: a fact stated in the REFERENCE that the answer omits\n"
+                    "The reference is a short model answer, not an exhaustive one. Extra "
+                    "detail the sources support is correct and counts as TP — do not "
+                    "penalise an answer for saying more than the reference.\n"
+                    "Judge FN against the REFERENCE ALONE. The sources are there only to "
+                    "tell an added fact apart from an invented one; the answer is never "
+                    "expected to cover everything in them, and a fact that appears only "
+                    "in the sources is not a missing fact. An answer that omits what the "
+                    "reference states must still be charged an FN, however much other "
+                    "sourced material it contains.\n"
                     "Wording may differ; judge meaning, not phrasing.\n"
                     'Reply only as JSON: {"TP": ["..."], "FP": ["..."], "FN": ["..."]}'
                 ),
             },
             {
                 "role": "user",
-                "content": f"QUESTION:\n{question}\n\nANSWER:\n{answer}\n\nREFERENCE:\n{reference}",
+                "content": (
+                    f"QUESTION:\n{question}\n\nANSWER:\n{answer}\n\n"
+                    f"REFERENCE:\n{reference}\n\n"
+                    f"SOURCES:\n{sources or '(none supplied)'}"
+                ),
             },
         ],
         model=settings.judge_model,
@@ -212,8 +242,10 @@ def answer_similarity(answer: str, reference: str) -> float:
     return max(0.0, min(1.0, _cosine(vectors[0], vectors[1])))
 
 
-def answer_correctness(answer: str, reference: str, question: str) -> float:
-    tp, fp, fn = _classify(answer, reference, question)
+def answer_correctness(
+    answer: str, reference: str, question: str, contexts: list[str] | None = None
+) -> float:
+    tp, fp, fn = _classify(answer, reference, question, contexts)
     denominator = tp + 0.5 * (fp + fn)
     f1 = tp / denominator if denominator else 0.0
     similarity = answer_similarity(answer, reference)
@@ -287,6 +319,6 @@ def score_all(
     """
     return MetricScores(
         faithfulness=faithfulness(answer, contexts, question),
-        answer_correctness=answer_correctness(answer, reference, question),
+        answer_correctness=answer_correctness(answer, reference, question, contexts),
         context_precision=context_precision(retrieved_contexts or contexts, reference, question),
     )

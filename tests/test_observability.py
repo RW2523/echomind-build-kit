@@ -174,3 +174,65 @@ def test_admin_traces_are_readable(client, tokens):
     ).json()
     assert body["sink"] == "console"
     assert isinstance(body["spans"], list)
+
+
+# --- the correctness metric must not confuse "more complete" with "wrong" -------------
+
+CORRECTNESS_Q = "How long is data kept on the instrument PCs?"
+CORRECTNESS_REF = "Data on an instrument PC is deleted 30 days after acquisition."
+CORRECTNESS_CTX = [
+    "Data Management and Retention (v1.3)\n"
+    "Data written to an instrument PC is deleted 30 days after acquisition, "
+    "automatically and without warning. Instrument PCs are working space, not an "
+    "archive.\n\nEach core exposes a transfer share for moving data off the instrument. "
+    "Data on the transfer share is retained for 90 days, then deleted. The share is not "
+    "backed up."
+]
+
+
+def _correctness(answer: str) -> float:
+    from evals.metrics import answer_correctness
+
+    return answer_correctness(answer, CORRECTNESS_REF, CORRECTNESS_Q, CORRECTNESS_CTX)
+
+
+@pytest.mark.llm
+def test_extra_detail_the_sources_support_is_not_scored_as_an_error():
+    """Regression (k04): the answer quoted the retention document verbatim, added the
+    transfer-share figure from the same document, and scored 0.72 — the second sentence
+    was charged as a false positive purely because the one-line reference omitted it.
+    RAGAS assumes a complete reference; ours are deliberately terse, so the metric was
+    measuring verbosity rather than correctness.
+    """
+    terse = _correctness("Data on the instrument PCs is deleted 30 days after acquisition [1].")
+    fuller = _correctness(
+        "Data on the instrument PCs is deleted 30 days after acquisition [1]. "
+        "Data on the transfer share is retained for 90 days [1]."
+    )
+    assert terse >= 0.80, f"an answer matching the reference should score well, got {terse}"
+    assert fuller >= 0.80, f"correct sourced detail must not be punished, got {fuller}"
+
+
+@pytest.mark.llm
+def test_a_fact_in_neither_the_reference_nor_the_sources_is_still_punished():
+    """Showing the judge the sources must not make it blind to invention."""
+    invented = _correctness(
+        "Data on the instrument PCs is deleted 30 days after acquisition [1]. "
+        "Backups are kept on tape for seven years [1]."
+    )
+    assert invented < 0.80, f"an invented fact must cost the score, got {invented}"
+
+
+@pytest.mark.llm
+def test_contradicting_the_reference_is_still_punished():
+    wrong = _correctness("Data on the instrument PCs is deleted 60 days after acquisition [1].")
+    assert wrong < 0.80, f"a contradicted fact must cost the score, got {wrong}"
+
+
+@pytest.mark.llm
+def test_omitting_what_the_reference_states_is_still_punished():
+    """The failure mode of the fix: judging FN against the sources instead of the
+    reference let an answer that never addressed the question score 0.90, because
+    everything it said happened to be sourced."""
+    off_topic = _correctness("Instrument PCs are working space, not an archive [1].")
+    assert off_topic < 0.80, f"missing the reference fact must cost the score, got {off_topic}"
