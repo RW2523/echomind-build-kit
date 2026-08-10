@@ -40,6 +40,8 @@ class Settings(BaseSettings):
     embed_model: str = "bge-m3"
 
     reranker: str = "none"
+    # Where the cross-encoder lives. Empty means "beside the embedder".
+    reranker_base_url: str = ""
     gate_min_top_score: float = 0.45
 
     escalation_enabled: bool = False

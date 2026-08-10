@@ -107,6 +107,41 @@ services:
       retries: 40
       start_period: 180s
 
+  # Cross-encoder reranker behind RERANKER=bge. Reuses the TensorRT-LLM image because it
+  # already carries torch + transformers + CUDA; the wire format is TEI's, so the same
+  # client code works against a real TEI deployment.
+  #   COMPOSE_PROFILES=rerank make up
+  #   RERANKER=bge RERANKER_BASE_URL=http://localhost:8006
+  # Measured on the 134-chunk corpus: context precision 0.805 -> 0.866.
+  rerank:
+    image: echomind-trtllm:1.2.0rc6
+    container_name: echomind-rerank
+    profiles: ["rerank"]
+    restart: unless-stopped
+    ipc: host
+    ports:
+      - "8006:8006"
+    volumes:
+      - ${HOME}/.cache/huggingface:/root/.cache/huggingface
+      - ./deploy:/deploy:ro
+    environment:
+      RERANK_MODEL: ${RERANK_MODEL:-BAAI/bge-reranker-large}
+      LD_LIBRARY_PATH: /usr/local/tensorrt/targets/aarch64-linux-gnu/lib:/usr/local/cuda/lib64:/usr/local/lib/python3.12/dist-packages/torch/lib:/usr/local/cuda/compat/lib:/usr/local/nvidia/lib:/usr/local/nvidia/lib64
+    entrypoint: ["python3", "/deploy/rerank_server.py"]
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8006/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 90s
+
 volumes:
   pgdata:
   langfusedata:

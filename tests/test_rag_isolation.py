@@ -177,3 +177,53 @@ def test_no_other_code_path_queries_the_chunks_table():
         "every retrieval must go through server.rag.retrieval.retrieve(); "
         f"these files touch the chunks table directly: {offenders}"
     )
+
+
+# --- reranker ------------------------------------------------------------------------
+
+
+def test_rerank_reorders_by_returned_index_not_by_identity(monkeypatch):
+    """Regression: the reorder used chunks.index(c), which is O(n) and — worse — returns
+    the FIRST equal element, so two chunks with identical text scrambled the order."""
+    import server.rag.retrieval as R
+
+    same = "identical text"
+    chunks = [
+        R.RetrievedChunk(chunk_id=i, doc_id=f"d{i}", text=same, breadcrumb=f"b{i}",
+                         score=0.5, rrf=0.5, vector_rank=i, fts_rank=i,
+                         title=f"t{i}", visibility="public")
+        for i in range(1, 4)
+    ]
+
+    class FakeResponse:
+        status_code = 200
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self):
+            # Reverse the order: index 2 best, index 0 worst.
+            return [{"index": 2, "score": 0.9}, {"index": 1, "score": 0.5},
+                    {"index": 0, "score": 0.1}]
+
+    monkeypatch.setattr(R.httpx, "post", lambda *a, **k: FakeResponse())
+    ordered = R._rerank("q", chunks)
+    assert [c.chunk_id for c in ordered] == [3, 2, 1]
+
+
+def test_rerank_failure_keeps_the_original_order(monkeypatch):
+    """A dead reranker degrades the ordering; it must not kill the turn."""
+    import server.rag.retrieval as R
+
+    chunks = [
+        R.RetrievedChunk(chunk_id=i, doc_id=f"d{i}", text=f"t{i}", breadcrumb=f"b{i}",
+                         score=0.5, rrf=1.0 / i, vector_rank=i, fts_rank=i,
+                         title=f"t{i}", visibility="public")
+        for i in range(1, 4)
+    ]
+
+    def boom(*args, **kwargs):
+        raise ConnectionError("reranker down")
+
+    monkeypatch.setattr(R.httpx, "post", boom)
+    assert [c.chunk_id for c in R._rerank("q", chunks)] == [1, 2, 3]

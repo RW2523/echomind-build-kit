@@ -202,11 +202,13 @@ def _rerank(query: str, chunks: list[RetrievedChunk]) -> list[RetrievedChunk]:
     """
     if not chunks:
         return chunks
-    url = settings.embed_base_url.rstrip("/").removesuffix("/v1") + "/rerank"
+    # RERANKER_BASE_URL when set, else assume the reranker sits beside the embedder.
+    base = settings.reranker_base_url or settings.embed_base_url
+    url = base.rstrip("/").removesuffix("/v1") + "/rerank"
     try:
         resp = httpx.post(
             url,
-            json={"query": query, "texts": [c.text for c in chunks], "model": "bge-reranker-v2-m3"},
+            json={"query": query, "texts": [c.text for c in chunks]},
             timeout=settings.llm_timeout_s,
         )
         resp.raise_for_status()
@@ -216,6 +218,11 @@ def _rerank(query: str, chunks: list[RetrievedChunk]) -> list[RetrievedChunk]:
         log.warning("reranker unavailable (%s); keeping RRF order", exc)
         return chunks
 
-    by_index = {i: s for i, s in order}
-    ranked = sorted(chunks, key=lambda c: by_index.get(chunks.index(c), 0.0), reverse=True)
-    return ranked
+    # The endpoint returns TEI's [{index, score}] against the order we sent. Reorder by
+    # position, not by identity: chunks.index() is O(n) and wrong when two chunks compare
+    # equal.
+    by_index = {int(i): float(s) for i, s in order}
+    ranked = sorted(
+        enumerate(chunks), key=lambda pair: by_index.get(pair[0], float("-inf")), reverse=True
+    )
+    return [c for _, c in ranked]

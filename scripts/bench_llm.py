@@ -36,7 +36,14 @@ REPORTS = REPO_ROOT / "eval_reports"
 
 GREEN, RED, DIM, BOLD, RESET = "\033[32m", "\033[31m", "\033[2m", "\033[1m", "\033[0m"
 
-QWEN3_NO_THINK = '{"chat_template_kwargs": {"enable_thinking": false}}'
+# Qwen3's own checkpoints declare eos_token = <|endoftext|> in tokenizer_config while
+# chat turns actually end with <|im_end|> (151645). trtllm-serve honours the tokenizer,
+# so without these stop ids the model sails past the end of its turn and generates to
+# max_tokens on every request. Both ids, because generation_config lists both.
+QWEN3_OPTS = (
+    '{"chat_template_kwargs": {"enable_thinking": false}, '
+    '"stop_token_ids": [151645, 151643]}'
+)
 
 
 @dataclass
@@ -53,11 +60,15 @@ CANDIDATES = [
     Candidate("ollama/qwen2.5-7b-q4", "http://localhost:11434/v1", "qwen2.5:7b-instruct",
               "Ollama (llama.cpp)", note="current default"),
     Candidate("trtllm/qwen3-8b-fp4", "http://localhost:8001/v1", "nvidia/Qwen3-8B-FP4",
-              "TensorRT-LLM", extra_body=QWEN3_NO_THINK, note="NVFP4, Blackwell native"),
+              "TensorRT-LLM", extra_body=QWEN3_OPTS, note="NVFP4, Blackwell native"),
     Candidate("trtllm/llama3.1-8b-fp4", "http://localhost:8003/v1",
               "nvidia/Llama-3.1-8B-Instruct-FP4", "TensorRT-LLM", note="NVFP4"),
+    Candidate("trtllm/qwen3-8b-awq", "http://localhost:8004/v1", "Qwen/Qwen3-8B-AWQ",
+              "TensorRT-LLM", extra_body=QWEN3_OPTS, note="AWQ W4A16"),
+    Candidate("trtllm/qwen2.5-7b-bf16", "http://localhost:8005/v1", "Qwen/Qwen2.5-7B-Instruct",
+              "TensorRT-LLM", note="same model as the Ollama winner, bf16"),
     Candidate("vllm/qwen3-8b-fp4", "http://localhost:8000/v1", "nvidia/Qwen3-8B-FP4",
-              "vLLM", extra_body=QWEN3_NO_THINK),
+              "vLLM", extra_body=QWEN3_OPTS),
 ]
 
 # --- task fixtures ------------------------------------------------------------------

@@ -224,6 +224,17 @@ def extract_json(raw: str) -> Any:
     raise ValueError(f"could not parse JSON from model reply: {raw[:300]!r}")
 
 
+# A JSON-Schema grammar permits arbitrary whitespace, so a model that likes to
+# pretty-print spends most of its tokens on newlines and indentation. Measured on the
+# 4-verdict judge call: 176 tokens pretty-printed versus 85 compact — half the latency
+# for byte-identical semantics. (Capping string length in the schema instead is worse:
+# xgrammar's maxLength enforcement roughly doubled the time.)
+COMPACT_JSON_HINT = (
+    "Reply with compact JSON on a single line: no newlines, no indentation, "
+    "no spaces after punctuation."
+)
+
+
 def chat_json(
     messages: list[dict[str, str]],
     *,
@@ -237,6 +248,11 @@ def chat_json(
     Pass `schema` wherever the shape matters — it is enforced by the decoder when the
     endpoint supports it, not merely requested in the prompt.
     """
+    if schema is not None:
+        # Appended rather than folded into each caller's prompt: it is an output-encoding
+        # concern, not part of what any particular judge is being asked.
+        messages = [*messages, {"role": "system", "content": COMPACT_JSON_HINT}]
+
     raw = chat(messages, model=model, temperature=0.0, max_tokens=max_tokens,
                json_mode=True, schema=schema)
     try:
