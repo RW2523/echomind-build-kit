@@ -1,18 +1,18 @@
 ---
-title: "Patel Lab Cryopreservation Protocol 3"
+title: "Okonkwo Lab Extraction Protocol 4"
 version: "1.0"
 visibility: lab
-lab: lab-a
+lab: lab-c
 ---
 
-# Patel Lab — Cryopreservation Protocol 3
+# Okonkwo Lab — Extraction Protocol 4
 
-Internal to the Patel Lab (cell biology). House protocol for cryopreservation; not facility
+Internal to the Okonkwo Lab (structural biology). House protocol for extraction; not facility
 guidance, and not to be circulated outside the lab.
 
 ## Scope
 
-Freezing and recovery, including the cooling rate the lab settled on after its own comparison.
+Yield matters less than consistency here — the same input should give the same result on any bench.
 
 ## Reagents
 
@@ -22,9 +22,9 @@ later.
 
 ## Method
 
-1. Equilibrate samples to 37 °C for 10 minutes.
+1. Equilibrate samples to 37 °C for 15 minutes.
 2. Apply the working solution at the dilution recorded in the lab's reagent register.
-3. Incubate for 10 minutes with gentle agitation.
+3. Incubate for 15 minutes with gentle agitation.
 4. Wash three times; do not let the sample dry between washes.
 
 ## Notes

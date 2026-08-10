@@ -1,12 +1,12 @@
 ---
-title: "Safety Notice 2 — Working with Class 3B Lasers"
+title: "Safety Notice 9 — Working with Sharps"
 version: "1.0"
 visibility: public
 ---
 
-# Safety Notice 2 — Working with Class 3B Lasers
+# Safety Notice 9 — Working with Sharps
 
-Applies wherever class 3B lasers are in use in the cores.
+Applies wherever sharps are in use in the cores.
 
 ## Before you start
 
@@ -19,7 +19,7 @@ Use the engineering controls first: interlocks, extraction, and shielding. Perso
 protective equipment is the last line, not the first. Never defeat an interlock, including
 "briefly" during alignment.
 
-Specific to class 3B lasers: Alignment is a two-person job, and the room interlock stays armed throughout.
+Specific to sharps: Sharps bins are replaced at three-quarters full, not when they jam.
 
 ## If something goes wrong
 

@@ -81,6 +81,127 @@ CONSUMABLES = [
 ]
 
 
+# Each facility note draws its topic from one of these, indexed by document number rather
+# than sampled at random. Sampling with replacement from six topics while asking for
+# fourteen documents guaranteed collisions, and because the chunker keeps the H1 out of
+# the chunk text — the number lives in the breadcrumb — two documents on the same topic
+# came out byte-identical. 22 of 134 chunks were duplicates of another.
+#
+# The second element is a topic-specific line spliced into the body, so documents differ
+# in substance and not only in one interpolated word.
+HAZARDS = [
+    ("cryogens", "Fill and decant in the designated area only; oxygen monitors are "
+                 "interlocked to the extraction there."),
+    ("class 3B lasers", "Alignment is a two-person job, and the room interlock stays "
+                        "armed throughout."),
+    ("biological material", "Work at the containment level named on your project "
+                            "registration, not the one you are trained to."),
+    ("compressed gases", "Cylinders are restrained at all times, including while being "
+                         "moved between rooms."),
+    ("solvents", "Decant inside the extracted enclosure; keep waste segregated by "
+                 "halogenation."),
+    ("UV sources", "Skin and eye exposure is cumulative and unlogged — treat every "
+                   "shutter as live."),
+    ("cryo-transfer devices", "Pre-cool slowly: thermal shock is the usual cause of a "
+                              "cracked transfer stage."),
+    ("high-pressure systems", "Depressurise and lock off before any fitting comes "
+                              "apart, however small the line."),
+    ("sharps", "Sharps bins are replaced at three-quarters full, not when they jam."),
+    ("hazardous waste", "Label at the point of generation; an unlabelled container is "
+                        "treated as unknown and costs a specialist collection."),
+    ("magnetic fields", "The five-gauss line is marked on the floor and applies to "
+                        "implants, tools and credit cards alike."),
+    ("electrical test equipment", "Anything opened for probing needs a second person "
+                                  "present who knows where the isolator is."),
+    ("nanomaterials", "Handle dry powders in the enclosure; assume the airborne "
+                      "fraction behaves nothing like the bulk."),
+    ("autoclaves", "Wait for the chamber to vent fully — a stalled cycle is not a "
+                   "finished one."),
+]
+
+MODULES = [
+    ("Instrument Induction", "How the booking system, the account code and the "
+                             "instrument PC fit together."),
+    ("Data Handling", "Where acquisition data lands, how long it survives, and how to "
+                      "get it off the instrument PC."),
+    ("Sample Handling", "Labelling, transport between cores, and what a rejected "
+                        "submission usually has wrong with it."),
+    ("Image Analysis", "Reproducible processing: keeping the pipeline with the data "
+                       "rather than in someone's notebook."),
+    ("Statistics for Core Users", "Replication and pseudo-replication, worked through "
+                                  "on real facility datasets."),
+    ("Reagent Management", "Stock, expiry, and why an undated open container is worse "
+                           "than an empty shelf."),
+    ("Experimental Design Clinic", "Bring a planned experiment; leave knowing what the "
+                                   "instrument can and cannot tell you."),
+    ("Quality Control Basics", "Reading the daily QC record and recognising drift "
+                               "before it costs a dataset."),
+    ("Sample Preparation", "Where preparation choices constrain every downstream "
+                           "measurement."),
+    ("Records and Traceability", "What the cores record, where it lives, and how to "
+                                 "read it back months later."),
+    ("Cross-Core Projects", "Sequencing work across two cores without losing the "
+                            "thread between them."),
+    ("Instrument Troubleshooting", "First-line checks that resolve most faults, and "
+                                   "the point at which to stop and call staff."),
+]
+
+FAQ_SUBJECTS = [
+    ("Sample Logistics", "Samples move between cores in the facility's own transport "
+                         "boxes; hand them to staff rather than leaving them out."),
+    ("Scheduling", "Slots open a fortnight ahead, and the calendar is the record — a "
+                   "verbal agreement with staff is not a booking."),
+    ("Data Transfer", "The transfer share is the route off an instrument PC; personal "
+                      "drives must never be attached to the acquisition network."),
+    ("Reagents and Consumables", "Centrally stocked items are on the shelf; anything "
+                                 "else needs a request with lead time."),
+    ("Working Across Cores", "Each core tracks its own request, so reference the other "
+                             "one and staff will sequence the work."),
+    ("Reporting Problems", "Report the same day, through the system — a fault "
+                           "described in a corridor does not reach the person fixing it."),
+    # Deliberately clear of what the authored corpus owns. Subjects like "Charges and
+    # Disputes" or "Training Records" read as plausible filler but compete directly with
+    # the Billing FAQ and the training requirements document for the very questions the
+    # golden set asks — adding them cost faithfulness 1.000 -> 0.925. Bulk exists to make
+    # retrieval work for its ranking, not to shadow the documents under test.
+    ("Waste and Disposal", "Segregate at the bench; a stream that arrives mixed is "
+                           "rejected and comes back to the lab that sent it."),
+    ("Acknowledgements", "Facility contributions are acknowledged by core, and staff "
+                         "will tell you when authorship is the fairer answer."),
+    ("Cold Storage", "Freezer space is allocated per lab and audited twice a year; "
+                     "unlabelled boxes are treated as abandoned."),
+    ("Software and Licences", "Analysis licences are floating and time out when idle, "
+                              "so close the application rather than locking the screen."),
+    ("Figure Preparation", "Keep the acquisition settings with the figure — a panel "
+                           "without them cannot be reproduced later."),
+    ("Collaborations", "External collaborators need sponsoring by a PI before any "
+                       "account code can be attached to their work."),
+]
+
+
+PROTOCOL_TOPICS = [
+    ("sample fixation", "Covers fixation of fresh material only; anything already "
+                        "frozen follows the cryopreservation protocol instead."),
+    ("buffer preparation", "Working stocks for routine use, made up from the "
+                           "concentrates held in the lab's own store."),
+    ("cryopreservation", "Freezing and recovery, including the cooling rate the lab "
+                         "settled on after its own comparison."),
+    ("extraction", "Yield matters less than consistency here — the same input should "
+                   "give the same result on any bench."),
+    ("quality control", "The checks run before a sample is allowed onto a facility "
+                        "instrument, and what disqualifies one."),
+    ("staining", "Multiplexed staining, in the order the lab has found tolerable "
+                 "across channels."),
+    ("digestion", "Enzymatic digestion where downstream analysis needs intact "
+                  "fragments rather than maximum release."),
+]
+
+
+def _pick(pool: list, n: int):
+    """Deterministic assignment by document number, without replacement while it lasts."""
+    return pool[(n - 1) % len(pool)]
+
+
 def _f(text: str) -> str:
     """Normalise the whitespace of a triple-quoted block."""
     return re.sub(r"\n{3,}", "\n\n", text.strip()) + "\n"
@@ -245,15 +366,18 @@ certification — the validity periods are in the training requirements document
 
 
 def lab_protocol(lab_id: str, lab_name: str, field_name: str, n: int, rng) -> tuple[str, str, str]:
-    topic = rng.choice(["sample fixation", "buffer preparation", "cryopreservation",
-                        "extraction", "quality control", "staining", "digestion"])
+    topic, step = _pick(PROTOCOL_TOPICS, n)
     temp = rng.choice([4, 20, 25, 37])
     minutes = rng.choice([5, 10, 15, 30, 45, 60])
     body = f"""
 # {lab_name} — {topic.title()} Protocol {n}
 
-Internal to the {lab_name} ({field_name}). House protocol; not facility guidance, and not
-to be circulated outside the lab.
+Internal to the {lab_name} ({field_name}). House protocol for {topic}; not facility
+guidance, and not to be circulated outside the lab.
+
+## Scope
+
+{step}
 
 ## Reagents
 
@@ -281,8 +405,7 @@ PI before changing any of them.
 
 def facility_note(kind: str, n: int, rng) -> tuple[str, str]:
     if kind == "safety":
-        hazard = rng.choice(["cryogens", "class 3B lasers", "biological material",
-                             "compressed gases", "solvents", "UV sources"])
+        hazard, control = _pick(HAZARDS, n)
         body = f"""
 # Safety Notice {n} — Working with {hazard.title()}
 
@@ -299,6 +422,8 @@ Use the engineering controls first: interlocks, extraction, and shielding. Perso
 protective equipment is the last line, not the first. Never defeat an interlock, including
 "briefly" during alignment.
 
+Specific to {hazard}: {control}
+
 ## If something goes wrong
 
 Make the area safe, then report it the same day through the request system. An incident
@@ -311,14 +436,12 @@ This notice is reviewed annually by the facility safety officer.
         return f"Safety Notice {n} — Working with {hazard.title()}", _f(body)
 
     if kind == "training":
-        module = rng.choice(["Instrument Induction", "Data Handling", "Sample Handling",
-                             "Image Analysis", "Statistics for Core Users",
-                             "Reagent Management"])
+        module, focus = _pick(MODULES, n)
         hours = rng.choice([2, 3, 4, 8])
         body = f"""
 # Training Module {n} — {module}
 
-A {hours}-hour module offered by the cores. This module is additional to instrument
+A {hours}-hour module on {module.lower()}. {focus} This module is additional to instrument
 training and does not by itself grant booking rights on any instrument.
 
 ## Who it is for
@@ -346,13 +469,14 @@ system.
         return f"Training Module {n} — {module}", _f(body)
 
     if kind == "faq":
-        subject = rng.choice(["Sample Logistics", "Scheduling", "Data Transfer",
-                              "Reagents and Consumables", "Working Across Cores",
-                              "Reporting Problems"])
+        subject, guidance = _pick(FAQ_SUBJECTS, n)
         body = f"""
 # FAQ {n} — {subject}
 
 Questions the cores are asked most often about {subject.lower()}.
+
+**The short version.**
+{guidance}
 
 **Who do I ask first?**
 Facility staff for anything about instruments, access or charges. Your PI for anything
@@ -454,7 +578,26 @@ def check(docs: list[tuple[str, str, str, str | None]]) -> list[str]:
         for fact, (pattern, allowed) in PROTECTED_FACTS.items():
             if re.search(pattern, low) and not any(a in low for a in allowed):
                 problems.append(f"{filename}: restates protected fact {fact!r}")
+
+    # No two documents may share a body. The ingester keeps the H1 out of the chunk text
+    # — the title lives in the breadcrumb — so two documents differing only in their
+    # heading produce byte-identical chunks, and retrieval spends several of its eight
+    # context slots on one piece of information. This silently produced 22 duplicates of
+    # 134 chunks, so it is an invariant rather than a review note.
+    bodies: dict[str, str] = {}
+    for filename, _title, body, _lab in docs:
+        key = _body_key(body)
+        if key in bodies:
+            problems.append(f"{filename}: body is identical to {bodies[key]}")
+        else:
+            bodies[key] = filename
     return problems
+
+
+def _body_key(body: str) -> str:
+    """Compare bodies as the ingester will see them: without the H1, whitespace-folded."""
+    without_title = re.sub(r"\A#[^\n]*\n", "", body.strip())
+    return " ".join(without_title.split()).lower()
 
 
 def main() -> int:

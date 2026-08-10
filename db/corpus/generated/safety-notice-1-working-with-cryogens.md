@@ -19,6 +19,8 @@ Use the engineering controls first: interlocks, extraction, and shielding. Perso
 protective equipment is the last line, not the first. Never defeat an interlock, including
 "briefly" during alignment.
 
+Specific to cryogens: Fill and decant in the designated area only; oxygen monitors are interlocked to the extraction there.
+
 ## If something goes wrong
 
 Make the area safe, then report it the same day through the request system. An incident

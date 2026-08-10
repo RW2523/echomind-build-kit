@@ -1,12 +1,12 @@
 ---
-title: "Safety Notice 2 — Working with Class 3B Lasers"
+title: "Safety Notice 7 — Working with Cryo-Transfer Devices"
 version: "1.0"
 visibility: public
 ---
 
-# Safety Notice 2 — Working with Class 3B Lasers
+# Safety Notice 7 — Working with Cryo-Transfer Devices
 
-Applies wherever class 3B lasers are in use in the cores.
+Applies wherever cryo-transfer devices are in use in the cores.
 
 ## Before you start
 
@@ -19,7 +19,7 @@ Use the engineering controls first: interlocks, extraction, and shielding. Perso
 protective equipment is the last line, not the first. Never defeat an interlock, including
 "briefly" during alignment.
 
-Specific to class 3B lasers: Alignment is a two-person job, and the room interlock stays armed throughout.
+Specific to cryo-transfer devices: Pre-cool slowly: thermal shock is the usual cause of a cracked transfer stage.
 
 ## If something goes wrong
 

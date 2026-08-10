@@ -1,30 +1,30 @@
 ---
-title: "Patel Lab Cryopreservation Protocol 3"
+title: "Ferreira Lab Sample Fixation Protocol 1"
 version: "1.0"
 visibility: lab
-lab: lab-a
+lab: lab-b
 ---
 
-# Patel Lab — Cryopreservation Protocol 3
+# Ferreira Lab — Sample Fixation Protocol 1
 
-Internal to the Patel Lab (cell biology). House protocol for cryopreservation; not facility
+Internal to the Ferreira Lab (microbiology). House protocol for sample fixation; not facility
 guidance, and not to be circulated outside the lab.
 
 ## Scope
 
-Freezing and recovery, including the cooling rate the lab settled on after its own comparison.
+Covers fixation of fresh material only; anything already frozen follows the cryopreservation protocol instead.
 
 ## Reagents
 
-Prepare fresh on the day. Anything held longer than 24 hours at 37 °C is discarded
+Prepare fresh on the day. Anything held longer than 24 hours at 25 °C is discarded
 rather than used — the failure mode is silent and shows up as inconsistent results a week
 later.
 
 ## Method
 
-1. Equilibrate samples to 37 °C for 10 minutes.
+1. Equilibrate samples to 25 °C for 15 minutes.
 2. Apply the working solution at the dilution recorded in the lab's reagent register.
-3. Incubate for 10 minutes with gentle agitation.
+3. Incubate for 15 minutes with gentle agitation.
 4. Wash three times; do not let the sample dry between washes.
 
 ## Notes

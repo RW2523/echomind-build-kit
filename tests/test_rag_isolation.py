@@ -334,3 +334,99 @@ def test_rerank_records_its_score_on_the_chunk(monkeypatch):
     assert [c.chunk_id for c in ordered] == [2, 1]
     assert [c.rerank_score for c in ordered] == [4.0, -1.0]
     assert ordered[0].score == 0.5, "cosine must stay untouched — the gate reads it"
+
+
+# --- the corpus generator emits no duplicate bodies -----------------------------------
+
+
+def test_generated_corpus_has_no_two_documents_with_the_same_body():
+    """The ingester keeps the H1 out of the chunk text — the title lives in the
+    breadcrumb — so two documents differing only in their heading become byte-identical
+    chunks. The generator sampled topics with replacement from six-item lists while
+    asking for fourteen documents, which put 22 duplicates among 134 chunks.
+    """
+    import random
+
+    from scripts.generate_corpus import RNG_SEED, build, check
+
+    docs = build(random.Random(RNG_SEED))
+    problems = [p for p in check(docs) if "identical" in p]
+    assert problems == [], f"generator produced duplicate bodies: {problems}"
+
+
+def test_the_duplicate_body_check_actually_catches_one():
+    """A guard nobody has seen fail is a guard nobody knows works."""
+    from scripts.generate_corpus import check
+
+    docs = [
+        ("a.md", "A", "# Title A\n\nidentical body text\n", None),
+        ("b.md", "B", "# Title B\n\nidentical body text\n", None),
+    ]
+    assert any("identical" in p for p in check(docs))
+
+
+def test_bodies_differing_only_in_whitespace_still_count_as_duplicates():
+    from scripts.generate_corpus import check
+
+    docs = [
+        ("a.md", "A", "# A\n\nsame  words\n", None),
+        ("b.md", "B", "# B\n\nsame words\n", None),
+    ]
+    assert any("identical" in p for p in check(docs))
+
+
+# --- re-ingesting a directory prunes documents whose file is gone ---------------------
+
+
+def test_reingesting_a_directory_removes_documents_whose_file_was_deleted(tmp_path):
+    """Regression: re-ingest only replaces what it finds, so a renamed corpus file left
+    its old document behind — still retrievable, still citable, no longer on disk.
+    Regenerating the corpus stranded 63 documents and 63 chunks that way.
+    """
+    from sqlalchemy import text as sql_text
+
+    from server.db import session_scope
+    from server.rag.ingest import ingest_file, prune_missing
+
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    keeper = corpus / "keeper.md"
+    goner = corpus / "goner.md"
+    keeper.write_text("# Prune Keeper Doc\n\nContent that stays in the corpus.\n")
+    goner.write_text("# Prune Goner Doc\n\nContent that is about to be deleted.\n")
+
+    kept_id = ingest_file(keeper)["doc_id"]
+    gone_id = ingest_file(goner)["doc_id"]
+
+    def chunk_count(doc_id: str) -> int:
+        with session_scope() as s:
+            return s.execute(
+                sql_text("SELECT count(*) FROM echomind.chunks WHERE doc_id = :id"),
+                {"id": doc_id},
+            ).scalar_one()
+
+    try:
+        assert chunk_count(kept_id) and chunk_count(gone_id)
+
+        goner.unlink()
+        removed = prune_missing(corpus, [keeper])
+
+        assert [d for d, _p in removed] == [gone_id]
+        assert chunk_count(gone_id) == 0, "the deleted file's chunks must go too"
+        assert chunk_count(kept_id) == 1, "the surviving document is untouched"
+    finally:
+        with session_scope() as s:
+            for doc_id in (kept_id, gone_id):
+                s.execute(sql_text("DELETE FROM echomind.chunks WHERE doc_id = :id"),
+                          {"id": doc_id})
+                s.execute(sql_text("DELETE FROM echomind.knowledge_docs WHERE id = :id"),
+                          {"id": doc_id})
+
+
+def test_pruning_never_touches_documents_from_another_directory(tmp_path):
+    """Scoped by source path: uploads and other corpora are not this directory's business."""
+    from server.rag.ingest import prune_missing
+
+    empty = tmp_path / "unrelated"
+    empty.mkdir()
+    assert prune_missing(empty, []) == [], "the real corpus lives elsewhere and must survive"

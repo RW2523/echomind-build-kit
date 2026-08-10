@@ -21,6 +21,7 @@ from typing import Any
 
 from sqlalchemy import text
 
+from server.config import REPO_ROOT
 from server.db import session_scope
 from server.rag.chunker import Chunk, chunk_markdown, chunk_pdf
 from server.rag.embeddings import embed, to_pgvector
@@ -228,6 +229,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--facility", dest="facility_id")
     p.add_argument("--title")
     p.add_argument("--version")
+    p.add_argument("--no-prune", action="store_true",
+                   help="keep documents whose source file has been removed")
     args = p.parse_args(argv)
 
     target = Path(args.path)
@@ -260,7 +263,56 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  {result['title']:<44} v{result['version']:<3} "
               f"{result['visibility']:<8} {result['chunks']:>3} chunks")
     print(f"ingested {len(files)} document(s), {total} chunks")
+
+    if target.is_dir() and not args.no_prune:
+        removed = prune_missing(target, files)
+        for doc_id, path in removed:
+            print(f"  pruned {doc_id} — {path} no longer exists")
+        if removed:
+            print(f"pruned {len(removed)} document(s) whose source file is gone")
     return 0
+
+
+def prune_missing(directory: Path, present: list[Path]) -> list[tuple[str, str]]:
+    """Drop documents that came from this directory but whose file no longer exists.
+
+    Re-ingesting only replaces documents it finds. Rename a corpus file and the old
+    document keeps its chunks, so retrieval can still surface and cite text that is no
+    longer in the corpus — the worst kind of stale, because it looks authoritative.
+    Regenerating the corpus renamed most of it and left 63 orphaned chunks behind.
+
+    Scoped by source_path prefix, so uploads and documents ingested from elsewhere are
+    never touched: this only removes what this directory is responsible for.
+    """
+    # source_path is stored as it was given on the command line, so it may be relative to
+    # the repo root or absolute depending on how ingest was invoked. Compare resolved
+    # absolute paths rather than strings, or a prune would silently match nothing.
+    def absolute(raw: str | Path) -> Path:
+        p = Path(raw)
+        return p.resolve() if p.is_absolute() else (REPO_ROOT / p).resolve()
+
+    root = absolute(directory)
+    keep = {absolute(f) for f in present}
+    with session_scope() as s:
+        rows = s.execute(
+            text(
+                "SELECT id, source_path FROM echomind.knowledge_docs "
+                "WHERE source_path IS NOT NULL"
+            )
+        ).all()
+        stale = []
+        for doc_id, path in rows:
+            resolved = absolute(path)
+            if resolved.is_relative_to(root) and resolved not in keep:
+                stale.append((doc_id, path))
+        for doc_id, _path in stale:
+            s.execute(
+                text("DELETE FROM echomind.chunks WHERE doc_id = :id"), {"id": doc_id}
+            )
+            s.execute(
+                text("DELETE FROM echomind.knowledge_docs WHERE id = :id"), {"id": doc_id}
+            )
+    return stale
 
 
 if __name__ == "__main__":

@@ -1,12 +1,12 @@
 ---
-title: "Safety Notice 2 — Working with Class 3B Lasers"
+title: "Safety Notice 13 — Working with Nanomaterials"
 version: "1.0"
 visibility: public
 ---
 
-# Safety Notice 2 — Working with Class 3B Lasers
+# Safety Notice 13 — Working with Nanomaterials
 
-Applies wherever class 3B lasers are in use in the cores.
+Applies wherever nanomaterials are in use in the cores.
 
 ## Before you start
 
@@ -19,7 +19,7 @@ Use the engineering controls first: interlocks, extraction, and shielding. Perso
 protective equipment is the last line, not the first. Never defeat an interlock, including
 "briefly" during alignment.
 
-Specific to class 3B lasers: Alignment is a two-person job, and the room interlock stays armed throughout.
+Specific to nanomaterials: Handle dry powders in the enclosure; assume the airborne fraction behaves nothing like the bulk.
 
 ## If something goes wrong
 

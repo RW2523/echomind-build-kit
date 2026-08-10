@@ -336,3 +336,58 @@ def test_repointing_leaves_a_sentence_it_cannot_find_untouched():
 def test_repointing_is_a_no_op_without_corrections():
     original = "The warm-up is 30 minutes [1]."
     assert gen.apply_citation_corrections(original, []) == original
+
+
+# --- sourcing remarks are not claims --------------------------------------------------
+
+
+def test_a_sentence_that_only_says_where_the_answer_came_from_is_dropped():
+    """Regression: "This is specified in source [1]." asserts nothing about the facility,
+    but the claim splitter saw a cited sentence and asked the judge to verify it. No
+    source can state it, so a correct answer was downgraded over a sentence carrying no
+    information. Rule 5 of the generation prompt already forbids these.
+    """
+    cleaned = gen.strip_meta_sentences(
+        "Sample barcodes use `BC` followed by six digits [1]. This is specified in source [1]."
+    )
+    assert cleaned == "Sample barcodes use `BC` followed by six digits [1]."
+
+
+def test_stripping_keeps_a_sentence_that_merely_begins_with_this():
+    original = "This protocol is described in the Confocal C2 SOP and takes 30 minutes [1]."
+    assert gen.strip_meta_sentences(original) == original
+
+
+def test_stripping_keeps_a_factual_sentence_containing_the_word_source():
+    original = "The source of the sample must be recorded on submission [1]."
+    assert gen.strip_meta_sentences(original) == original
+
+
+def test_stripping_keeps_a_sentence_that_attributes_and_then_asserts():
+    """"According to source [2], X" carries X — it is not a bare sourcing remark."""
+    original = "According to source [2], cancellations inside 24 hours are charged 50%."
+    assert gen.strip_meta_sentences(original) == original
+
+
+def test_an_answer_that_is_only_a_sourcing_remark_is_left_alone():
+    """Better to let the faithfulness check reject it than to hand back a blank reply."""
+    original = "This is specified in source [1]."
+    assert gen.strip_meta_sentences(original) == original
+
+
+def test_dropping_a_sourcing_remark_carries_its_citation_back():
+    """Regression: the remark held the answer's only citation, so removing the noise left
+    an uncited answer — which generation treats as insufficient. A correct answer became
+    a redirect. The attribution is real and belongs on the sentence it describes."""
+    cleaned = gen.strip_meta_sentences(
+        "Sample barcodes use `BC` followed by six digits. This is specified in source [1]."
+    )
+    assert cleaned == "Sample barcodes use `BC` followed by six digits [1]."
+    assert gen.cited_indices(cleaned, limit=4) == [1]
+
+
+def test_carry_back_does_not_overwrite_an_existing_citation():
+    cleaned = gen.strip_meta_sentences(
+        "Barcodes are `BC` plus six digits [2]. This is specified in source [1]."
+    )
+    assert cleaned == "Barcodes are `BC` plus six digits [2]."

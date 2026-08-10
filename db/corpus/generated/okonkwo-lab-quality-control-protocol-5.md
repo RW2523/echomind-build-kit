@@ -1,28 +1,28 @@
 ---
-title: "Patel Lab Cryopreservation Protocol 3"
+title: "Okonkwo Lab Quality Control Protocol 5"
 version: "1.0"
 visibility: lab
-lab: lab-a
+lab: lab-c
 ---
 
-# Patel Lab — Cryopreservation Protocol 3
+# Okonkwo Lab — Quality Control Protocol 5
 
-Internal to the Patel Lab (cell biology). House protocol for cryopreservation; not facility
+Internal to the Okonkwo Lab (structural biology). House protocol for quality control; not facility
 guidance, and not to be circulated outside the lab.
 
 ## Scope
 
-Freezing and recovery, including the cooling rate the lab settled on after its own comparison.
+The checks run before a sample is allowed onto a facility instrument, and what disqualifies one.
 
 ## Reagents
 
-Prepare fresh on the day. Anything held longer than 24 hours at 37 °C is discarded
+Prepare fresh on the day. Anything held longer than 24 hours at 25 °C is discarded
 rather than used — the failure mode is silent and shows up as inconsistent results a week
 later.
 
 ## Method
 
-1. Equilibrate samples to 37 °C for 10 minutes.
+1. Equilibrate samples to 25 °C for 10 minutes.
 2. Apply the working solution at the dilution recorded in the lab's reagent register.
 3. Incubate for 10 minutes with gentle agitation.
 4. Wash three times; do not let the sample dry between washes.

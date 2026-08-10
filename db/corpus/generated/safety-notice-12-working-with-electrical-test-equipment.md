@@ -1,12 +1,12 @@
 ---
-title: "Safety Notice 2 — Working with Class 3B Lasers"
+title: "Safety Notice 12 — Working with Electrical Test Equipment"
 version: "1.0"
 visibility: public
 ---
 
-# Safety Notice 2 — Working with Class 3B Lasers
+# Safety Notice 12 — Working with Electrical Test Equipment
 
-Applies wherever class 3B lasers are in use in the cores.
+Applies wherever electrical test equipment are in use in the cores.
 
 ## Before you start
 
@@ -19,7 +19,7 @@ Use the engineering controls first: interlocks, extraction, and shielding. Perso
 protective equipment is the last line, not the first. Never defeat an interlock, including
 "briefly" during alignment.
 
-Specific to class 3B lasers: Alignment is a two-person job, and the room interlock stays armed throughout.
+Specific to electrical test equipment: Anything opened for probing needs a second person present who knows where the isolator is.
 
 ## If something goes wrong
 
