@@ -22,6 +22,19 @@ EXPECTED_COUNTS = {
     "infinity.maintenance_events": 60,
 }
 
+# Approving a booking, a service request or an onboarding writes to these three tables,
+# so a bare count(*) here measures "seed volume + whatever anyone has since done" — and
+# went red the moment the demo booked an instrument. The seed mints readable ids
+# (bk-0007, u-alice); the application mints 8 hex characters (bk-0babe5a3). Excluding
+# the application's shape keeps the assertion exact rather than relaxing it to >=,
+# which would have stopped catching an under-seeded table.
+APPEND_ONLY_TABLES = {
+    "infinity.bookings",
+    "infinity.service_requests",
+    "infinity.users",
+}
+APP_MINTED_ID = "-[0-9a-f]{8}$"
+
 ALLOW_LISTED_VIEWS = [
     "v_bookings",
     "v_usage_summary",
@@ -32,7 +45,24 @@ ALLOW_LISTED_VIEWS = [
 
 @pytest.mark.parametrize("relation,expected", EXPECTED_COUNTS.items())
 def test_seeded_row_counts(db, relation, expected):
-    assert db.execute(text(f"SELECT count(*) FROM {relation}")).scalar_one() == expected
+    where = f" WHERE id !~ '{APP_MINTED_ID}'" if relation in APPEND_ONLY_TABLES else ""
+    count = db.execute(text(f"SELECT count(*) FROM {relation}{where}")).scalar_one()
+    assert count == expected
+
+
+def test_rows_the_application_created_are_not_counted_as_seed(db):
+    """The exclusion above must actually exclude something once the demo has run.
+
+    If the discriminator silently stopped matching — an id format change, say — the
+    counts would quietly go back to measuring seed-plus-activity and start failing for
+    reasons that have nothing to do with seeding.
+    """
+    total = db.execute(text("SELECT count(*) FROM infinity.bookings")).scalar_one()
+    seeded = db.execute(
+        text(f"SELECT count(*) FROM infinity.bookings WHERE id !~ '{APP_MINTED_ID}'")
+    ).scalar_one()
+    assert seeded == EXPECTED_COUNTS["infinity.bookings"]
+    assert total >= seeded, "app-created bookings can only add to the seeded set"
 
 
 def test_three_monthly_invoice_periods(db):

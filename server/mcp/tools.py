@@ -16,6 +16,7 @@ Tier matrix — spec 05:
 from __future__ import annotations
 
 import dataclasses
+import inspect
 import logging
 import re
 from dataclasses import dataclass, field
@@ -966,9 +967,38 @@ for _name, _spec in list(TOOLS.items()):
     globals()[_name] = _traced
 
 
+def _accepted_parameters(handler: Callable) -> tuple[set[str], bool]:
+    """Parameter names a handler accepts, and whether it takes arbitrary **kwargs."""
+    params = inspect.signature(handler).parameters.values()
+    names = {
+        p.name for p in params
+        if p.kind in (p.POSITIONAL_OR_KEYWORD, p.KEYWORD_ONLY) and p.name != "ctx"
+    }
+    takes_kwargs = any(p.kind is p.VAR_KEYWORD for p in params)
+    return names, takes_kwargs
+
+
 def call(ctx: Ctx, name: str, arguments: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Single dispatch point used by the MCP server and the agent."""
+    """Single dispatch point used by the MCP server and the agent.
+
+    Arguments are checked against the handler signature before dispatch. Splatting an
+    unvalidated dict raised a bare TypeError whose text — "get_my_bookings() got an
+    unexpected keyword argument 'subject_user_id'" — went straight to the user, leaking
+    an internal signature and replacing an honest refusal with a stack-trace fragment.
+    A caller sending a key a tool does not take is making a bad request, and should be
+    told so as a typed error like every other bad request.
+    """
     spec = TOOLS.get(name)
     if spec is None:
         raise invalid_params(f"Unknown tool {name!r}.", f"Known tools: {', '.join(TOOLS)}.")
-    return spec.handler(ctx, **(arguments or {}))
+
+    arguments = arguments or {}
+    accepted, takes_kwargs = _accepted_parameters(spec.handler)
+    if not takes_kwargs:
+        unexpected = sorted(set(arguments) - accepted)
+        if unexpected:
+            raise invalid_params(
+                f"{name} does not take {', '.join(repr(u) for u in unexpected)}.",
+                f"{name} accepts: {', '.join(sorted(accepted)) or 'no arguments'}.",
+            )
+    return spec.handler(ctx, **arguments)

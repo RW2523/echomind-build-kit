@@ -21,6 +21,10 @@ from server.mcp.errors import ToolError, forbidden
 
 log = logging.getLogger("echomind.data")
 
+# Fields that belong to the plan, not to the tool call. Kept in one place because the
+# entitlement check and the dispatcher must agree on where to find them.
+PLAN_LEVEL_KEYS = ("subject_user_id",)
+
 VIEW_SCHEMA = """v_bookings(user_id, user_name, lab_id, instrument, facility, starts_at, ends_at, status)
 v_usage_summary(lab_id, user_id, instrument, month, scheduled_hours, tracked_hours)
 v_billing_lines(account_code, lab_id, period, description, instrument, amount)
@@ -387,6 +391,27 @@ def answer_from_rows(
     return draft, True
 
 
+def _normalise_plan(plan: dict[str, Any]) -> dict[str, Any]:
+    """Lift plan-level keys out of `arguments`, where the model sometimes buries them.
+
+    `subject_user_id` is a plan-level field: the entitlement check reads it from the top
+    level, and dispatch passes `arguments` to the tool. Those two readings disagreeing is
+    the whole problem — a plan with the key nested inside `arguments` skipped
+    _assert_may_read_subject entirely and then splatted an unexpected kwarg into the
+    handler. What saved us was the accident that no tool happens to have a parameter of
+    that name; a tool that did would have run unchecked. Normalising to one location
+    means the check cannot be routed around by where the model chose to put the key.
+    """
+    arguments = plan.get("arguments")
+    if not isinstance(arguments, dict):
+        return plan
+    for key in PLAN_LEVEL_KEYS:
+        if key in arguments:
+            plan.setdefault(key, arguments.pop(key))
+            log.info("plan had %s nested inside arguments; lifted to plan level", key)
+    return plan
+
+
 def _assert_may_read_subject(plan: dict[str, Any], ctx: Ctx) -> None:
     """If the question is about someone else, run the entitlement check before anything.
 
@@ -402,7 +427,7 @@ def _assert_may_read_subject(plan: dict[str, Any], ctx: Ctx) -> None:
 
 
 def answer(question: str, ctx: Ctx, history: str = "") -> AgentResponse:
-    plan = _plan(question, ctx, history)
+    plan = _normalise_plan(_plan(question, ctx, history))
     log.info("data plan: %s", plan)
 
     executed_sql: str | None = None
@@ -430,6 +455,22 @@ def answer(question: str, ctx: Ctx, history: str = "") -> AgentResponse:
             route="data",
             text=f"I could not run that lookup. {exc.message} {exc.hint}".strip(),
             meta={"error": exc.to_dict()["error"]},
+        )
+    except Exception:
+        # Anything not already a ToolError is a bug on our side, and its message is not
+        # fit for a user: a bare TypeError put "get_my_bookings() got an unexpected
+        # keyword argument" on screen where a refusal belonged. Log the detail, show a
+        # plain sentence, and never surface internals.
+        log.exception("data branch failed on plan %s", plan)
+        return AgentResponse(
+            response_type="redirect",
+            route="data",
+            text=(
+                "I could not complete that lookup — something went wrong on my side, so "
+                "I would rather tell you than show you a half-answer. Please try "
+                "rephrasing, or ask the core facility admin."
+            ),
+            meta={"error": {"code": "internal_error"}},
         )
 
     text, model_written = answer_from_rows(question, rows, columns, scalars)

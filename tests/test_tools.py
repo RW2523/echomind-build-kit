@@ -292,3 +292,38 @@ def test_mcp_requires_a_bearer_token():
     with pytest.raises(ToolError) as exc:
         _ctx_from_headers()
     assert exc.value.code == "unauthenticated"
+
+
+# --- argument validation at the dispatch point ---------------------------------------
+
+
+def test_unexpected_argument_is_a_typed_error_not_a_raw_typeerror(ctxs):
+    """Regression: the UI showed a user "get_my_bookings() got an unexpected keyword
+    argument 'subject_user_id'".
+
+    `call` splatted the argument dict straight into the handler, so a stray key raised a
+    bare TypeError whose text reached the screen — an internal signature shown where an
+    honest refusal belonged.
+    """
+    with pytest.raises(ToolError) as excinfo:
+        T.call(ctxs["bob"], "get_my_bookings", {"subject_user_id": "u-alice"})
+    err = excinfo.value
+    assert err.code == "invalid_params"
+    assert "subject_user_id" in err.message
+    assert "date_from" in err.hint, "the hint should name what the tool does accept"
+
+
+def test_valid_arguments_still_dispatch(ctxs):
+    """The guard must not reject legitimate calls."""
+    out = T.call(ctxs["alice"], "get_my_bookings", {"date_from": "2026-01-01"})
+    assert "bookings" in out
+
+
+def test_no_argument_calls_still_dispatch(ctxs):
+    assert "instruments" in T.call(ctxs["alice"], "get_facility_catalog", {})
+
+
+def test_unknown_tool_is_rejected(ctxs):
+    with pytest.raises(ToolError) as excinfo:
+        T.call(ctxs["alice"], "drop_everything", {})
+    assert excinfo.value.code == "invalid_params"

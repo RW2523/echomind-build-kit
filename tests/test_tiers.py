@@ -251,3 +251,46 @@ def test_bob_cannot_fetch_alices_action_over_http(client, tokens, ctxs):
     )
     assert r.status_code == 404
     actions_mod.decline(ctxs["alice"], pending["action_id"])
+
+
+# --- the entitlement check cannot be routed around by plan shape ---------------------
+
+
+def test_nested_subject_user_id_is_lifted_so_the_check_still_runs(ctxs):
+    """Regression: `subject_user_id` buried inside `arguments` skipped the check.
+
+    The entitlement check reads the key from the plan's top level; dispatch passes
+    `arguments` to the tool. A plan with the key nested therefore ran neither — no
+    denial, and an unexpected kwarg splatted into the handler. Nothing leaked only
+    because no tool happens to have a parameter of that name, which is luck, not a
+    control. Normalising means the check sees the subject wherever the model put it.
+    """
+    from server.agent.data import _assert_may_read_subject, _normalise_plan
+
+    nested = {"mode": "tool", "tool": "get_my_bookings",
+              "arguments": {"subject_user_id": "u-alice"}}
+    plan = _normalise_plan(nested)
+
+    assert plan["subject_user_id"] == "u-alice", "must be lifted to the top level"
+    assert "subject_user_id" not in plan["arguments"], "must not also reach the tool"
+
+    with pytest.raises(ToolError) as excinfo:
+        _assert_may_read_subject(plan, ctxs["bob"])
+    assert excinfo.value.code == "forbidden"
+
+
+def test_normalising_leaves_a_well_formed_plan_alone(ctxs):
+    from server.agent.data import _normalise_plan
+
+    good = {"mode": "tool", "tool": "get_my_bookings",
+            "arguments": {"date_from": "2026-01-01"}, "subject_user_id": "u-alice"}
+    assert _normalise_plan(dict(good)) == good
+
+
+def test_the_caller_asking_about_themselves_is_not_denied(ctxs):
+    """The guard must not turn "my bookings" into a refusal."""
+    from server.agent.data import _assert_may_read_subject
+
+    plan = {"mode": "tool", "tool": "get_my_bookings", "arguments": {},
+            "subject_user_id": "u-bob"}
+    _assert_may_read_subject(plan, ctxs["bob"])  # must not raise
