@@ -7,6 +7,7 @@ const BADGES: Record<string, string> = {
   rows_answer: "From the records",
   redirect: "Not verified",
   scope: "Out of scope",
+  clarify: "Which did you mean?",
   smalltalk: "",
   approval_request: "Needs your approval",
 };
@@ -101,6 +102,8 @@ export function Reply({ response }: { response: AgentResponse }) {
       ? "redirect"
       : response.response_type === "scope"
         ? "scope"
+        : response.response_type === "clarify"
+          ? "clarify"
         : response.response_type === "approval_request"
           ? "approval"
           : "";

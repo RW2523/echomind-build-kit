@@ -13,7 +13,7 @@ from server.agent import gaps, rewrite
 from server.agent import gate as gate_mod
 from server.agent import generate as gen
 from server.agent.gate import GateResult
-from server.agent.responses import AgentResponse
+from server.agent.responses import AgentResponse, clarify_response
 from server.auth import Ctx
 from server.rag.retrieval import retrieve
 
@@ -42,6 +42,12 @@ def _redirect(question: str, gate: GateResult, extra: dict | None = None,
 def answer(question: str, ctx: Ctx, k: int = 8, history: str = "") -> AgentResponse:
     # Retrieval and the judges work on the resolved question; the user's own words are
     # what they see. "How long is that?" retrieves on five stopwords otherwise.
+    if rewrite.is_unresolvable(question, history):
+        # Nothing to resolve the reference against. Answering anyway would produce a
+        # fluent, cited reply about whatever ranked first, which is worse than asking.
+        log.info("unresolved reference with no history: %r", question[:60])
+        return clarify_response(question)
+
     resolved = rewrite.standalone(question, history)
     chunks = retrieve(resolved, ctx, k=k)
     gate = gate_mod.evaluate(resolved, chunks)

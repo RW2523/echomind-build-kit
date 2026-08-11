@@ -146,6 +146,10 @@ body {
 .reply.redirect { background: var(--warn-soft); border-color: #f0e0b8; }
 .reply.redirect .badge { color: var(--warn); }
 .reply.scope { background: var(--info-soft); border-color: #cfe4e6; }
+/* A question whose reference cannot be resolved. Styled like scope rather than like a
+   redirect: nothing failed, the assistant simply needs one more word from the user. */
+.reply.clarify { background: var(--info-soft); border-color: #cfe4e6; }
+.reply.clarify .badge { color: #2d6b70; }
 .reply.scope .badge { color: var(--info); }
 .reply.approval { background: #fbfaf7; border-color: #e6ddc8; }
 

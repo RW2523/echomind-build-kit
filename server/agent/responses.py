@@ -84,3 +84,25 @@ class AgentResponse:
 
 def scope_response() -> AgentResponse:
     return AgentResponse(response_type="scope", text=SCOPE_MESSAGE, route="out_of_scope")
+
+
+def clarify_response(question: str) -> AgentResponse:
+    """The message refers to something, and there is no conversation to refer to.
+
+    "Is it optional?" as an opening message has no knowable subject. Retrieval will still
+    return the highest-scoring chunks for those few words, the generator will answer from
+    them, and the result is fluent, cited and about whatever happened to rank first —
+    which is the confidently-wrong failure this system exists to prevent. Asking is the
+    only honest move, and it costs the user one short reply.
+    """
+    return AgentResponse(
+        response_type="clarify",
+        text=(
+            "I am not sure what that refers to — this is the first message in the "
+            "conversation, so I have nothing to resolve it against. Could you say which "
+            "instrument, booking or policy you mean? For example: \"is the confocal "
+            "warm-up optional?\""
+        ),
+        route="knowledge",
+        meta={"question": question, "reason": "unresolved_reference"},
+    )

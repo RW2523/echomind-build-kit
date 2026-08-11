@@ -100,6 +100,35 @@ META_SENTENCE_RE = re.compile(
 )
 
 
+# A hedge is a refusal wearing an answer's clothes. Rule 2 tells the model to reply
+# INSUFFICIENT_CONTEXT when the sources do not carry the answer, and most of the time it
+# does — but asked something it cannot resolve it will instead open with "the question is
+# unclear without context" and then answer anyway, from whatever retrieval happened to
+# return. That is the confidently-wrong failure this system exists to prevent, and it
+# ships as response_type="answer" because the text is fluent and carries a citation.
+#
+# Matched at the start of the reply only. A sentence deep inside an answer saying a
+# policy "cannot be determined from the booking record" is a fact about the facility;
+# an opening that says the question cannot be understood is the model declining.
+HEDGE_RE = re.compile(
+    r"""^\W{0,3}(the\s+)?(question|query|request|message)?\s*
+        (["'“].{0,120}?["'”]\s*)?               # it often quotes the question back
+        (is|seems|appears|remains)?\s*
+        (unclear|ambiguous|vague|not\s+clear|too\s+general|incomplete)\b
+        |^\W{0,3}(without|lacking)\s+(more|further|additional|the)\s+
+          (context|information|detail|specifics)\b
+        |^\W{0,3}i\s+(cannot|can't|am\s+unable\s+to)\s+
+          (tell|determine|know|identify)\s+what\b
+        |^\W{0,3}(it\s+is|it's)\s+(not\s+clear|unclear)\s+what\b""",
+    re.IGNORECASE | re.VERBOSE,
+)
+
+
+def reads_as_a_hedge(text: str) -> bool:
+    """Does the reply open by saying it does not understand the question?"""
+    return bool(HEDGE_RE.match(text.strip()))
+
+
 def strip_meta_sentences(text: str) -> str:
     """Drop whole sentences that only comment on where the answer came from.
 
@@ -200,6 +229,12 @@ def generate(question: str, chunks: list[RetrievedChunk]) -> tuple[str, list[Cit
         return "", [], False
 
     text = strip_meta_sentences(strip_invalid_citations(raw, len(chunks)))
+
+    if reads_as_a_hedge(text):
+        # It declined, then answered anyway. Take the declining half at its word.
+        log.info("generation hedged rather than declining cleanly: %r", text[:80])
+        return text, [], False
+
     indices = cited_indices(text, len(chunks))
     if not indices:
         # An uncited answer is indistinguishable from an invented one. Treat it as a

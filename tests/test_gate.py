@@ -462,3 +462,62 @@ def test_a_failed_rewrite_returns_the_original(monkeypatch):
 
     monkeypatch.setattr(rewrite, "chat_json", lambda *a, **k: {"question": ""})
     assert rewrite.standalone("How long is that?", REWRITE_HISTORY) == "How long is that?"
+
+
+# --- a hedge is a refusal, and an unresolvable reference is a question ----------------
+
+
+def test_a_reply_that_opens_by_saying_it_does_not_understand_is_a_hedge():
+    """Rule 2 says decline cleanly. Asked something it cannot resolve, the model instead
+    opens with "the question is unclear" and then answers anyway from whatever retrieval
+    returned — fluent, cited, and about the wrong thing. It shipped as an answer."""
+    assert gen.reads_as_a_hedge(
+        'The question "And how long is that exactly?" is unclear without context. '
+        "However, based on the sources, the typical session is 2 hours [1]."
+    )
+    assert gen.reads_as_a_hedge("Without more context, I cannot say which instrument you mean.")
+    assert gen.reads_as_a_hedge("It is not clear what 'that' refers to.")
+
+
+def test_a_real_answer_is_not_mistaken_for_a_hedge():
+    """"Cannot be determined from the booking record" is a fact about the facility."""
+    for text in (
+        "The confocal lasers must warm up for 30 minutes [1].",
+        "Data on the transfer share is retained for 90 days [1]. The reason cannot be "
+        "determined from the booking record [1].",
+        "Bookings are unclear only when two overlap; the system rejects those [1].",
+    ):
+        assert not gen.reads_as_a_hedge(text), text
+
+
+def test_an_unresolvable_reference_is_detected_without_a_model():
+    from server.agent import rewrite
+
+    for question in ("Is it optional?", "And how long is that?", "What about the C3?"):
+        assert rewrite.is_unresolvable(question, ""), question
+    # With something to resolve against, it is answerable rather than unresolvable.
+    assert not rewrite.is_unresolvable("Is it optional?", REWRITE_HISTORY)
+    # A question that stands on its own is never unresolvable.
+    assert not rewrite.is_unresolvable("What format do sample barcodes use?", "")
+
+
+@pytest.mark.llm
+def test_an_opening_pronoun_question_asks_rather_than_guessing(ctxs):
+    """Regression: "Is it optional?" as a first message was answered confidently about
+    the laser warm-up, because that is what ranked first. It could have been about
+    anything, and the reply carried a citation, which makes it worse rather than better.
+    """
+    from server.agent.knowledge import answer
+
+    response = answer("Is it optional?", ctxs["alice"])
+    assert response.response_type == "clarify"
+    assert response.meta["reason"] == "unresolved_reference"
+
+
+@pytest.mark.llm
+def test_the_same_question_is_answered_once_there_is_a_conversation(ctxs):
+    from server.agent.knowledge import answer
+
+    response = answer("Is it optional?", ctxs["alice"], history=REWRITE_HISTORY)
+    assert response.response_type == "answer"
+    assert response.citations

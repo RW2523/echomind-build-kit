@@ -27,10 +27,13 @@ log = logging.getLogger("echomind.rewrite")
 
 # Signals that a question leans on what came before. Cheap to check, and it keeps the
 # model out of the loop for the large majority of turns that need nothing.
+REFERENTIAL_WORDS = frozenset({
+    "it", "its", "that", "this", "those", "these", "they", "them", "their", "there",
+    "then", "he", "she", "his", "her", "same", "one", "ones", "another", "others",
+    "above", "previous", "instead",
+})
 _DEPENDENT_RE = re.compile(
-    r"\b(it|its|that|this|those|these|they|them|their|there|then|he|she|his|her|"
-    r"same|one|ones|another|others|above|previous|instead)\b",
-    re.IGNORECASE,
+    r"\b(" + "|".join(sorted(REFERENTIAL_WORDS)) + r")\b", re.IGNORECASE
 )
 # "And the cost?" — no pronoun, but plainly a continuation.
 _CONTINUATION_RE = re.compile(
@@ -68,6 +71,36 @@ def needs_rewrite(question: str, history: str) -> bool:
         return True
     # "The warm-up?" carries no pronoun and still cannot be retrieved on.
     return len(question.split()) <= MAX_WORDS_ALWAYS_REWRITE
+
+
+def is_unresolvable(question: str, history: str) -> bool:
+    """A message that is almost nothing but a reference, with no conversation behind it.
+
+    Narrow on purpose. The first version flagged any dependent marker or any short
+    question, and immediately broke two real golden questions: "what am I charged if I
+    cancel a booking 12 hours before it starts?" contains "it", and "when are invoices
+    issued?" is four words. Both are perfectly clear.
+
+    What actually distinguishes "Is it optional?" is that once the stopwords and the
+    reference itself are removed there is no subject left — nothing to look up. A
+    question carrying two or more content words names its own topic, whatever pronouns
+    it also happens to use.
+    """
+    if history.strip() or not question.strip():
+        return False
+    if not (_DEPENDENT_RE.search(question) or _CONTINUATION_RE.match(question)):
+        return False
+    return len(_content_words(question)) <= 1
+
+
+def _content_words(question: str) -> set[str]:
+    """Words that could name a topic: not stopwords, not the reference itself."""
+    from server.agent.gaps import _STOPWORDS, _WORD_RE
+
+    return {
+        w for w in _WORD_RE.findall(question.lower())
+        if w not in _STOPWORDS and w not in REFERENTIAL_WORDS and len(w) > 1
+    }
 
 
 def standalone(question: str, history: str) -> str:

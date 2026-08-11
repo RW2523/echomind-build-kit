@@ -4,6 +4,7 @@ export type ResponseType =
   | "approval_request"
   | "redirect"
   | "scope"
+  | "clarify"
   | "smalltalk";
 
 export interface Citation {
