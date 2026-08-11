@@ -327,3 +327,73 @@ def test_unknown_tool_is_rejected(ctxs):
     with pytest.raises(ToolError) as excinfo:
         T.call(ctxs["alice"], "drop_everything", {})
     assert excinfo.value.code == "invalid_params"
+
+
+# --- generated documents render to the formats people actually send -------------------
+
+DOC_MD = """# Usage report — Alice
+
+User: `u-alice`
+Period: 2026-03
+
+| Instrument | Month | Scheduled h |
+|---|---|---:|
+| Confocal C2 | 2026-03 | 4.0 |
+| _no usage_ | | |
+
+- A bullet with **bold** in it
+
+**Total scheduled:** 4.00 h
+"""
+
+
+def test_markdown_passes_through_untouched():
+    from server.mcp import documents
+
+    assert documents.render("t", DOC_MD, "md") == DOC_MD.encode("utf-8")
+
+
+def test_docx_is_a_real_docx_carrying_the_table():
+    """The templates build Markdown; a facility admin attaches a .docx to an email."""
+    import io
+    import zipfile
+
+    from server.mcp import documents
+
+    blob = documents.render("Usage report", DOC_MD, "docx")
+    assert blob[:2] == b"PK", "a docx is a zip"
+    with zipfile.ZipFile(io.BytesIO(blob)) as z:
+        xml = z.read("word/document.xml").decode()
+    assert "<w:tbl>" in xml, "the pipe table must survive as a real table"
+    assert "Confocal C2" in xml
+    assert "Usage report" in xml
+
+
+def test_pdf_is_a_real_pdf():
+    from server.mcp import documents
+
+    blob = documents.render("Usage report", DOC_MD, "pdf")
+    assert blob[:5] == b"%PDF-"
+    assert len(blob) > 1000, "a one-page report should not be empty"
+
+
+def test_a_short_table_row_does_not_break_rendering():
+    """The usage template emits a placeholder row with fewer cells than the header."""
+    from server.mcp import documents
+
+    for fmt in ("docx", "pdf"):
+        assert documents.render("t", DOC_MD, fmt)
+
+
+def test_an_unsupported_format_is_refused(ctxs):
+    with pytest.raises(ToolError) as excinfo:
+        T.generate_document(ctxs["alice"], template="usage_report", format="rtf")
+    assert excinfo.value.code == "invalid_params"
+    assert "md, docx, pdf" in excinfo.value.message
+
+
+def test_the_format_reaches_the_approval_preview(ctxs):
+    """What the approver sees has to say which artefact they are agreeing to."""
+    pending = T.generate_document(ctxs["alice"], template="usage_report", format="pdf")
+    assert "PDF" in pending["payload_preview"]
+    assert pending["payload"]["format"] == "pdf"

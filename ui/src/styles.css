@@ -236,3 +236,96 @@ button:disabled { opacity: .55; cursor: not-allowed; }
 .pill.declined, .pill.failed { background: #fbeaea; color: var(--danger); }
 
 .error-banner { background: #fbeaea; color: var(--danger); border: 1px solid #f0d0d0; border-radius: 8px; padding: 8px 12px; font-size: 13px; }
+
+/* ---------- narrow screens ----------
+   The layout is a 264px rail beside the chat, which is unusable below about 820px: the
+   rail eats a third of a phone screen and the composer ends up under the keyboard.
+   Below that width the rail becomes a horizontal strip of identities above the
+   transcript — switching user is the one thing the demo needs on a phone, and it is
+   also the proof (sign in as bob, watch alice's document disappear).
+
+   No JavaScript and no markup change: a drawer would need state, and this needs none. */
+
+@media (max-width: 820px) {
+  /* dvh, not vh: on iOS Safari 100vh is taller than the visible area, which pushes the
+     composer behind the browser chrome. */
+  .app {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto 1fr;
+    height: 100dvh;
+  }
+
+  .rail {
+    flex-direction: row;
+    align-items: center;
+    gap: 10px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding: 10px 12px;
+    border-right: none;
+    border-bottom: 1px solid var(--line);
+    -webkit-overflow-scrolling: touch;
+  }
+  /* Section headings and the blurb under each name are the first things to go: they
+     cost a whole line each and say nothing a demo audience needs on a phone. */
+  .rail h2,
+  .rail .blurb,
+  .rail .uploads-list,
+  .rail .private-note {
+    display: none;
+  }
+  .rail > div {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: 0 0 auto;
+  }
+  .brand {
+    flex: 0 0 auto;
+    margin: 0 4px 0 0;
+    font-size: 15px;
+  }
+  .user-btn {
+    flex: 0 0 auto;
+    width: auto;
+    white-space: nowrap;
+    padding: 7px 10px;
+    margin: 0;
+  }
+  .user-btn .who {
+    flex-direction: row;
+    align-items: baseline;
+    gap: 6px;
+  }
+  .rail-actions {
+    margin-left: auto;
+    flex: 0 0 auto;
+  }
+
+  .topbar {
+    padding: 9px 14px;
+    font-size: 12px;
+  }
+  .transcript { padding: 14px 12px; }
+  .transcript-inner { gap: 16px; }
+  .composer { padding: 10px 12px; }
+  .composer-inner { gap: 8px; }
+
+  /* A 140px label column leaves nothing for the value on a 360px screen. */
+  .approval-card .kv {
+    grid-template-columns: 1fr;
+    gap: 2px;
+  }
+  .approval-card .kv dt { color: var(--ink-soft); font-size: 12px; }
+  .approval-card .kv dd { margin: 0 0 6px; }
+
+  .bubble-user { max-width: 88%; }
+  .evidence table { font-size: 12px; }
+}
+
+/* Phones proper: the suggestion chips wrap into a column rather than a ragged grid. */
+@media (max-width: 480px) {
+  .suggestions { flex-direction: column; align-items: stretch; }
+  .suggestions button { text-align: left; }
+  .topbar .ctx:last-child { display: none; }  /* the thread id is noise at this width */
+}

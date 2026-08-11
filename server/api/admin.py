@@ -125,3 +125,20 @@ def summary(ctx: Ctx = Depends(require_admin)) -> dict:
         "model": settings.llm_model,
         "reranker": settings.reranker,
     }
+
+
+@router.get("/gaps")
+def knowledge_gaps(ctx: Ctx = Depends(require_admin),
+                   limit: int = Query(default=20, ge=1, le=100),
+                   days: int = Query(default=90, ge=1, le=365)) -> dict:
+    """What the assistant was asked and could not answer, ranked.
+
+    The refusals are the content roadmap: each row is a document the facility has not
+    written, in the words the people who wanted it actually used. Ranked by distinct
+    askers first, so one person asking twelve times does not outrank six people asking
+    once.
+    """
+    from server.agent import gaps
+
+    rows = gaps.ranked(limit=limit, days=days)
+    return {"window_days": days, "gaps": rows, "count": len(rows)}

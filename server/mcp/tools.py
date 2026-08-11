@@ -31,6 +31,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from server.auth import Ctx
 from server.db import ro_session, session_scope
 from server.mcp import actions as actions_mod
+from server.mcp import documents
 from server.mcp.errors import ToolError, forbidden, invalid_params, not_found
 from server.mcp.sql_guard import MAX_ROWS
 from server.mcp.sql_guard import validate as validate_sql
@@ -861,8 +862,14 @@ def request_booking(ctx: Ctx, instrument_id: str, starts_at: str, ends_at: str,
 
 
 def generate_document(ctx: Ctx, template: str,
-                      params: dict[str, Any] | None = None) -> dict[str, Any]:
+                      params: dict[str, Any] | None = None,
+                      format: str = "md") -> dict[str, Any]:
     params = params or {}
+    fmt = str(format).lower()
+    if fmt not in documents.FORMATS:
+        raise invalid_params(
+            f"format must be one of: {', '.join(documents.FORMATS)}."
+        )
     if template not in DOCUMENT_TEMPLATES:
         raise invalid_params(
             f"template must be one of: {', '.join(DOCUMENT_TEMPLATES)}."
@@ -883,8 +890,11 @@ def generate_document(ctx: Ctx, template: str,
     elif template == "monthly_summary":
         _check_month(params.get("period"))
 
-    payload = {"template": template, "params": params}
-    preview = f"Generate {template.replace('_', ' ')} ({params or 'no parameters'})"
+    payload = {"template": template, "params": params, "format": fmt}
+    preview = (
+        f"Generate {template.replace('_', ' ')} as {fmt.upper()} "
+        f"({params or 'no parameters'})"
+    )
     return actions_mod.create_pending(ctx, "generate_document", payload, preview)
 
 

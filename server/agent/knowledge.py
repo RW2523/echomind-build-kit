@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 
 from server.agent import faithfulness as faith
+from server.agent import gaps
 from server.agent import gate as gate_mod
 from server.agent import generate as gen
 from server.agent.gate import GateResult
@@ -19,7 +20,16 @@ from server.rag.retrieval import retrieve
 log = logging.getLogger("echomind.knowledge")
 
 
-def _redirect(question: str, gate: GateResult, extra: dict | None = None) -> AgentResponse:
+def _redirect(question: str, gate: GateResult, extra: dict | None = None,
+              ctx: Ctx | None = None) -> AgentResponse:
+    # Every refusal is a document somebody still has to write, so it is recorded before
+    # it is returned. Best effort by design — see server/agent/gaps.py.
+    if ctx is not None:
+        gaps.record(
+            question, user_id=ctx.user_id, role=ctx.role,
+            reason=gate.reason or "unknown",
+            top_score=gate.top_score, closest_doc=gate.closest_breadcrumb,
+        )
     return AgentResponse(
         response_type="redirect",
         text=gate_mod.redirect_text(question, gate),
@@ -35,7 +45,7 @@ def answer(question: str, ctx: Ctx, k: int = 8) -> AgentResponse:
 
     if not gate.passed:
         log.info("gate blocked answer: %s (top_score=%.3f)", gate.reason, gate.top_score)
-        return _redirect(question, gate)
+        return _redirect(question, gate, ctx=ctx)
 
     text, citations, sufficient = gen.generate(question, chunks)
     if not sufficient:
@@ -43,7 +53,7 @@ def answer(question: str, ctx: Ctx, k: int = 8) -> AgentResponse:
         # produced nothing citable. Either way we do not ship it.
         gate.passed = False
         gate.reason = "no_coverage"
-        return _redirect(question, gate, {"declined_at": "generation"})
+        return _redirect(question, gate, {"declined_at": "generation"}, ctx=ctx)
 
     verdict = faith.check(text, chunks, citations, question=question)
 
@@ -60,7 +70,7 @@ def answer(question: str, ctx: Ctx, k: int = 8) -> AgentResponse:
         log.info("faithfulness downgraded answer: %s", verdict.unsupported)
         gate.passed = False
         gate.reason = "unfaithful"
-        response = _redirect(question, gate, {"declined_at": "faithfulness"})
+        response = _redirect(question, gate, {"declined_at": "faithfulness"}, ctx=ctx)
         response.faithfulness = verdict.to_dict()
         return response
 

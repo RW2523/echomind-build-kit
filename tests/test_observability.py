@@ -476,3 +476,64 @@ def test_correctness_separates_fuller_from_wrong():
     assert fuller >= 0.90, f"correct sourced detail must score well, got {fuller}"
     assert invented < 0.85, f"an invented figure must cost the score, got {invented}"
     assert omits < 0.85, f"omitting the reference fact must cost the score, got {omits}"
+
+
+# --- every honest redirect becomes a line on the content roadmap ----------------------
+
+
+def test_the_same_question_asked_differently_ranks_once():
+    """The point of the key: fifteen phrasings of one gap must not be fifteen rows."""
+    from server.agent.gaps import question_key
+
+    a = question_key("What is the facility's parking permit policy?")
+    b = question_key("the facility parking permit policy")
+    assert a == b == "facility parking permit policy"
+
+
+def test_the_key_ignores_possessives_and_word_order():
+    from server.agent.gaps import question_key
+
+    assert question_key("Alice's booking limit") == question_key("limit booking alice")
+
+
+def test_a_question_of_pure_stopwords_is_not_a_knowledge_gap():
+    """"What about it?" is a conversational fragment, not a missing document."""
+    from server.agent.gaps import question_key
+
+    assert question_key("what about it?") == ""
+
+
+@pytest.mark.llm
+def test_a_refusal_is_recorded_and_ranked(ctxs):
+    """End to end: ask something the corpus cannot support, find it on the roadmap."""
+    from sqlalchemy import text as sql_text
+
+    from server.agent import gaps
+    from server.agent.knowledge import answer
+    from server.db import owner_session
+
+    question = "What is the facility's zeppelin mooring policy?"
+    key = gaps.question_key(question)
+    try:
+        response = answer(question, ctxs["alice"])
+        assert response.response_type == "redirect", "the corpus cannot support this"
+
+        top = {row["question_key"] for row in gaps.ranked(limit=50)}
+        assert key in top, "a refusal must appear on the roadmap"
+    finally:
+        with owner_session() as s:
+            s.execute(
+                sql_text("DELETE FROM echomind.knowledge_gaps WHERE question_key = :k"),
+                {"k": key},
+            )
+
+
+def test_recording_never_raises_even_if_the_table_is_missing(monkeypatch):
+    """A refusal that fails to log is a missing row; one that raises is a broken reply."""
+    from server.agent import gaps
+
+    def boom():
+        raise RuntimeError("database is gone")
+
+    monkeypatch.setattr(gaps, "session_scope", boom)
+    gaps.record("anything at all", user_id="u-alice", role="user", reason="no_coverage")

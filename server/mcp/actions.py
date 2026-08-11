@@ -21,6 +21,7 @@ from sqlalchemy import text
 from server.auth import Ctx
 from server.config import REPO_ROOT
 from server.db import session_scope
+from server.mcp import documents
 from server.mcp.errors import ToolError, forbidden, invalid_params, not_found
 
 log = logging.getLogger("echomind.actions")
@@ -369,14 +370,26 @@ def _exec_document(action: dict, payload: dict) -> dict[str, Any]:
     }[template]
     title, body = renderer(user_id, params)
 
+    # The templates produce Markdown and always did; what changed is that the artefact a
+    # facility admin actually attaches to an email is a .docx or a .pdf, so the same body
+    # is rendered into whichever was asked for. Markdown stays the default, because the
+    # demo and the tests read it.
+    fmt = str(payload.get("format") or "md").lower()
+    if fmt not in documents.FORMATS:
+        raise invalid_params(
+            f"Unsupported document format {fmt!r}.",
+            f"Choose one of: {', '.join(documents.FORMATS)}.",
+        )
+
     stamp = _now().strftime("%Y%m%dT%H%M%S")
-    path = OUTPUTS_DIR / f"{template}-{stamp}-{action['id']}.md"
-    path.write_text(body, encoding="utf-8")
+    path = OUTPUTS_DIR / f"{template}-{stamp}-{action['id']}{documents.EXTENSION[fmt]}"
+    path.write_bytes(documents.render(title, body, fmt))
 
     return {
         "created": "document",
         "template": template,
         "title": title,
+        "format": fmt,
         "path": str(path.relative_to(REPO_ROOT)),
         "absolute_path": str(path),
         "bytes": path.stat().st_size,
