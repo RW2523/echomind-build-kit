@@ -137,12 +137,45 @@ jobs:
     name: Tests (model required)
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
     runs-on: [self-hosted, gpu]
-    timeout-minutes: 60
+    timeout-minutes: 90
+    env:
+      # A scratch database, so a nightly run never touches the demo box's audit trail,
+      # uploads or bookings. Same cluster, same roles, different database.
+      DATABASE_URL: postgresql://echomind:echomind@localhost:5432/echomind_ci
+      APP_DATABASE_URL: postgresql://echomind_app:echomind_app@localhost:5432/echomind_ci
+      # These override the stub the hosted job uses: this runner has the real thing.
+      EMBED_BASE_URL: http://localhost:11434/v1
+      EMBED_MODEL: bge-m3
+      LLM_BASE_URL: http://localhost:8001/v1
+      LLM_MODEL: nvidia/Qwen3-8B-FP4
+      JUDGE_MODEL: nvidia/Qwen3-8B-FP4
+      RERANKER: "on"
+      RERANKER_BASE_URL: http://localhost:8006
+      LLM_EXTRA_BODY: '{"chat_template_kwargs":{"enable_thinking":false},"stop_token_ids":[151645,151643]}'
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
-      - run: uv venv --python 3.12 .venv && VIRTUAL_ENV=.venv uv pip install -e ".[dev]"
+      - run: uv venv --python 3.12 .venv && VIRTUAL_ENV=.venv uv pip install -e ".[dev,evals]"
+
+      - name: Create the scratch database if it is not there yet
+        run: |
+          docker exec echomind-postgres psql -U echomind -d postgres \
+            -c "SELECT 1 FROM pg_database WHERE datname='echomind_ci'" | grep -q 1 || \
+          docker exec echomind-postgres psql -U echomind -d postgres \
+            -c "CREATE DATABASE echomind_ci OWNER echomind"
+          docker exec echomind-postgres psql -U echomind -d echomind_ci \
+            -c "CREATE EXTENSION IF NOT EXISTS vector"
+
       - run: make up && make seed
+      # The whole suite, including the markers the hosted job cannot judge without a model.
       - run: .venv/bin/pytest -q
       - run: make eval
       - run: make demo
+
+      - name: Publish the eval report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-report
+          path: eval_reports/
+          if-no-files-found: warn
