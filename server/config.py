@@ -61,6 +61,13 @@ class Settings(BaseSettings):
     rerank_min_keep: int = 3
     gate_min_top_score: float = 0.45
 
+    # Passwordless one-click sign-in as a demo user. Tied to the dev JWT secret until a
+    # publicly shared demo needed both an open front door AND a secret that is not
+    # printed in the repository — the two are separate questions and coupling them meant
+    # the only way to have the first was to give up the second. Still off by default, so
+    # nothing changes for a deployment that does not ask for it.
+    demo_login_enabled: bool = False
+
     escalation_enabled: bool = False
     frontier_base_url: str = ""
 

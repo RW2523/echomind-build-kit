@@ -294,3 +294,36 @@ def test_the_caller_asking_about_themselves_is_not_denied(ctxs):
     plan = {"mode": "tool", "tool": "get_my_bookings", "arguments": {},
             "subject_user_id": "u-bob"}
     _assert_may_read_subject(plan, ctxs["bob"])  # must not raise
+
+
+# --- demo login is a deliberate switch, not a side effect of the secret ---------------
+
+
+def _enabled_with(monkeypatch, *, secret: str, flag: bool) -> bool:
+    """Call the real guard with a substituted settings object."""
+    from server.api import demo_login
+    from server.config import Settings
+
+    monkeypatch.setattr(
+        demo_login, "settings", Settings(jwt_secret=secret, demo_login_enabled=flag)
+    )
+    return demo_login.enabled()
+
+
+def test_demo_login_is_off_with_a_real_secret_and_no_flag(monkeypatch):
+    """The default for anything that is not a dev checkout."""
+    assert not _enabled_with(monkeypatch, secret="x" * 48, flag=False)
+
+
+def test_demo_login_is_on_for_a_dev_checkout(monkeypatch):
+    """Unchanged behaviour: leave JWT_SECRET at the default and the door is open."""
+    from server.api.demo_login import DEV_SECRET
+
+    assert _enabled_with(monkeypatch, secret=DEV_SECRET, flag=False)
+
+
+def test_demo_login_can_be_opened_deliberately_with_a_strong_secret(monkeypatch):
+    """Regression: the two were coupled, so a publicly shared demo could only have an
+    open front door by also keeping the secret printed in .env.example — which is in a
+    public repository, and would have let anyone forge an admin token."""
+    assert _enabled_with(monkeypatch, secret="s" * 48, flag=True)

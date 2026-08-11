@@ -23,7 +23,14 @@ router = APIRouter(prefix="/demo", tags=["demo"])
 
 
 def enabled() -> bool:
-    return settings.jwt_secret == DEV_SECRET
+    """On for a local dev checkout, or wherever it is asked for explicitly.
+
+    The dev-secret check alone made an open demo and a strong secret mutually exclusive:
+    rotating the secret so a public URL could not have its tokens forged also removed the
+    only way in. DEMO_LOGIN_ENABLED says "yes, this front door is meant to be open",
+    which is a different statement from "this secret is a placeholder".
+    """
+    return settings.demo_login_enabled or settings.jwt_secret == DEV_SECRET
 
 
 def _guard() -> None:

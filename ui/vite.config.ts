@@ -5,6 +5,10 @@ export default defineConfig({
   plugins: [react()],
   server: {
     port: 5173,
+    // Vite rejects requests whose Host header it does not recognise — a DNS-rebinding
+    // guard. The tunnels this demo is shared over terminate on someone else's domain,
+    // so those suffixes are named explicitly rather than disabling the check outright.
+    allowedHosts: [".ts.net", ".trycloudflare.com"],
     // The API is same-origin in the browser during development, so SSE and uploads
     // need no CORS preflight and cookies/headers behave as they would in production.
     proxy: {
