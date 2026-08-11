@@ -304,7 +304,7 @@ def _rerank(query: str, chunks: list[RetrievedChunk]) -> list[RetrievedChunk]:
         resp.raise_for_status()
         scored = resp.json()
         order = [(item["index"], float(item["score"])) for item in scored]
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         log.warning("reranker unavailable (%s); keeping RRF order", exc)
         return chunks
 

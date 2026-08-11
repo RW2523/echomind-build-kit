@@ -8,6 +8,7 @@ deterministic rendering — the model does not get to invent a figure and have i
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import re
 from decimal import Decimal
@@ -25,7 +26,8 @@ log = logging.getLogger("echomind.data")
 # entitlement check and the dispatcher must agree on where to find them.
 PLAN_LEVEL_KEYS = ("subject_user_id",)
 
-VIEW_SCHEMA = """v_bookings(user_id, user_name, lab_id, instrument, facility, starts_at, ends_at, status)
+VIEW_SCHEMA = """\
+v_bookings(user_id, user_name, lab_id, instrument, facility, starts_at, ends_at, status)
 v_usage_summary(lab_id, user_id, instrument, month, scheduled_hours, tracked_hours)
 v_billing_lines(account_code, lab_id, period, description, instrument, amount)
 v_instrument_downtime(instrument, facility, month, downtime_hours, repair_count)"""
@@ -33,7 +35,7 @@ v_instrument_downtime(instrument, facility, month, downtime_hours, repair_count)
 # Tools the data branch may plan with, by tier. Tool 11 is T2/T3 only; the handler
 # enforces that too, this simply stops the planner proposing something doomed.
 TOOL_MENU = """get_my_bookings(date_from?, date_to?)        the caller's own bookings
-get_usage_records(scope, id?, month?)        scope is user|lab|instrument; scheduled vs tracked hours
+get_usage_records(scope, id?, month?)        scope user|lab|instrument; scheduled vs tracked
 get_request_status(request_id?, mine?)       service request status and history
 track_sample(barcode?, sample_id?)           sample state timeline
 get_billing_summary(account_code, period)    invoice total and lines, period is YYYY-MM
@@ -146,7 +148,8 @@ def _plan(question: str, ctx: Ctx, history: str = "") -> dict[str, Any]:
         sql_option=SQL_OPTION if may_sql else "",
         sql_rules=SQL_RULES if may_sql else NO_SQL_RULE,
     )
-    system += "\n\nInstrument ids (tools take the id, never the display name):\n" + _instrument_catalog()
+    system += ("\n\nInstrument ids (tools take the id, never the display name):\n"
+               + _instrument_catalog())
     plan = chat_json(
         [
             {"role": "system", "content": system},
@@ -200,7 +203,7 @@ def _numbers_in(value: Any) -> set[Decimal]:
     for token in NUMBER_RE.findall(str(value)):
         try:
             out.add(Decimal(token.replace(",", "")))
-        except Exception:  # noqa: BLE001
+        except Exception:
             continue
     return out
 
@@ -256,7 +259,7 @@ def _allowed_numbers(
         try:
             widened.add(n.quantize(Decimal("0.01")))
             widened.add(Decimal(int(n)))
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
     return widened
 
@@ -270,7 +273,7 @@ def verify_numbers(
     for token in NUMBER_RE.findall(draft):
         try:
             value = Decimal(token.replace(",", ""))
-        except Exception:  # noqa: BLE001
+        except Exception:
             continue
         if not any(value == a or value.normalize() == a.normalize() for a in allowed):
             offenders.append(token)
@@ -318,10 +321,9 @@ def canonicalize_numbers(text: str, rows: list[dict], scalars: dict[str, Any]) -
         raw = str(value)
         if not NUMBER_RE.fullmatch(raw.strip()):
             return
-        try:
+        # A value that will not parse as a decimal simply has no canonical spelling.
+        with contextlib.suppress(Exception):
             spellings.setdefault(Decimal(raw.strip().replace(",", "")), raw.strip())
-        except Exception:  # noqa: BLE001
-            pass
 
     for row in rows:
         for value in row.values():
@@ -335,7 +337,7 @@ def canonicalize_numbers(text: str, rows: list[dict], scalars: dict[str, Any]) -
         token = match.group(0)
         try:
             value = Decimal(token.replace(",", ""))
-        except Exception:  # noqa: BLE001
+        except Exception:
             return token
         canonical = spellings.get(value)
         return canonical if canonical and canonical != token else token
@@ -360,7 +362,8 @@ def answer_from_rows(
         )
 
     totals = column_totals(rows)
-    context = f"QUESTION:\n{question}\n\nROWS ({len(rows)} returned):\n{_render_rows(rows, limit=25)}"
+    context = (f"QUESTION:\n{question}\n\nROWS ({len(rows)} returned):\n"
+               f"{_render_rows(rows, limit=25)}")
     if scalars:
         context += "\n\nRESULT FACTS (about the whole result, not per row):\n" + "\n".join(
             f"  {k} = {v}" for k, v in scalars.items()
@@ -505,7 +508,8 @@ def _run_sql(sql: str, ctx: Ctx, question: str) -> tuple[list[dict], list[str], 
                 },
                 {
                     "role": "user",
-                    "content": f"QUESTION: {question}\nSQL: {sql}\nERROR: {first.message} {first.hint}",
+                    "content": (f"QUESTION: {question}\nSQL: {sql}\n"
+                                f"ERROR: {first.message} {first.hint}"),
                 },
             ],
             default={"sql": ""},

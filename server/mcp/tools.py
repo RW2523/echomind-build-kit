@@ -19,10 +19,11 @@ import dataclasses
 import inspect
 import logging
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from typing import Any, Callable
+from typing import Any
 
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
@@ -31,7 +32,8 @@ from server.auth import Ctx
 from server.db import ro_session, session_scope
 from server.mcp import actions as actions_mod
 from server.mcp.errors import ToolError, forbidden, invalid_params, not_found
-from server.mcp.sql_guard import MAX_ROWS, validate as validate_sql
+from server.mcp.sql_guard import MAX_ROWS
+from server.mcp.sql_guard import validate as validate_sql
 from server.observability import traced_tool
 
 log = logging.getLogger("echomind.tools")
@@ -192,7 +194,9 @@ def get_facility_catalog(ctx: Ctx, facility_id: str | None = None) -> dict[str, 
 # --- 3. check_availability (T0) ----------------------------------------------------
 
 
-def check_availability(ctx: Ctx, instrument_id: str, date_from: str, date_to: str) -> dict[str, Any]:
+def check_availability(
+    ctx: Ctx, instrument_id: str, date_from: str, date_to: str
+) -> dict[str, Any]:
     start = _parse_dt(date_from, "date_from")
     end = _parse_dt(date_to, "date_to")
     if end <= start:
@@ -334,7 +338,8 @@ def get_usage_records(ctx: Ctx, scope: str = "user", id: str | None = None,
                 raise invalid_params("scope='instrument' requires the instrument id in `id`.")
             if not (ctx.is_admin or ctx.is_pi):
                 raise forbidden()
-            where, params = "instrument = (SELECT name FROM infinity.instruments WHERE id = :target)", {"target": id}
+            where = "instrument = (SELECT name FROM infinity.instruments WHERE id = :target)"
+            params = {"target": id}
             if ctx.is_pi:
                 where += " AND lab_id = ANY(:labs)"
                 params["labs"] = list(ctx.lab_ids)
@@ -667,7 +672,7 @@ def run_readonly_sql(ctx: Ctx, sql: str) -> dict[str, Any]:
         with ro_session() as s:
             result = s.execute(text(validated.executed_sql))
             columns = list(result.keys())
-            rows = [dict(zip(columns, r)) for r in result.fetchall()]
+            rows = [dict(zip(columns, r, strict=True)) for r in result.fetchall()]
     except SQLAlchemyError as exc:
         # Validated but still not runnable (unknown column, bad cast, timeout). Surface
         # it as the uniform error so the caller can repair rather than crash the turn.

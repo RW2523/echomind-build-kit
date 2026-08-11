@@ -184,7 +184,7 @@ def reachable(candidate: Candidate) -> bool:
             r = httpx.get(candidate.base_url.rstrip("/") + path, timeout=4)
             if r.status_code < 500:
                 return True
-        except Exception:  # noqa: BLE001
+        except Exception:
             continue
     return False
 
@@ -201,7 +201,7 @@ def bench_router(repeat: int) -> TaskScore:
             t = time.time()
             try:
                 got, _why = route(question)
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 got = f"error:{type(exc).__name__}"
             s.latencies.append(time.time() - t)
             s.total += 1
@@ -222,7 +222,7 @@ def bench_coverage(repeat: int) -> TaskScore:
             t = time.time()
             try:
                 covered = _coverage_check(question, chunks)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 covered = False
             s.latencies.append(time.time() - t)
             s.total += 1
@@ -248,7 +248,7 @@ def bench_verdicts(repeat: int) -> TaskScore:
                 complete = all(v.why != "judge returned no verdict" for v in result.verdicts)
                 right_count = result.checked == n_claims
                 ok = complete and right_count and result.passed
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 ok, complete, right_count = False, False, False
                 s.failures.append(f"{n_claims} claims -> {type(exc).__name__}")
             s.latencies.append(time.time() - t)
@@ -272,7 +272,7 @@ def bench_generation(repeat: int) -> TaskScore:
             t = time.time()
             try:
                 text, cites, sufficient = gen.generate(question, chunks)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 text, cites, sufficient = "", [], False
             s.latencies.append(time.time() - t)
             s.total += 1
@@ -298,7 +298,7 @@ def bench_terseness(repeat: int) -> TaskScore:
         try:
             out = chat([{"role": "user", "content": "Reply with exactly the word: ready"}],
                        max_tokens=30, temperature=0.0)
-        except Exception:  # noqa: BLE001
+        except Exception:
             out = ""
         s.latencies.append(time.time() - t)
         s.total += 1
@@ -309,7 +309,7 @@ def bench_terseness(repeat: int) -> TaskScore:
     return s
 
 
-def bench_concurrency(candidate: "Candidate", levels=(1, 4, 8)) -> list[dict[str, Any]]:
+def bench_concurrency(candidate: Candidate, levels=(1, 4, 8)) -> list[dict[str, Any]]:
     """Throughput and latency under load.
 
     Single-request wall clock flatters whichever engine has the smallest per-call
@@ -380,8 +380,10 @@ def run_candidate(candidate: Candidate, repeat: int) -> dict[str, Any]:
     print("    concurrency ", end="", flush=True)
     try:
         concurrency = bench_concurrency(candidate)
-        print("  ".join(f"n={c['concurrency']}:{c['aggregate_tok_s']:.0f}tok/s" for c in concurrency))
-    except Exception as exc:  # noqa: BLE001
+        print("  ".join(
+            f"n={c['concurrency']}:{c['aggregate_tok_s']:.0f}tok/s" for c in concurrency
+        ))
+    except Exception as exc:
         concurrency = []
         print(f"failed ({type(exc).__name__})")
 
@@ -417,7 +419,8 @@ def render(results: list[dict[str, Any]], repeat: int) -> str:
         "return a complete verdict set silently suppresses correct answers, which is the "
         "most expensive failure this system has.",
         "",
-        "| Candidate | Engine | Structured output | Score | Router | Coverage | Verdicts | Generation | Terse | Σ p50 |",
+        "| Candidate | Engine | Structured output | Score | Router | Coverage | "
+        "Verdicts | Generation | Terse | Σ p50 |",
         "|---|---|---|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for r in sorted(results, key=lambda x: -x["weighted_score"]):

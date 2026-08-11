@@ -14,7 +14,6 @@ import json
 import logging
 import uuid
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any
 
 from sqlalchemy import text
@@ -205,7 +204,7 @@ def approve(ctx: Ctx, action_id: str) -> dict[str, Any]:
 
     try:
         result = _execute(action)
-    except Exception as exc:  # noqa: BLE001 - recorded, not swallowed
+    except Exception as exc:
         log.exception("action %s failed to execute", action_id)
         with session_scope() as s:
             s.execute(

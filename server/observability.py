@@ -83,7 +83,7 @@ class Tracer:
                     host=settings.langfuse_host,
                 )
                 log.info("Langfuse tracing enabled (%s)", settings.langfuse_host)
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 log.warning("Langfuse unavailable (%s); falling back to traces.jsonl", exc)
                 self._langfuse = None
         return self._langfuse
@@ -134,7 +134,7 @@ class Tracer:
                     metadata=record,
                     trace_context={"trace_id": span.trace_id},
                 )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             log.debug("langfuse emit failed: %s", exc)
 
         # Always write the local line: it is the fallback source AND the demo's evidence
@@ -144,7 +144,7 @@ class Tracer:
                 TRACE_FILE.parent.mkdir(parents=True, exist_ok=True)
                 with TRACE_FILE.open("a", encoding="utf-8") as fh:
                     fh.write(json.dumps(record, default=str) + "\n")
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             log.debug("trace write failed: %s", exc)
 
     # --- readback for the admin page ------------------------------------------
@@ -191,7 +191,7 @@ def traced_tool(name: str):
             with tracer.span(f"tool.{name}", user_id=getattr(ctx, "user_id", None)) as span:
                 try:
                     result = fn(ctx, *args, **kwargs)
-                except Exception as exc:  # noqa: BLE001 - re-raised, just labelled
+                except Exception as exc:
                     span.set(tool_error=type(exc).__name__, code=getattr(exc, "code", None))
                     raise
                 if isinstance(result, dict):

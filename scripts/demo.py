@@ -11,6 +11,7 @@ which is the actual bar spec 08 sets.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import signal
@@ -18,7 +19,6 @@ import subprocess
 import sys
 import time
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any
 
 import httpx
@@ -182,7 +182,8 @@ class Demo:
         print(f"  {DIM}> {proposal['text'][:110]}{RESET}")
         action = proposal.get("pending_action") or {}
         if not s.check(proposal["response_type"] == "approval_request",
-                       f"the follow-up produces an approval_request (got {proposal['response_type']})"):
+                       "the follow-up produces an approval_request "
+                       f"(got {proposal['response_type']})"):
             return
         s.check(action.get("kind") == "booking", "the pending action is a booking")
         s.check(action.get("payload", {}).get("instrument_id") == "ins-confocal-c2",
@@ -256,7 +257,8 @@ class Demo:
                 files={"file": (form.name, fh, "application/pdf")},
             ).json()
         self.created_docs.append((uploaded["doc_id"], alice))
-        s.check(uploaded.get("visibility") == "private", "the form is uploaded to alice's own space")
+        s.check(uploaded.get("visibility") == "private",
+                "the form is uploaded to alice's own space")
 
         proposal = self.ask(
             alice,
@@ -271,7 +273,8 @@ class Demo:
 
         fields = action.get("payload", {}).get("fields", {}) or {}
         s.check(action.get("payload", {}).get("template_id") == "tpl-rna-seq",
-                f"it picked the RNA-seq template (got {action.get('payload', {}).get('template_id')})")
+                "it picked the RNA-seq template "
+                f"(got {action.get('payload', {}).get('template_id')})")
         s.check(str(fields.get("sample_count")) == "12",
                 f"sample_count extracted from the form: {fields.get('sample_count')}")
         s.check(str(fields.get("organism", "")).lower() == "mus musculus",
@@ -330,7 +333,8 @@ class Demo:
         retrieved = retrieve(question, bob_ctx, k=8)
         from_alice = [c for c in retrieved if c.doc_id == doc_id]
         s.check(from_alice == [],
-                f"bob's retrieval returned zero chunks from alice's doc ({len(retrieved)} chunks seen)")
+                "bob's retrieval returned zero chunks from alice's doc "
+                f"({len(retrieved)} chunks seen)")
         s.check(all(c.visibility == "public" for c in retrieved),
                 "everything bob retrieved is public")
 
@@ -353,7 +357,8 @@ class Demo:
 
         traces = self.client.get(f"{BASE}/admin/traces?limit=50", headers=self.token("cora")).json()
         turn_spans = [x for x in traces["spans"] if x.get("name") == "chat.turn"]
-        s.check(bool(turn_spans), f"the turn was traced ({traces['sink']}): {len(turn_spans)} turns")
+        s.check(bool(turn_spans),
+                f"the turn was traced ({traces['sink']}): {len(turn_spans)} turns")
         s.check(any(x.get("gate_result") for x in turn_spans),
                 "the trace records the gate result")
 
@@ -364,9 +369,11 @@ class Demo:
         s.check(latest is not None, "an eval_runs row exists from `make eval`")
         if latest:
             s.check(latest.get("data_exact_match") == 1.0,
-                    f"the last eval had 100% data exact-match (got {latest.get('data_exact_match')})")
+                    "the last eval had 100% data exact-match "
+                    f"(got {latest.get('data_exact_match')})")
             s.check(latest.get("redirect_forbidden") == 1.0,
-                    f"the last eval refused 100% of what it should (got {latest.get('redirect_forbidden')})")
+                    "the last eval refused 100% of what it should "
+                    f"(got {latest.get('redirect_forbidden')})")
 
     # --- lifecycle ---------------------------------------------------------------
 
@@ -378,10 +385,9 @@ class Demo:
         one, so the tear-down cannot borrow its connection.
         """
         for doc_id, headers in self.created_docs:
-            try:
+            # Best effort: a tear-down that fails must not mask the scene results.
+            with contextlib.suppress(Exception):
                 self.client.delete(f"{BASE}/uploads/{doc_id}", headers=headers)
-            except Exception:  # noqa: BLE001
-                pass
         with owner_session() as db:
             for booking_id in self.created_bookings:
                 db.execute(text("DELETE FROM infinity.bookings WHERE id = :id"), {"id": booking_id})
@@ -423,7 +429,7 @@ class Demo:
         ):
             try:
                 method()
-            except Exception as exc:  # noqa: BLE001 — a broken scene fails, it does not abort
+            except Exception as exc:
                 if self.scenes:
                     self.scenes[-1].error = f"{type(exc).__name__}: {exc}"
                 print(f"  {RED}errored: {type(exc).__name__}: {exc}{RESET}")
@@ -436,7 +442,7 @@ class Demo:
 def api_is_up() -> bool:
     try:
         return httpx.get(f"{BASE}/healthz", timeout=2.0).json().get("ok") is True
-    except Exception:  # noqa: BLE001
+    except Exception:
         return False
 
 
@@ -471,11 +477,11 @@ def stop_api(process: subprocess.Popen | None) -> None:
         return
     try:
         os.killpg(os.getpgid(process.pid), signal.SIGTERM)
-    except Exception:  # noqa: BLE001
+    except Exception:
         process.terminate()
     try:
         process.wait(timeout=10)
-    except Exception:  # noqa: BLE001
+    except Exception:
         process.kill()
 
 

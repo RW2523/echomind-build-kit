@@ -136,7 +136,7 @@ def _func_name(node: exp.Expression) -> str:
         return node.this.lower()
     try:
         return (node.sql_name() or "").lower()
-    except Exception:  # noqa: BLE001
+    except Exception:
         return type(node).__name__.lower()
 
 
@@ -206,7 +206,9 @@ def _apply_limit(select: exp.Select) -> exp.Select:
     return select if current <= MAX_ROWS else select.limit(MAX_ROWS)
 
 
-def _restrict_to_labs(tree: exp.Expression, lab_ids: tuple[str, ...]) -> tuple[exp.Expression, bool]:
+def _restrict_to_labs(
+    tree: exp.Expression, lab_ids: tuple[str, ...]
+) -> tuple[exp.Expression, bool]:
     """Replace each lab-scoped view reference with a pre-filtered subquery.
 
     Rewriting at the table reference (rather than appending to WHERE) is what makes the

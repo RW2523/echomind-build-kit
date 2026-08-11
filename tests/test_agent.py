@@ -13,7 +13,7 @@ from sqlalchemy import text
 
 from server.agent import escalation
 from server.agent.data import column_totals, verify_numbers
-from server.agent.graph import run_turn, resume_turn
+from server.agent.graph import resume_turn, run_turn
 from server.agent.responses import SCOPE_MESSAGE
 from server.db import owner_session, session_scope
 from server.mcp import actions as actions_mod
@@ -110,7 +110,7 @@ def test_booking_request_creates_a_pending_action(booking_thread):
 
 def test_the_proposal_is_created_exactly_once(booking_thread, ctxs):
     """Regression: an interrupt re-runs its node, which once proposed the action twice."""
-    _, response, _ = booking_thread
+    _, _response, _ = booking_thread
     with session_scope() as s:
         count = s.execute(
             text(
@@ -123,7 +123,7 @@ def test_the_proposal_is_created_exactly_once(booking_thread, ctxs):
 
 
 def test_approval_executes_and_audit_shows_both_events(booking_thread, ctxs):
-    thread_id, response, slot = booking_thread
+    _thread_id, response, slot = booking_thread
     action_id = response.pending_action["action_id"]
 
     outcome = actions_mod.approve(ctxs["alice"], action_id)

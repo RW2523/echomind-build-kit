@@ -300,7 +300,7 @@ def test_a_claim_cited_to_the_wrong_source_is_repointed_not_suppressed():
     )
     assert verdict.passed is True
     assert verdict.corrections, "the claim should have been traced to the other source"
-    claim, corrected_to = verdict.corrections[0]
+    _claim, corrected_to = verdict.corrections[0]
     assert corrected_to == 2, "it is source [2] that states this"
 
 

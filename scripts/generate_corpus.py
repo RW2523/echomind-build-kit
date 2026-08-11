@@ -28,7 +28,6 @@ import argparse
 import random
 import re
 import sys
-from pathlib import Path
 
 from server.config import REPO_ROOT
 
@@ -256,7 +255,9 @@ out of service immediately.
     return f"{name} Operating Procedure", _f(body)
 
 
-def instrument_maintenance(name: str, facility: str, kind: str, rate: float, rng) -> tuple[str, str]:
+def instrument_maintenance(
+    name: str, facility: str, kind: str, rate: float, rng
+) -> tuple[str, str]:
     interval = rng.choice([3, 6, 12])
     downtime = rng.choice([2, 4, 8, 24])
     body = f"""
@@ -295,7 +296,9 @@ load; heavier use shortens that proportionally.
     return f"{name} Preventive Maintenance Schedule", _f(body)
 
 
-def instrument_troubleshooting(name: str, facility: str, kind: str, rate: float, rng) -> tuple[str, str]:
+def instrument_troubleshooting(
+    name: str, facility: str, kind: str, rate: float, rng
+) -> tuple[str, str]:
     symptoms = rng.sample(
         [("no signal at the detector", "check the shutter interlock and the filter path"),
          ("drifting focus over a long acquisition", "let the enclosure equilibrate longer"),
@@ -331,7 +334,9 @@ reproduce it.
     return f"{name} Troubleshooting Guide", _f(body)
 
 
-def instrument_booking_notes(name: str, facility: str, kind: str, rate: float, rng) -> tuple[str, str]:
+def instrument_booking_notes(
+    name: str, facility: str, kind: str, rate: float, rng
+) -> tuple[str, str]:
     typical = rng.choice([1, 2, 3, 4])
     body = f"""
 # Booking Notes — {name}
@@ -570,7 +575,7 @@ def build(rng: random.Random) -> list[tuple[str, str, str, str | None]]:
 
 def check(docs: list[tuple[str, str, str, str | None]]) -> list[str]:
     problems = []
-    for filename, title, body, _lab in docs:
+    for filename, _title, body, _lab in docs:
         low = body.lower()
         for topic in FORBIDDEN_TOPICS:
             if topic in low:
@@ -626,7 +631,7 @@ def main() -> int:
     for filename, title, body, lab in docs:
         visibility = "lab" if lab else "public"
         by_visibility[visibility] += 1
-        front = [f"---", f'title: "{title}"', 'version: "1.0"',
+        front = ["---", f'title: "{title}"', 'version: "1.0"',
                  f"visibility: {visibility}"]
         if lab:
             front.append(f"lab: {lab}")

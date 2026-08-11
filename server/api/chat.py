@@ -69,7 +69,7 @@ async def chat_stream(req: ChatRequest, ctx: Ctx = Depends(require_ctx)) -> Stre
                 stage += 1
         try:
             payload = task.result()
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             log.exception("chat turn failed")
             yield _sse("error", {"message": str(exc)})
             return

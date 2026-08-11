@@ -27,7 +27,9 @@ dependencies = [
 dev = [
     "pytest>=8.2",
     "pytest-asyncio>=0.23",
-    "ruff>=0.5",
+    # Pinned to a minor range: the rule set below is explicit, but an unpinned ruff
+    # still changes what "unfixable" means between releases, and CI installs fresh.
+    "ruff>=0.16,<0.17",
 ]
 # `make eval` needs nothing beyond the core install: the RAGAS metric definitions are
 # implemented in evals/metrics.py against JUDGE_MODEL. The `ragas` package itself cannot
@@ -61,3 +63,32 @@ markers = [
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+
+# Selected explicitly. Ruff's defaults widened between releases and CI installs the
+# latest, so an unpinned rule set meant the lint job's meaning drifted with upstream —
+# it had been red on every push since it was added, against code that never changed.
+[tool.ruff.lint]
+select = [
+    "E", "W",   # pycodestyle
+    "F",        # pyflakes
+    "I",        # import order
+    "UP",       # pyupgrade
+    "B",        # bugbear
+    "C4",       # comprehensions
+    "SIM",      # simplify
+    "RUF",      # ruff's own
+]
+ignore = [
+    # FastAPI's dependency injection *is* a call in an argument default. Rewriting
+    # `ctx: Ctx = Depends(require_ctx)` to satisfy this would break the framework.
+    "B008",
+    # These catch homoglyphs in identifiers. Here they only ever fire on prose — em
+    # dashes and typographic quotes in comments, docstrings and user-facing strings,
+    # all of which are deliberate.
+    "RUF001", "RUF002", "RUF003",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests reach into private helpers on purpose, and import inside functions to keep
+# collection cheap when a service is unavailable.
+"tests/*" = ["E501"]

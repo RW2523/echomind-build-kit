@@ -156,7 +156,8 @@ def main() -> int:
     outcome = client.post(f"{BASE}/actions/{approved_id}/approve", headers=alice).json()
     check("approve executes and the follow-up references the result",
           outcome.get("status") == "executed"
-          and outcome.get("result", {}).get("booking_id", "") in (outcome.get("chat") or {}).get("text", ""),
+          and outcome.get("result", {}).get("booking_id", "")
+              in (outcome.get("chat") or {}).get("text", ""),
           (outcome.get("chat") or {}).get("text", "")[:80])
 
     _, proposal2 = stream(
@@ -222,7 +223,8 @@ def main() -> int:
     _, bob_bookings = stream(client, bob, "How many bookings do I have in total?")
     check("alice and bob get different booking counts",
           alice_bookings.get("text") != bob_bookings.get("text"),
-          f"alice: {alice_bookings.get('text', '')[:40]} | bob: {bob_bookings.get('text', '')[:40]}")
+          f"alice: {alice_bookings.get('text', '')[:40]} | "
+          f"bob: {bob_bookings.get('text', '')[:40]}")
 
     print("\n6. Admin page is hidden from non-admins (route guard + API guard)")
     check("anonymous admin request -> 401",

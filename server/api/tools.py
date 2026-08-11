@@ -72,5 +72,6 @@ def call_tool(
     except TypeError as exc:  # bad/unknown argument names
         raise HTTPException(
             status_code=400,
-            detail={"code": "invalid_params", "message": str(exc), "hint": "Check the argument names."},
+            detail={"code": "invalid_params", "message": str(exc),
+                    "hint": "Check the argument names."},
         ) from exc

@@ -14,7 +14,6 @@ from __future__ import annotations
 import json
 import random
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 
 from sqlalchemy import text
 
@@ -104,7 +103,8 @@ TEMPLATE_FIELDS = {
     ],
     "tpl-scrna": [
         {"name": "sample_count", "label": "Number of samples", "type": "integer", "required": True},
-        {"name": "cells_per_sample", "label": "Target cells per sample", "type": "integer", "required": True},
+        {"name": "cells_per_sample", "label": "Target cells per sample",
+         "type": "integer", "required": True},
         {"name": "tissue", "label": "Tissue", "type": "string", "required": True},
     ],
     "tpl-wgs": [
@@ -118,8 +118,10 @@ TEMPLATE_FIELDS = {
          "options": ["H&E", "Masson", "IHC"], "required": True},
     ],
     "tpl-live-imaging": [
-        {"name": "duration_hours", "label": "Session length (hours)", "type": "number", "required": True},
-        {"name": "instrument", "label": "Preferred instrument", "type": "string", "required": False},
+        {"name": "duration_hours", "label": "Session length (hours)",
+         "type": "number", "required": True},
+        {"name": "instrument", "label": "Preferred instrument",
+         "type": "string", "required": False},
         {"name": "co2", "label": "CO2 incubation required", "type": "boolean", "required": True},
     ],
     "tpl-cryo-prep": [
@@ -196,10 +198,10 @@ def setup_checkpointer() -> None:
 
     with engine.begin() as conn:
         conn.exec_driver_sql(
-            """GRANT SELECT, INSERT, UPDATE, DELETE
-               ON {s}.checkpoints, {s}.checkpoint_writes,
-                  {s}.checkpoint_blobs, {s}.checkpoint_migrations
-               TO echomind_app""".format(s=CHECKPOINT_SCHEMA)
+            f"""GRANT SELECT, INSERT, UPDATE, DELETE
+               ON {CHECKPOINT_SCHEMA}.checkpoints, {CHECKPOINT_SCHEMA}.checkpoint_writes,
+                  {CHECKPOINT_SCHEMA}.checkpoint_blobs, {CHECKPOINT_SCHEMA}.checkpoint_migrations
+               TO echomind_app"""
         )
     print(f"  checkpointer tables ready in schema {CHECKPOINT_SCHEMA}")
 
@@ -378,7 +380,8 @@ def seed() -> None:
                     "source": "tracked",
                 })
             else:
-                starts = window_start + timedelta(minutes=rng.randrange(0, WINDOW_DAYS * 24 * 60, 15))
+                starts = window_start + timedelta(
+                    minutes=rng.randrange(0, WINDOW_DAYS * 24 * 60, 15))
                 usage.append({
                     "id": f"ur-{n:04d}",
                     "instrument_id": rng.choice(instrument_ids),
@@ -414,7 +417,7 @@ def seed() -> None:
             uid = (DEMO_USERS["alice"]["id"] if n < 6
                    else DEMO_USERS["bob"]["id"] if n < 10
                    else rng.choice(user_ids))
-            tpl_id, _, tpl_name = TEMPLATES[n % len(TEMPLATES)]
+            tpl_id, _, _tpl_name = TEMPLATES[n % len(TEMPLATES)]
             status = REQUEST_STATUSES[n % len(REQUEST_STATUSES)]
             created = REFERENCE - timedelta(days=rng.randrange(1, WINDOW_DAYS))
             fields = {"sample_count": rng.randrange(2, 12), "organism": "Mus musculus"}

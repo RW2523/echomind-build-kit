@@ -151,7 +151,10 @@ def _verdicts(statements: list[str], context: str, question: str) -> list[bool]:
             },
             {
                 "role": "user",
-                "content": f"CONTEXT:\n{context}\n\nQUESTION:\n{question}\n\nSTATEMENTS:\n{numbered}",
+                "content": (
+                    f"CONTEXT:\n{context}\n\nQUESTION:\n{question}\n\n"
+                    f"STATEMENTS:\n{numbered}"
+                ),
             },
         ],
         model=settings.judge_model,
@@ -301,9 +304,13 @@ _NUMBER_RE = re.compile(r"\d+(?:\.\d+)?")
 _CITATION_RE = re.compile(r"\[\d+\]")
 # Words that carry no fact on their own, so their absence proves nothing.
 _FN_STOPWORDS = frozenset(
-    "a an and are as at be been but by for from has have how in is it its of on or that "
-    "the their there these this to was were what when which who will with within after "
-    "before must may can not no than then they you your our".split()
+    {
+        "a", "an", "and", "are", "as", "at", "be", "been", "but", "by", "for", "from",
+        "has", "have", "how", "in", "is", "it", "its", "of", "on", "or", "that", "the",
+        "their", "there", "these", "this", "to", "was", "were", "what", "when", "which",
+        "who", "will", "with", "within", "after", "before", "must", "may", "can", "not",
+        "no", "than", "then", "they", "you", "your", "our",
+    }
 )
 
 

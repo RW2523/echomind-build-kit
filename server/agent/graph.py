@@ -282,7 +282,7 @@ def get_graph():
         _checkpointer = _cm.__enter__()
         try:
             _checkpointer.setup()
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             # setup() is DDL. When the API runs as echomind_app it has none, by design —
             # the seeder created these tables as owner. Only a genuinely missing table
             # is a problem, and that surfaces on the first turn with a clear error.

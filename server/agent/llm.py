@@ -112,7 +112,7 @@ def _probe_schema_style() -> str | bool:
                 _schema_style = style
                 return style
             log.info("structured output: %s style returned %r; trying next", style, content[:60])
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             log.info("structured output: %s style rejected (%s)", style, type(exc).__name__)
     log.warning("structured output: no working json_schema style; using json_object")
     _schema_style = False

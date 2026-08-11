@@ -5,6 +5,10 @@ on:
     branches: ["**"]
   pull_request:
   workflow_dispatch:
+  # The model-dependent job gates on `github.event_name == 'schedule'`, which could never
+  # be true without this: it had been unreachable since the workflow was written.
+  schedule:
+    - cron: "0 3 * * *"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -17,6 +21,11 @@ env:
   # grant fails here rather than in production.
   APP_DATABASE_URL: postgresql://echomind_app:echomind_app@localhost:5432/echomind
   JWT_SECRET: ci-only-secret-not-the-dev-default-000000
+  # Deterministic vectors from scripts/stub_embeddings.py — see the ingest step.
+  EMBED_BASE_URL: http://127.0.0.1:8099/v1
+  EMBED_MODEL: stub
+  # No cross-encoder on a GitHub runner; ordering is not what these tests assert.
+  RERANKER: "none"
   PYTHONUNBUFFERED: "1"
 
 jobs:
@@ -54,8 +63,24 @@ jobs:
 
       - name: Migrate and seed
         # scripts.seed applies the migrations and loads the mock dataset. Deliberately
-        # not `make seed`, which also embeds the corpus and would need an embedding model.
+        # not `make seed`, which also embeds the corpus — that happens below against the
+        # stub embedder, since a GitHub runner has no GPU.
         run: .venv/bin/python -m scripts.seed
+
+      - name: Start the stub embedder and ingest the corpus
+        # The permission filter is enforcement point 3 of spec 05 and had no CI coverage
+        # at all, because ingesting needs an embedding model. The isolation tests assert
+        # WHO comes back, never how well ranked, so deterministic hashed vectors are
+        # enough to exercise the SQL predicate, the visibility rules and the lab scoping.
+        # Retrieval quality is measured by `make eval` on a machine with a real model.
+        run: |
+          .venv/bin/python -m scripts.stub_embeddings &
+          for i in $(seq 1 30); do
+            curl -sf http://127.0.0.1:8099/health >/dev/null && break
+            sleep 1
+          done
+          curl -sf http://127.0.0.1:8099/health
+          .venv/bin/python -m server.rag.ingest db/corpus
 
       - name: Confirm the app role really is unprivileged
         run: |
@@ -82,9 +107,12 @@ jobs:
           PY
 
       - name: Tests
-        # These four markers need no LLM and no embedding model. Everything else is
-        # covered by the nightly job.
-        run: .venv/bin/pytest -m "seed_counts or tools or sql_guard or tiers" -q
+        # Everything except the three markers that need a served model to mean anything:
+        # `gate` and `agent` judge answer quality, and `llm` is the metric-judge suite.
+        # Selecting by exclusion rather than by listing markers means a new test is
+        # covered by default instead of silently skipped — which is how the approval
+        # write path went untested long enough for a missing grant to survive.
+        run: .venv/bin/pytest -m "not gate and not agent and not llm" -q
 
       - name: UI typecheck and build
         working-directory: ui

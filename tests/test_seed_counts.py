@@ -243,9 +243,8 @@ def test_app_role_can_do_its_job_but_owns_nothing(db):
             "INSERT INTO infinity.invoices (id, account_code, period, total) "
             "VALUES ('inv-probe', 'ACC-A1', '2026-01', 0)",
         ):
-            with pytest.raises(SQLAlchemyError):
-                with app_engine.begin() as conn:
-                    conn.execute(text(statement))
+            with pytest.raises(SQLAlchemyError), app_engine.begin() as conn:
+                conn.execute(text(statement))
     finally:
         app_engine.dispose()
         # As the owner: the probe rows are scaffolding, and the role under test is

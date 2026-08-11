@@ -77,7 +77,8 @@ def _tool_for_kind(kind: str) -> str:
 
 
 @router.get("/evals")
-def latest_evals(ctx: Ctx = Depends(require_admin), limit: int = Query(default=5, ge=1, le=50)) -> dict:
+def latest_evals(ctx: Ctx = Depends(require_admin),
+                 limit: int = Query(default=5, ge=1, le=50)) -> dict:
     with session_scope() as s:
         rows = s.execute(
             text(

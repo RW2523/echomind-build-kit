@@ -18,7 +18,8 @@ STATUS_FOR_CODE = {"forbidden": 403, "not_found": 404, "conflict": 409, "invalid
 
 
 def _http(exc: ToolError) -> HTTPException:
-    return HTTPException(status_code=STATUS_FOR_CODE.get(exc.code, 400), detail=exc.to_dict()["error"])
+    return HTTPException(status_code=STATUS_FOR_CODE.get(exc.code, 400),
+                         detail=exc.to_dict()["error"])
 
 
 @router.get("")
@@ -47,7 +48,7 @@ def _resume_conversation(action_id: str) -> dict | None:
 
         response = resume_turn(action["thread_id"], action)
         return response.to_dict() if response else None
-    except Exception:  # noqa: BLE001
+    except Exception:
         log.exception("could not resume thread for action %s", action_id)
         return None
 

@@ -21,17 +21,16 @@ import time
 import warnings
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any
 
 from sqlalchemy import text
 
+from evals.metrics import score_all
 from server.agent.graph import run_turn
 from server.auth import Ctx
 from server.config import REPO_ROOT, settings
 from server.db import session_scope
 from server.demo_identities import DEMO_USERS
-from evals.metrics import score_all
 
 warnings.filterwarnings("ignore")
 logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -97,7 +96,7 @@ def _score_knowledge(item: dict, response) -> dict[str, float]:
             question=item["question"],
             retrieved_contexts=_retrieved_contexts(item),
         )
-    except Exception as exc:  # noqa: BLE001 — a judging failure must not abort the run
+    except Exception as exc:
         print(f"    metrics failed: {type(exc).__name__}: {str(exc)[:120]}")
         return {}
     return {
@@ -113,7 +112,7 @@ def _retrieved_contexts(item: dict) -> list[str]:
 
     try:
         chunks = retrieve(item["question"], _ctx(item["user"]), k=8)
-    except Exception:  # noqa: BLE001
+    except Exception:
         return []
     return [f"{c.breadcrumb}\n{c.text}" for c in chunks]
 
@@ -228,7 +227,8 @@ def build_report(results: list[ItemResult], started: datetime) -> tuple[str, dic
         f"{THRESHOLDS['faithfulness']:.2f} | report-only |",
         f"| answer_correctness (knowledge) | {fmt(averages['answer_correctness'])} | "
         f"{THRESHOLDS['answer_correctness']:.2f} | report-only |",
-        f"| context_precision (knowledge) | {fmt(averages['context_precision'])} | — | report-only |",
+        "| context_precision (knowledge) | "
+        f"{fmt(averages['context_precision'])} | — | report-only |",
         f"| data exact-match | {fmt(data_exact)} | 1.000 | **enforced** |",
         f"| redirect/forbidden | {fmt(refusal_rate)} | 1.000 | **enforced** |",
         "",

@@ -69,7 +69,8 @@ async def upload(
     return {
         **result,
         "owner_user_id": ctx.user_id,
-        "note": "Only you can see this. It is private to your account and never retrieved for anyone else.",
+        "note": ("Only you can see this. It is private to your account and never "
+                 "retrieved for anyone else."),
     }
 
 

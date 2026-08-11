@@ -114,7 +114,7 @@ def _document_context(message: str, ctx: Ctx) -> str:
         from server.rag.retrieval import retrieve
 
         chunks = retrieve(message, ctx, k=3)
-    except Exception as exc:  # noqa: BLE001 — context is a bonus, never a blocker
+    except Exception as exc:
         log.warning("could not load document context: %s", exc)
         return ""
     if not chunks:
