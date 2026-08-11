@@ -11,6 +11,7 @@ from __future__ import annotations
 import contextlib
 import logging
 import re
+from collections.abc import Iterable
 from decimal import Decimal
 from typing import Any
 
@@ -25,6 +26,10 @@ log = logging.getLogger("echomind.data")
 # Fields that belong to the plan, not to the tool call. Kept in one place because the
 # entitlement check and the dispatcher must agree on where to find them.
 PLAN_LEVEL_KEYS = ("subject_user_id",)
+
+# get_usage_records' scope, and how an id announces which one it is.
+USAGE_SCOPES = ("user", "lab", "instrument")
+ID_PREFIX_SCOPES = {"u-": "user", "lab-": "lab", "ins-": "instrument"}
 
 VIEW_SCHEMA = """\
 v_bookings(user_id, user_name, lab_id, instrument, facility, starts_at, ends_at, status)
@@ -42,6 +47,7 @@ get_billing_summary(account_code, period)    invoice total and lines, period is 
 get_user_profile(user_id?)                   role, lab, training, account codes
 get_facility_catalog(facility_id?)           facilities, instruments, rates, templates
 check_availability(instrument_id, date_from, date_to)   free slots
+get_project_overview(project_id)             one project: members, spend, allocation
 get_instrument_health(instrument_id)         instrument status"""
 
 PLANNER_SYSTEM = """You plan how to answer a question about the Infinity X platform using
@@ -109,15 +115,20 @@ Absolute rules:
    question asks for a total. Any total you give is recomputed and checked against the
    rows, so give it exactly or not at all.
 3. If the rows do not answer the question, say exactly what they do show instead. When a
-   RESULT FACT already answers the question directly (for example
-   requested_window_free = True), lead with that rather than reinterpreting the rows.
+   RESULT FACT already answers the question directly, lead with it rather than
+   reinterpreting the rows. When one gives a reason something is unavailable or cannot
+   be done, that reason IS the answer: say it first, in plain words.
 4. Write every value exactly as the rows spell it, including decimal places, and with
    no thousands separators. If a row says 412.00, write $412.00 — never $412, even if
    the question wrote it that way. If a row says 5514.50, never write 5,514.50.
 5. RESULT FACTS describe the whole result set, not each row. If it says count = 20,
    there are 20 in total; do not multiply it by the number of rows shown.
 6. Two or three sentences. No preamble, no apology, no "based on the data".
-7. Do not describe the query or the tool. Describe the answer."""
+7. Do not describe the query or the tool. Describe the answer.
+8. Never write a field name. Facts and columns are labelled in ordinary English — use
+   those words or your own. "requested_window_free is False. Conflicting bookings are 0."
+   is two labels that read as a contradiction; "the instrument is under maintenance, so
+   none of its time can be booked" is the answer."""
 
 NUMBER_RE = re.compile(r"\d[\d,]*(?:\.\d+)?")
 
@@ -140,6 +151,20 @@ def _instrument_catalog() -> str:
     return "\n".join(f"  {i} = {n}" for i, n in rows)
 
 
+def _project_catalog() -> str:
+    """Project ids, for the same reason instruments have them: get_project_overview takes
+    an id, people say "the Cortical Cell Atlas", and a model cannot guess the mapping."""
+    from sqlalchemy import text as sql_text
+
+    from server.db import session_scope
+
+    with session_scope() as s:
+        rows = s.execute(
+            sql_text("SELECT id, name FROM infinity.projects ORDER BY name")
+        ).all()
+    return "\n".join(f"  {i} = {n}" for i, n in rows)
+
+
 def _plan(question: str, ctx: Ctx, history: str = "") -> dict[str, Any]:
     may_sql = ctx.is_admin or ctx.is_pi
     system = PLANNER_SYSTEM.format(
@@ -149,7 +174,8 @@ def _plan(question: str, ctx: Ctx, history: str = "") -> dict[str, Any]:
         sql_rules=SQL_RULES if may_sql else NO_SQL_RULE,
     )
     system += ("\n\nInstrument ids (tools take the id, never the display name):\n"
-               + _instrument_catalog())
+               + _instrument_catalog()
+               + "\n\nProject ids (same rule):\n" + _project_catalog())
     plan = chat_json(
         [
             {"role": "system", "content": system},
@@ -298,10 +324,76 @@ def _deterministic_answer(rows: list[dict], question: str) -> str:
         return "The records contain no rows matching that question."
     if len(rows) == 1 and len(rows[0]) == 1:
         (key, value), = rows[0].items()
-        return f"The records show {key} = {value}."
+        return f"The records show {humanise_key(key)}: {value}."
     return (
         f"The records return {len(rows)} row(s). Here they are exactly as stored:\n\n"
         f"{_render_rows(rows)}"
+    )
+
+
+# Field names are the platform's vocabulary, not a working scientist's. Handed the raw
+# keys, the model writes them back: "requested_window_free is False. Conflicting bookings
+# are 0." — two facts that read as a contradiction to anyone who does not know the schema,
+# with the real reason (the instrument was under maintenance) never stated at all. The
+# keys are relabelled before the model ever sees them, and any that survive are rewritten
+# on the way out, because a prompt rule is a request and this is a guarantee.
+_FIELD_LABELS = {
+    "requested_window_free": "the requested window is free",
+    "requested_window": "requested window",
+    "conflicting_bookings": "conflicting bookings",
+    "unavailable_reason": "why it cannot be booked",
+    "bookable": "can be booked at all",
+    "opening_hours": "opening hours",
+    "instrument_name": "instrument",
+    "instrument_id": "instrument",
+    "starts_at": "start time",
+    "ends_at": "end time",
+    "date_from": "from",
+    "date_to": "to",
+    "account_code": "account code",
+    "account_codes": "account codes",
+    "hourly_rate": "hourly rate",
+    "created_at": "created",
+    "updated_at": "last updated",
+    "submitted_at": "submitted",
+    "due_at": "due",
+    "collected_at": "collected",
+    "user_id": "user",
+    "lab_id": "lab",
+    "lab_ids": "labs",
+    "facility_id": "facility",
+    "template_id": "request template",
+    "booking_id": "booking",
+    "request_id": "request",
+    "sample_id": "sample",
+    "project_id": "project",
+    "total_cost": "total cost",
+    "total_hours": "total hours",
+    "row_count": "rows returned",
+    "free_slots": "free slots",
+}
+
+# Two or more lowercase words joined by underscores — a schema identifier, never English.
+_IDENTIFIER_RE = re.compile(r"\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b")
+
+
+def humanise_key(key: str) -> str:
+    """A field name as a person would say it."""
+    return _FIELD_LABELS.get(key.lower(), key.replace("_", " "))
+
+
+def humanise_field_names(text: str, keys: Iterable[str]) -> str:
+    """Rewrite leaked identifiers, and only ones that are genuinely field names.
+
+    Restricted to keys present in this result, so a *value* that happens to contain an
+    underscore — a status of `in_progress`, a template id — is left exactly as stored.
+    Rule 4 says values are spelled the way the record spells them, and that outranks
+    tidiness.
+    """
+    known = {k.lower() for k in keys}
+    return _IDENTIFIER_RE.sub(
+        lambda m: humanise_key(m.group(0)) if m.group(0).lower() in known else m.group(0),
+        text,
     )
 
 
@@ -366,7 +458,7 @@ def answer_from_rows(
                f"{_render_rows(rows, limit=25)}")
     if scalars:
         context += "\n\nRESULT FACTS (about the whole result, not per row):\n" + "\n".join(
-            f"  {k} = {v}" for k, v in scalars.items()
+            f"  {humanise_key(k)}: {v}" for k, v in scalars.items() if v is not None
         )
     if totals:
         context += "\n\nVERIFIED COLUMN TOTALS (computed from the rows above):\n" + "\n".join(
@@ -383,6 +475,9 @@ def answer_from_rows(
     )
 
     draft = canonicalize_numbers(draft.strip(), rows, scalars)
+    draft = humanise_field_names(
+        draft, set(scalars) | {key for row in rows for key in row}
+    )
 
     offenders = verify_numbers(draft, rows, question, scalars)
     if offenders:
@@ -412,6 +507,28 @@ def _normalise_plan(plan: dict[str, Any]) -> dict[str, Any]:
         if key in arguments:
             plan.setdefault(key, arguments.pop(key))
             log.info("plan had %s nested inside arguments; lifted to plan level", key)
+
+    # get_usage_records takes scope user|lab|instrument, and roughly one plan in three
+    # for "how many hours is that in total?" invented a fourth ("total", "all"), which
+    # turned a correct follow-up into a lookup failure.
+    #
+    # Repaired only where the repair cannot be wrong, so nothing is guessed. The id says
+    # what kind of thing it is — u-alice is a user, lab-a is a lab, ins-miseq is an
+    # instrument — and scope lab or instrument means nothing without an id saying which,
+    # so a bad scope carrying none can only have meant the caller. An id whose prefix is
+    # unfamiliar is left alone and the tool's own error stands: inventing a scope when the
+    # question named something specific would answer a question nobody asked.
+    if plan.get("tool") == "get_usage_records":
+        scope = arguments.get("scope")
+        if scope not in (None, *USAGE_SCOPES):
+            subject = str(arguments.get("id") or "")
+            implied = next(
+                (s for prefix, s in ID_PREFIX_SCOPES.items() if subject.startswith(prefix)),
+                None if subject else "user",
+            )
+            if implied:
+                log.info("scope %r is not a scope; %r implies %r", scope, subject, implied)
+                arguments["scope"] = implied
     return plan
 
 
@@ -525,7 +642,25 @@ def _run_tool(plan: dict, ctx: Ctx) -> tuple[list[dict], list[str], dict[str, An
     arguments = plan.get("arguments") or {}
     if not isinstance(arguments, dict):
         arguments = {}
-    result = tools_mod.call(ctx, name, arguments)
+    try:
+        result = tools_mod.call(ctx, name, arguments)
+    except ToolError as exc:
+        # One silent repair, exactly as the SQL path gets one. The planner attached
+        # `user_id` to get_project_overview, which does not take it, and the raw
+        # signature error went to the user: "get_project_overview does not take
+        # 'user_id'". Every read tool is already scoped to the caller server-side, so
+        # dropping an argument the tool does not have narrows nothing that mattered.
+        accepted = tools_mod.accepted_arguments(name)
+        surplus = sorted(set(arguments) - accepted) if accepted else []
+        kept = {k: v for k, v in arguments.items() if k in accepted}
+        # Only repair when the smaller call is actually runnable. Dropping `user_id` from
+        # get_project_overview leaves it with no project_id at all, and retrying that
+        # trades a clear error for a worse one.
+        if (exc.code != "invalid_params" or not surplus
+                or tools_mod.required_arguments(name) - set(kept)):
+            raise
+        log.info("dropping %s that %s does not take, and retrying", surplus, name)
+        result = tools_mod.call(ctx, name, kept)
     return _rows_from_tool_result(result)
 
 
@@ -541,17 +676,41 @@ def _rows_from_tool_result(result: dict) -> tuple[list[dict], list[str], dict[st
                 "instruments", "members"):
         value = result.get(key)
         if isinstance(value, list) and value and isinstance(value[0], dict):
-            scalars = {
-                k: v for k, v in result.items()
-                if isinstance(v, (str, int, float)) and k != key
-            }
-            if isinstance(result.get("totals"), dict):
-                scalars.update(result["totals"])
-            return value, list(value[0]), scalars
+            return value, list(value[0]), _readable_values(result, skip=key)
 
-    flat = {k: v for k, v in result.items() if isinstance(v, (str, int, float, type(None)))}
-    if isinstance(result.get("totals"), dict):
-        flat.update(result["totals"])
+    flat = _readable_values(result)
     if not flat:
         return [], [], {}
     return [flat], list(flat), {}
+
+
+def _readable_values(result: dict, skip: str = "") -> dict[str, Any]:
+    """Everything in a tool result a reader could want, flattened one level.
+
+    This used to keep only str/int/float, which silently dropped every list and every
+    nested object. get_user_profile returns `account_codes` as a list and `lab` as an
+    object, so "what account codes can I charge to?" reached the model as a row that had
+    never contained them — and it answered "no account codes can be charged to" about a
+    user who has one. That is worse than a refusal: it is a confident, specific, wrong
+    answer, produced by obeying golden rule 1 against an incomplete row.
+
+    A value the tool took the trouble to return is a value the answer may use. Lists of
+    objects are the exception — those are rows, and they are rendered as rows.
+    """
+    out: dict[str, Any] = {}
+    for key, value in result.items():
+        if key in (skip, "totals"):
+            continue
+        if value is None or isinstance(value, (str, int, float)):
+            out[key] = value
+        elif isinstance(value, list):
+            if any(isinstance(item, dict) for item in value):
+                continue
+            out[key] = ", ".join(str(item) for item in value)
+        elif isinstance(value, dict):
+            for inner, nested in value.items():
+                if nested is None or isinstance(nested, (str, int, float)):
+                    out[f"{key}_{inner}"] = nested
+    if isinstance(result.get("totals"), dict):
+        out.update(result["totals"])
+    return out

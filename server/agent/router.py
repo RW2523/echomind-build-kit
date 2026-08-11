@@ -34,8 +34,9 @@ Reply only as JSON: {"route": "...", "why": "<10 words"}
 Routes:
 - "data"        the user wants a number, status, date, list or record from the platform:
                 their bookings, usage hours, invoices and charges, request status, sample
-                state, instrument availability, project spend. Anything phrased as
-                "my/our", "how much", "how many", "when", "what is the status".
+                state, instrument availability, project spend, and their own profile —
+                account codes, training records, role, lab membership. Anything phrased
+                as "my/our", "how much", "how many", "when", "what is the status".
 - "action"      the user wants to CHANGE something or produce a document: book an
                 instrument, submit a service request, onboard a new user, generate a
                 report. Requests to do, create, book, submit, register, or generate.
@@ -63,6 +64,11 @@ Worked examples:
 - "Is my Biosafety training still valid?"           -> data (a record)
 - "What does it cost to cancel late?"               -> knowledge (a policy)
 - "How much was lab A charged in March?"            -> data (a record)
+- "How are account codes assigned?"                 -> knowledge (a policy)
+- "Where do I park at the imaging core?"             -> knowledge (facility premises)
+- "What are the opening hours?"                      -> knowledge (facility premises)
+- "What account codes can I charge to?"             -> data (mine, on my profile)
+- "Who is in my project?"                           -> data (a record)
 
 - "What does my uploaded protocol say about X?"     -> knowledge (a document)
 - "What is the marker in my note?"                  -> knowledge (a document)
@@ -72,6 +78,12 @@ Other rules:
   invoices, usage, requests, samples, training. "My note", "my protocol", "my uploaded
   document" are knowledge: the answer is inside a document, and documents are knowledge
   even when the document belongs to the asker.
+- Anything about the facility itself — its premises, access, hours, parking, safety,
+  who to contact — is "knowledge", whether or not a document covers it. "out_of_scope" is
+  for subjects the facility has nothing to do with. Getting this wrong costs more than it
+  looks: an uncovered facility question becomes an honest redirect that records a gap for
+  someone to write up, while "out of scope" tells the user they asked the wrong assistant
+  and records nothing.
 - Wanting something to happen is "action", even if phrased as a question
   ("can you book me the confocal on Friday?").
 - Classify only the final message. Earlier turns are context for resolving pronouns:

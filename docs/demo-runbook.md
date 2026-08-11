@@ -23,6 +23,20 @@ Six PASS lines and nothing else. If any scene fails you have 30 minutes to fix i
 is the entire point of running it now rather than discovering it live. `make demo` cleans
 up after itself, so the seed is restored and you can run it again.
 
+Then the one that catches what the scripted scenes cannot:
+
+```bash
+make convo
+```
+
+Whole conversations on a single thread, asserting that turn N does not contradict turn
+N-1. `make demo` and `make eval` were both green while a live three-turn conversation
+called an instrument available one turn after refusing to book it for being under
+maintenance — every scripted scene is one turn deep, and that class of bug only exists
+between turns. Every proposal it makes is declined, so it leaves the seed untouched and
+you can run it as often as you like. **If you drive the UI by hand before the demo, run
+this rather than trusting that yesterday's run still holds.**
+
 Confirm the model is the one you mean to show:
 
 ```bash
@@ -77,6 +91,8 @@ the demo every vendor gives; the one that refuses on purpose is the one they rem
 | UI shows the phone layout | Window under 820px | Widen the window |
 | `/demo/login` returns 404 | `JWT_SECRET` is set but `DEMO_LOGIN_ENABLED` is not | Set `DEMO_LOGIN_ENABLED=true` and restart the API |
 | Approval fails with a privilege error | Migrations not fully applied | `make seed` — 005 grants the app role its three inserts |
+| "must fall within opening hours" | Slot outside 08:00–20:00 UTC | Correct, not a fault — pick a slot inside the window |
+| A booking proposes the wrong instrument | Should not happen; `carry_forward_instrument` pins it to the conversation | Decline it, say so on the spot, and file it — the approval card is exactly why this is survivable |
 
 ## Questions you will be asked
 

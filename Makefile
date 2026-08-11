@@ -20,7 +20,7 @@ ifeq ($(strip $(MCP_PORT)),)
 MCP_PORT := 8090
 endif
 
-.PHONY: help venv up down logs seed api mcp ui test eval demo ingest fmt clean
+.PHONY: help venv up down logs seed api mcp ui test eval demo convo ingest fmt clean
 
 help:
 	@echo "EchoMind Local — targets"
@@ -95,6 +95,11 @@ bench: venv
 
 demo: venv
 	$(PY) -m scripts.demo
+
+# Whole conversations on one thread. Single-turn evals cannot see a turn that
+# contradicts the one before it; this can. Needs `make api` running.
+convo: venv
+	$(PY) -m scripts.conversations
 
 fmt: venv
 	$(VENV)/bin/ruff check --fix . && $(VENV)/bin/ruff format .

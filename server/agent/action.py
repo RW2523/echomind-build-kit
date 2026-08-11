@@ -8,7 +8,8 @@ POST /actions/{id}/approve or /decline.
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
+import re
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import text
@@ -59,6 +60,12 @@ Rules:
 - Use the instrument *id*, never its display name.
 - Never guess an account code: use one of the caller's. If they have none, use null.
 - Timestamps are ISO-8601 with a Z suffix, e.g. 2026-04-02T09:00:00Z.
+- A booking sits inside opening hours ({hours}), ends on the day it starts, and runs no
+  longer than 12 hours, so a whole calendar day is never a valid one. Ask for a start
+  time if the conversation settled only a date.
+- "Submit", "file" or "raise" a request means create_service_request. generate_document
+  produces the three named report templates and nothing else — it is never how a filled
+  form gets submitted.
 - Take the date and time from the conversation. If an earlier turn discussed a specific
   date and window, "book it" means exactly that date and window — do not substitute
   today's date. Fall back to the next occurrence after today only when no date appears
@@ -127,10 +134,190 @@ def _document_context(message: str, ctx: Ctx) -> str:
     )
 
 
+_WORD_QUANTITIES = {
+    "a": 1.0, "an": 1.0, "one": 1.0, "two": 2.0, "three": 3.0, "four": 4.0, "five": 5.0,
+    "six": 6.0, "seven": 7.0, "eight": 8.0, "nine": 9.0, "ten": 10.0, "half an": 0.5,
+    "half": 0.5,
+}
+_DURATION_RE = re.compile(
+    r"\b(?P<qty>\d+(?:\.\d+)?|half\s+an|half|an|a|one|two|three|four|five|six|seven|"
+    r"eight|nine|ten)[\s-]*(?P<unit>hours?|hrs?|h|minutes?|mins?)\b",
+    re.IGNORECASE,
+)
+
+
+def stated_duration(message: str) -> timedelta | None:
+    """The booking length the user said out loud, if they said one.
+
+    "for 2 hours", "90 minutes", "a 2-hour slot", "half an hour".
+    """
+    match = _DURATION_RE.search(message)
+    if match is None:
+        return None
+    raw = re.sub(r"\s+", " ", match.group("qty").strip().lower())
+    try:
+        qty = float(raw) if raw[0].isdigit() else _WORD_QUANTITIES[raw]
+    except (KeyError, ValueError):
+        return None
+    minutes = qty * (60 if match.group("unit").lower().startswith(("h",)) else 1)
+    if not 0 < minutes <= 12 * 60:
+        # Out of range is the tool's refusal to make, with its own wording. Leaving the
+        # planner's window alone keeps that error honest instead of manufacturing one.
+        return None
+    return timedelta(minutes=minutes)
+
+
+def apply_stated_duration(plan: dict[str, Any], message: str) -> dict[str, Any]:
+    """Make the proposed window as long as the user actually asked for.
+
+    The planner resolves "book it" by copying the window out of the conversation, which is
+    right, and then copies it *whole* — so "then book it for 2 hours" after a full-day
+    availability check proposed 00:00 to 00:00 the next day, and the user who asked for
+    two hours was told a booking may not exceed twelve. Deterministic 3/3.
+
+    The end moves, never the start: the start is the one thing the conversation genuinely
+    established. A window that already matches is left untouched, and anything unparseable
+    is left alone rather than guessed at.
+    """
+    if plan.get("tool") != "request_booking":
+        return plan
+    wanted = stated_duration(message)
+    if wanted is None:
+        return plan
+
+    arguments = plan.get("arguments")
+    if not isinstance(arguments, dict):
+        return plan
+    starts_at, ends_at = arguments.get("starts_at"), arguments.get("ends_at")
+    if not isinstance(starts_at, str) or not isinstance(ends_at, str):
+        return plan
+    try:
+        start = datetime.fromisoformat(starts_at.replace("Z", "+00:00"))
+        end = datetime.fromisoformat(ends_at.replace("Z", "+00:00"))
+    except ValueError:
+        return plan
+
+    if end - start == wanted:
+        return plan
+    corrected = (start + wanted).astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    log.info(
+        "user said %s; correcting proposed window %s..%s to end %s",
+        wanted, starts_at, ends_at, corrected,
+    )
+    arguments["ends_at"] = corrected
+    return plan
+
+
+# "Confocal C2", "ins-confocal-c2", or just "C2" — people name instruments by their model
+# number and the planner has to follow. Letters then digits, which is what every model
+# number in the catalogue looks like and what no ordinary word does.
+_MODEL_TOKEN_RE = re.compile(r"\b[A-Za-z]{1,3}\d{1,3}\b")
+
+
+def _instrument_rows() -> list[tuple[str, str]]:
+    with session_scope() as s:
+        return [
+            (r["id"], r["name"])
+            for r in s.execute(
+                text("SELECT id, name FROM infinity.instruments")
+            ).mappings().all()
+        ]
+
+
+def instruments_mentioned(text_: str, rows: list[tuple[str, str]]) -> list[str]:
+    """Instrument ids named in this text, in the order they are mentioned."""
+    hits: dict[str, int] = {}
+    for iid, name in rows:
+        for needle in (name, iid, *_MODEL_TOKEN_RE.findall(name)):
+            match = re.search(rf"(?<![\w-]){re.escape(needle)}(?![\w-])", text_, re.I)
+            if match:
+                hits[iid] = min(hits.get(iid, match.start()), match.start())
+                break
+    return [iid for iid, _ in sorted(hits.items(), key=lambda kv: kv[1])]
+
+
+def carry_forward_instrument(
+    plan: dict[str, Any], message: str, history: str
+) -> dict[str, Any]:
+    """Book the instrument the conversation is about, not a different one.
+
+    "then book it for 2 hours" resolved to Confocal C2 correctly; "make it 3 hours
+    instead" proposed Cryo-EM Titan and "actually just half an hour" proposed Spinning
+    Disk, from the same conversation. Once a follow-up names no instrument the planner
+    has nothing to anchor on and picks one — and "it" in "make it 3 hours" points at the
+    duration, so the instrument has to come from the conversation or from nowhere.
+
+    The approval card would have caught it, which is exactly why it is not a safety bug
+    and exactly why it still has to be fixed: nobody reads a card that is usually right.
+    """
+    if plan.get("tool") != "request_booking":
+        return plan
+    arguments = plan.get("arguments")
+    if not isinstance(arguments, dict):
+        return plan
+
+    rows = _instrument_rows()
+    named_now = instruments_mentioned(message, rows)
+    if len(named_now) == 1:
+        intended = named_now[0]
+    elif named_now:
+        return plan  # genuinely ambiguous — let the tool or the user settle it
+    else:
+        earlier = instruments_mentioned(history, rows)
+        if not earlier:
+            return plan
+        intended = earlier[-1]
+
+    if arguments.get("instrument_id") != intended:
+        log.info(
+            "instrument: planner said %s, conversation says %s",
+            arguments.get("instrument_id"), intended,
+        )
+        arguments["instrument_id"] = intended
+    return plan
+
+
+def require_supplied_identity(plan: dict[str, Any], source: str) -> dict[str, Any]:
+    """An onboarding proposal must name a person the user actually named.
+
+    Asked to "onboard a new user for Lab A", the planner proposed onboarding
+    "New User <newuser@example.com>" — a complete, plausible, entirely fictional pending
+    action. The prompt already says never invent a value; this checks, because a
+    fabricated name and address is the one mistake an approval card is least likely to
+    catch: it looks exactly like a real proposal, and the approver has no way to know the
+    person does not exist.
+
+    `source` is everything the user has actually put in front of us — this message, the
+    conversation, and any document they uploaded — so a name read off a form still passes.
+    """
+    if plan.get("tool") != "create_onboarding_request":
+        return plan
+    arguments = plan.get("arguments")
+    if not isinstance(arguments, dict):
+        return plan
+
+    haystack = source.lower()
+    invented = [
+        name for name in ("name", "email")
+        if not str(arguments.get(name) or "").strip()
+        or str(arguments[name]).strip().lower() not in haystack
+    ]
+    if not invented:
+        return plan
+
+    log.warning("onboarding proposal invented %s; asking instead", invented)
+    return {
+        "tool": None,
+        "missing": invented,
+        "ask": "Who am I onboarding? I need their full name and their email address.",
+    }
+
+
 def plan(message: str, ctx: Ctx, history: str = "") -> dict[str, Any]:
     catalog = _catalog(ctx)
     system = SYSTEM.format(
         tools=WRITE_TOOLS,
+        hours=f"{tools_mod.OPEN_HOUR:02d}:00-{tools_mod.CLOSE_HOUR:02d}:00 UTC",
         today=datetime.now(UTC).date().isoformat(),
         user_id=ctx.user_id,
         role=ctx.role,
@@ -140,13 +327,18 @@ def plan(message: str, ctx: Ctx, history: str = "") -> dict[str, Any]:
     user = message
     if history:
         user = f"{history}\n\nCURRENT REQUEST: {message}"
-    user += _document_context(message, ctx)
+    documents = _document_context(message, ctx)
+    user += documents
 
-    return chat_json(
+    chosen = chat_json(
         [{"role": "system", "content": system}, {"role": "user", "content": user}],
         default={"tool": None, "why": "planner unavailable"},
         max_tokens=400,
     )
+    # What the user actually said wins over what the planner inherited or invented.
+    chosen = apply_stated_duration(chosen, message)
+    chosen = carry_forward_instrument(chosen, message, history)
+    return require_supplied_identity(chosen, f"{message}\n{history}\n{documents}")
 
 
 def propose(

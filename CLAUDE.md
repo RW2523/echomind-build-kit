@@ -53,6 +53,7 @@ The product rule everywhere is **verified or silent**.
     make test    # pytest (markers: tools, rag_isolation, gate, sql_guard)
     make eval    # RAGAS on evals/golden_set.jsonl -> eval_reports/
     make demo    # scripted six-scene run, prints PASS/FAIL per scene
+    make convo   # multi-turn conversations; catches turns that contradict each other
 
 ## How to work
 

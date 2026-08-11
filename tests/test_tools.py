@@ -304,13 +304,27 @@ def test_unexpected_argument_is_a_typed_error_not_a_raw_typeerror(ctxs):
     `call` splatted the argument dict straight into the handler, so a stray key raised a
     bare TypeError whose text reached the screen — an internal signature shown where an
     honest refusal belonged.
+
+    These messages are shown to the user when the data branch cannot repair the call, so
+    they name the argument in words rather than in schema spelling: "subject user id",
+    not `subject_user_id`. The identifier is still identifiable, which is the point.
     """
     with pytest.raises(ToolError) as excinfo:
         T.call(ctxs["bob"], "get_my_bookings", {"subject_user_id": "u-alice"})
     err = excinfo.value
     assert err.code == "invalid_params"
-    assert "subject_user_id" in err.message
-    assert "date_from" in err.hint, "the hint should name what the tool does accept"
+    assert "subject user id" in err.message
+    assert "_" not in err.message, "schema spelling must not reach the reader"
+    assert "date from" in err.hint, "the hint should name what the tool does accept"
+
+
+def test_a_missing_required_argument_is_also_a_typed_error(ctxs):
+    """The mirror image. Checking one direction and not the other only moved the leak:
+    get_project_overview with no project_id raised a bare TypeError from the handler."""
+    with pytest.raises(ToolError) as excinfo:
+        T.call(ctxs["cora"], "get_project_overview", {})
+    assert excinfo.value.code == "invalid_params"
+    assert "project id" in excinfo.value.message
 
 
 def test_valid_arguments_still_dispatch(ctxs):
@@ -427,3 +441,98 @@ def test_a_backwards_range_is_still_an_error(ctxs):
             ctxs["alice"], instrument_id="ins-confocal-c2",
             date_from="2027-12-05", date_to="2027-12-02",
         )
+
+
+# --- regressions from the 2026-08-11 conversation review --------------------------
+
+
+def test_availability_offers_no_slots_on_an_instrument_under_maintenance(ctxs):
+    """The bug: free slots are gaps in the calendar, and a broken instrument has plenty.
+
+    check_availability reported 08:00-20:00 free on an instrument in maintenance, and the
+    agent duly told the user it was available one turn after correctly refusing to book
+    it. The tool result was wrong, so the answer was confidently wrong with an evidence
+    table under it.
+    """
+    out = T.check_availability(
+        ctxs["alice"], instrument_id="ins-lightsheet",
+        date_from="2027-03-31T00:00:00Z", date_to="2027-04-01T00:00:00Z",
+    )
+    assert out["instrument"]["status"] == "maintenance"
+    assert out["bookable"] is False
+    assert out["free_slots"] == [], "a machine nobody may book has no free time"
+    assert out["requested_window_free"] is False
+    assert "maintenance" in out["unavailable_reason"]
+
+
+def test_availability_says_why_rather_than_only_that_it_is_not_free(ctxs):
+    """free = False beside conflicts = 0 reads as a contradiction without the reason."""
+    out = T.check_availability(
+        ctxs["alice"], instrument_id="ins-qtof",
+        date_from="2027-03-31T00:00:00Z", date_to="2027-04-01T00:00:00Z",
+    )
+    assert out["conflicting_bookings"] == 0
+    assert out["requested_window_free"] is False
+    assert out["unavailable_reason"] and "offline" in out["unavailable_reason"]
+
+
+def test_availability_still_offers_slots_on_a_working_instrument(ctxs):
+    """The guard must not silence the ordinary case."""
+    out = T.check_availability(
+        ctxs["alice"], instrument_id="ins-miseq",
+        date_from="2027-02-01T00:00:00Z", date_to="2027-02-03T00:00:00Z",
+    )
+    assert out["bookable"] is True
+    assert out["unavailable_reason"] is None
+    assert out["free_slots"]
+
+
+def test_booking_outside_opening_hours_is_refused(ctxs):
+    """check_availability published 08:00-20:00; request_booking accepted 03:00 anyway."""
+    with pytest.raises(ToolError) as exc:
+        T.request_booking(
+            ctxs["alice"], instrument_id="ins-miseq",
+            starts_at="2027-02-01T03:00:00Z", ends_at="2027-02-01T05:00:00Z",
+            account_code="ACC-A1",
+        )
+    assert "opening hours" in exc.value.message
+
+
+def test_booking_may_not_run_past_closing(ctxs):
+    with pytest.raises(ToolError) as exc:
+        T.request_booking(
+            ctxs["alice"], instrument_id="ins-miseq",
+            starts_at="2027-02-01T19:00:00Z", ends_at="2027-02-01T21:00:00Z",
+            account_code="ACC-A1",
+        )
+    assert "opening hours" in exc.value.message
+
+
+def test_booking_may_not_span_midnight(ctxs):
+    """Under 12 hours, so the duration rule does not catch it."""
+    with pytest.raises(ToolError) as exc:
+        T.request_booking(
+            ctxs["alice"], instrument_id="ins-miseq",
+            starts_at="2027-02-01T19:00:00Z", ends_at="2027-02-02T02:00:00Z",
+            account_code="ACC-A1",
+        )
+    assert "same day" in exc.value.message
+
+
+def test_a_slot_availability_offered_is_a_slot_booking_accepts(ctxs):
+    """The two tools must agree: anything check_availability offers must be bookable.
+
+    This is the invariant both fixes exist to protect. It is asserted rather than
+    described because the pair drifted apart once already.
+    """
+    out = T.check_availability(
+        ctxs["alice"], instrument_id="ins-miseq",
+        date_from="2027-02-01T00:00:00Z", date_to="2027-02-02T00:00:00Z",
+    )
+    for slot in out["free_slots"]:
+        pending = T.request_booking(
+            ctxs["alice"], instrument_id="ins-miseq",
+            starts_at=slot["starts_at"], ends_at=slot["ends_at"],
+            account_code="ACC-A1",
+        )
+        assert pending["action_id"]

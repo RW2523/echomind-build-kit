@@ -21,7 +21,7 @@ import logging
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, time, timedelta
 from decimal import Decimal
 from typing import Any
 
@@ -211,11 +211,17 @@ def check_availability(
     # the same bare date twice. Rejecting that as "date_to must be after date_from" is
     # technically correct and useless: the caller asked a perfectly clear question. A
     # date with no time means the whole of that day.
-    if end == start and _is_date_only(date_from) and _is_date_only(date_to):
+    # A planner asked for one day writes the same value twice, and it is as likely to
+    # spell it "2027-04-02T00:00:00Z" as "2027-04-02". Midnight to midnight is exactly
+    # what a bare date expands to, so those are the same request and refusing one while
+    # accepting the other turned "is LS7 free on 2 April?" into a lookup failure. A
+    # repeated value carrying a real time (14:00 to 14:00) is still a mistake.
+    midnight = start.astimezone(UTC).timetz().replace(tzinfo=None) == time(0, 0)
+    if end == start and (midnight or (_is_date_only(date_from) and _is_date_only(date_to))):
         end = start + timedelta(days=1)
 
     if end <= start:
-        raise invalid_params("date_to must be after date_from.")
+        raise invalid_params("The end of the window must be after the start.")
     if (end - start).days > 31:
         raise invalid_params("Window is limited to 31 days.", "Narrow the date range.")
 
@@ -242,6 +248,7 @@ def check_availability(
         ).mappings().all()
 
     busy_intervals = [(b["starts_at"], b["ends_at"]) for b in busy]
+    bookable = instrument["status"] == "available"
     free: list[dict[str, str]] = []
     day = start.astimezone(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
     while day < end:
@@ -258,11 +265,19 @@ def check_availability(
             free.append({"starts_at": cursor.isoformat(), "ends_at": close_at.isoformat()})
         day += timedelta(days=1)
 
+    # A free slot is a gap in the *calendar*, and an instrument under maintenance has a
+    # calendar full of them. Reporting those gaps is how "Light Sheet LS7 is currently
+    # maintenance" became "Light Sheet LS7 is available" one turn later: the tool handed
+    # the model a twelve-hour bookable-looking window for a machine that request_booking
+    # rejects outright, and a wrong tool result becomes a confident wrong answer with an
+    # evidence table under it. Nothing is free on an instrument nobody may book.
+    if not bookable:
+        free = []
+
     # Whether the *requested* window is free is the question actually being asked, so the
     # tool answers it rather than leaving interval arithmetic to the model.
-    window_free = (
-        instrument["status"] == "available"
-        and not any(b_start < end and b_end > start for b_start, b_end in busy_intervals)
+    window_free = bookable and not any(
+        b_start < end and b_end > start for b_start, b_end in busy_intervals
     )
 
     return {
@@ -276,6 +291,14 @@ def check_availability(
         "instrument_name": instrument["name"],
         "requested_window": f"{start.isoformat()} to {end.isoformat()}",
         "requested_window_free": window_free,
+        "bookable": bookable,
+        # Stated positively so the answer can lead with the real blocker. Without it the
+        # only signal that maintenance was the cause is free = False alongside
+        # conflicts = 0, which reads as a contradiction rather than a reason.
+        "unavailable_reason": (
+            None if bookable
+            else f"{instrument['name']} is {instrument['status']} and cannot be booked"
+        ),
         "conflicting_bookings": len(busy),
         "window": {"from": start.isoformat(), "to": end.isoformat()},
         "opening_hours": f"{OPEN_HOUR:02d}:00-{CLOSE_HOUR:02d}:00 UTC",
@@ -350,7 +373,10 @@ def get_usage_records(ctx: Ctx, scope: str = "user", id: str | None = None,
         else:
             # Instrument-wide usage exposes other people's hours: PI (own labs) or admin.
             if not id:
-                raise invalid_params("scope='instrument' requires the instrument id in `id`.")
+                raise invalid_params(
+                    "Usage for an instrument needs to say which instrument.",
+                    "Name the instrument, e.g. Confocal C2.",
+                )
             if not (ctx.is_admin or ctx.is_pi):
                 raise forbidden()
             where = "instrument = (SELECT name FROM infinity.instruments WHERE id = :target)"
@@ -827,6 +853,26 @@ def request_booking(ctx: Ctx, instrument_id: str, starts_at: str, ends_at: str,
     if (end - start) > timedelta(hours=12):
         raise invalid_params("A single booking may not exceed 12 hours.")
 
+    # check_availability publishes 08:00-20:00 and computes its free slots inside those
+    # hours; this tool accepted 03:00 anyway. Two tools disagreeing about the same rule is
+    # the bug — a caller who books exactly what availability offered is fine, and one who
+    # asks for the small hours is told the rule rather than silently given a slot the
+    # facility does not honour.
+    start_utc, end_utc = start.astimezone(UTC), end.astimezone(UTC)
+    if start_utc.date() != (end_utc - timedelta(microseconds=1)).date():
+        raise invalid_params(
+            "A booking must start and finish on the same day.",
+            "Book each day separately.",
+        )
+    open_at = start_utc.replace(hour=OPEN_HOUR, minute=0, second=0, microsecond=0)
+    close_at = start_utc.replace(hour=CLOSE_HOUR, minute=0, second=0, microsecond=0)
+    if start_utc < open_at or end_utc > close_at:
+        raise invalid_params(
+            f"Bookings must fall within opening hours "
+            f"({OPEN_HOUR:02d}:00-{CLOSE_HOUR:02d}:00 UTC).",
+            f"Pick a slot between {OPEN_HOUR:02d}:00 and {CLOSE_HOUR:02d}:00 UTC.",
+        )
+
     with session_scope() as s:
         instrument = s.execute(
             text("SELECT id, name, status FROM infinity.instruments WHERE id = :id"),
@@ -917,10 +963,14 @@ def generate_document(ctx: Ctx, template: str,
         _check_month(params.get("period"))
 
     payload = {"template": template, "params": params, "format": fmt}
-    preview = (
-        f"Generate {template.replace('_', ' ')} as {fmt.upper()} "
-        f"({params or 'no parameters'})"
+    # The approval card is the last thing a human reads before this happens, so it is
+    # written for them: a repr'd dict put `{'account_code': 'ACC-A1', 'lab_id': ...}` on
+    # screen, which is the schema talking, not the proposal.
+    detail = (
+        ", ".join(f"{k.replace('_', ' ')} {v}" for k, v in sorted(params.items()))
+        if params else "no parameters"
     )
+    preview = f"Generate {template.replace('_', ' ')} as {fmt.upper()} ({detail})"
     return actions_mod.create_pending(ctx, "generate_document", payload, preview)
 
 
@@ -1019,6 +1069,34 @@ def _accepted_parameters(handler: Callable) -> tuple[set[str], bool]:
     return names, takes_kwargs
 
 
+def _spoken(names: list[str]) -> str:
+    """Argument names as a sentence. These strings reach users, so `date_from` does not."""
+    return ", ".join(n.replace("_", " ") for n in names)
+
+
+def accepted_arguments(name: str) -> set[str]:
+    """The argument names a tool actually takes, for callers that want to repair a plan."""
+    spec = TOOLS.get(name)
+    if spec is None:
+        return set()
+    accepted, takes_kwargs = _accepted_parameters(spec.handler)
+    return set(accepted) if not takes_kwargs else set()
+
+
+def required_arguments(name: str) -> set[str]:
+    """Arguments with no default — the ones a caller must supply."""
+    spec = TOOLS.get(name)
+    if spec is None:
+        return set()
+    params = inspect.signature(spec.handler).parameters.values()
+    return {
+        p.name for p in params
+        if p.name != "ctx"
+        and p.default is inspect.Parameter.empty
+        and p.kind in (p.POSITIONAL_OR_KEYWORD, p.KEYWORD_ONLY)
+    }
+
+
 def call(ctx: Ctx, name: str, arguments: dict[str, Any] | None = None) -> dict[str, Any]:
     """Single dispatch point used by the MCP server and the agent.
 
@@ -1039,7 +1117,18 @@ def call(ctx: Ctx, name: str, arguments: dict[str, Any] | None = None) -> dict[s
         unexpected = sorted(set(arguments) - accepted)
         if unexpected:
             raise invalid_params(
-                f"{name} does not take {', '.join(repr(u) for u in unexpected)}.",
-                f"{name} accepts: {', '.join(sorted(accepted)) or 'no arguments'}.",
+                f"That lookup does not take {_spoken(unexpected)}.",
+                f"It takes {_spoken(sorted(accepted)) or 'no arguments'}.",
             )
+
+    # The mirror image, and the same bug: an argument a tool requires and did not get
+    # reached the handler and raised a bare TypeError — "get_project_overview() missing 1
+    # required positional argument: 'project_id'" — which is a stack-trace fragment where
+    # a refusal belongs. Checking one direction and not the other only moved the leak.
+    missing = sorted(required_arguments(name) - set(arguments))
+    if missing:
+        raise invalid_params(
+            f"That lookup needs {_spoken(missing)}.",
+            f"Say which {_spoken(missing)} you mean.",
+        )
     return spec.handler(ctx, **arguments)
