@@ -18,6 +18,7 @@ from langgraph.types import Command, interrupt
 from server.agent import action as action_branch
 from server.agent import data as data_branch
 from server.agent import knowledge as knowledge_branch
+from server.agent import prompts
 from server.agent import router as router_mod
 from server.agent.responses import AgentResponse, scope_response
 from server.auth import Ctx
@@ -105,6 +106,9 @@ def ctx_from_dict(data: dict[str, Any]) -> Ctx:
 
 def node_route(state: AgentState) -> dict[str, Any]:
     with tracer.span("node.route") as span:
+        # Which prompts were in force for this turn. Six weeks later a trace that says
+        # "the gate refused this" is only half an answer without them.
+        span.set(prompt_versions=prompts.ensure_registered())
         chosen, why = router_mod.route(
             state["message"], history=format_history(state.get("history"))
         )
@@ -114,7 +118,10 @@ def node_route(state: AgentState) -> dict[str, Any]:
 
 def node_knowledge(state: AgentState) -> dict[str, Any]:
     with tracer.span("node.knowledge") as span:
-        response = knowledge_branch.answer(state["message"], ctx_from_dict(state["ctx"]))
+        response = knowledge_branch.answer(
+            state["message"], ctx_from_dict(state["ctx"]),
+            history=format_history(state.get("history")),
+        )
         response.route = "knowledge"
         span.set(
             route="knowledge",

@@ -142,3 +142,17 @@ def knowledge_gaps(ctx: Ctx = Depends(require_admin),
 
     rows = gaps.ranked(limit=limit, days=days)
     return {"window_days": days, "gaps": rows, "count": len(rows)}
+
+
+@router.get("/prompts")
+def prompt_versions(ctx: Ctx = Depends(require_admin)) -> dict:
+    """Which prompt produced what, six weeks later.
+
+    The version is a hash of the prompt text, so it cannot drift from what actually ran —
+    a hand-bumped number is wrong exactly when it matters, after someone tweaked a
+    sentence to fix one eval case and forgot.
+    """
+    from server.agent.prompts import ensure_registered
+
+    versions = ensure_registered()
+    return {"prompts": versions, "count": len(versions)}

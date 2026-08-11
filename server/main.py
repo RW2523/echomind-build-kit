@@ -21,6 +21,7 @@ from server.api import actions as actions_api  # noqa: E402
 from server.api import admin as admin_api  # noqa: E402
 from server.api import chat as chat_api  # noqa: E402
 from server.api import demo_login as demo_login_api  # noqa: E402
+from server.api import me as me_api  # noqa: E402
 from server.api import tools as tools_api  # noqa: E402
 from server.api import uploads as uploads_api  # noqa: E402
 from server.mcp.server import http_app as mcp_http_app  # noqa: E402
@@ -63,6 +64,7 @@ app.include_router(tools_api.router)
 app.include_router(actions_api.router)
 app.include_router(uploads_api.router)
 app.include_router(admin_api.router)
+app.include_router(me_api.router)
 app.include_router(demo_login_api.router)
 app.mount("/mcp", _mcp_app)
 

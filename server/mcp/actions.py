@@ -18,6 +18,7 @@ from typing import Any
 
 from sqlalchemy import text
 
+from server.agent import memory
 from server.auth import Ctx
 from server.config import REPO_ROOT
 from server.db import session_scope
@@ -219,6 +220,11 @@ def approve(ctx: Ctx, action_id: str) -> dict[str, Any]:
             )
             audit(s, action_id, "failed", ctx.user_id, action["tool"], {"error": str(exc)})
         return {"action_id": action_id, "status": "failed", "error": str(exc)}
+
+    # Learn the caller's preferences from what they actually approved — never from what
+    # was merely proposed. Preferences only pre-fill the next proposal; they are never
+    # read back as facts. See server/agent/memory.py.
+    memory.learn_from_execution(action["user_id"], action["tool"], action["payload"], result)
 
     with session_scope() as s:
         s.execute(

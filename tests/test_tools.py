@@ -397,3 +397,33 @@ def test_the_format_reaches_the_approval_preview(ctxs):
     pending = T.generate_document(ctxs["alice"], template="usage_report", format="pdf")
     assert "PDF" in pending["payload_preview"]
     assert pending["payload"]["format"] == "pdf"
+
+
+def test_a_single_bare_date_means_that_whole_day(ctxs):
+    """Regression: "Is it free on Thursday?" makes a planner write the same date twice,
+    and rejecting that as "date_to must be after date_from" is technically correct and
+    useless — the caller asked a perfectly clear question. It made a demo scene fail
+    about one run in five."""
+    out = T.check_availability(
+        ctxs["alice"], instrument_id="ins-confocal-c2",
+        date_from="2027-12-02", date_to="2027-12-02",
+    )
+    assert "free_slots" in out
+
+
+def test_the_same_instant_twice_is_still_an_error(ctxs):
+    """A zero-length window with times on it is a mistake, not a day."""
+    with pytest.raises(ToolError) as excinfo:
+        T.check_availability(
+            ctxs["alice"], instrument_id="ins-confocal-c2",
+            date_from="2027-12-02T14:00", date_to="2027-12-02T14:00",
+        )
+    assert excinfo.value.code == "invalid_params"
+
+
+def test_a_backwards_range_is_still_an_error(ctxs):
+    with pytest.raises(ToolError):
+        T.check_availability(
+            ctxs["alice"], instrument_id="ins-confocal-c2",
+            date_from="2027-12-05", date_to="2027-12-02",
+        )

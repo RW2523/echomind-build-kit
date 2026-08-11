@@ -391,3 +391,74 @@ def test_carry_back_does_not_overwrite_an_existing_citation():
         "Barcodes are `BC` plus six digits [2]. This is specified in source [1]."
     )
     assert cleaned == "Barcodes are `BC` plus six digits [2]."
+
+
+# --- follow-ups are resolved before retrieval sees them -------------------------------
+
+REWRITE_HISTORY = (
+    "Q: How long must the confocal lasers warm up?\n"
+    "A: The confocal lasers must warm up for 30 minutes before acquiring any "
+    "quantitative data."
+)
+
+
+def test_a_standalone_question_is_never_sent_to_the_model():
+    """Most turns need nothing; the cheap check keeps the model out of the loop."""
+    from server.agent import rewrite
+
+    assert not rewrite.needs_rewrite("What format do sample barcodes use?", REWRITE_HISTORY)
+    assert not rewrite.needs_rewrite("Anything at all", "")
+
+
+def test_a_pronoun_or_a_continuation_is_flagged_for_rewriting():
+    from server.agent import rewrite
+
+    for question in ("How long is that?", "And the cost?", "Is it optional?", "The warm-up?"):
+        assert rewrite.needs_rewrite(question, REWRITE_HISTORY), question
+
+
+@pytest.mark.llm
+def test_a_follow_up_is_resolved_into_a_question_that_stands_alone():
+    """Retrieval sees only the words it is given: "how long is that" is five stopwords
+    and a pronoun, and the gate then correctly refuses a question the corpus can answer."""
+    from server.agent import rewrite
+
+    resolved = rewrite.standalone("And how long is that exactly?", REWRITE_HISTORY)
+    assert resolved.lower() != "and how long is that exactly?"
+    assert "confocal" in resolved.lower() or "laser" in resolved.lower()
+
+
+@pytest.mark.llm
+def test_a_standalone_question_survives_the_rewriter_untouched():
+    from server.agent import rewrite
+
+    question = "What format do sample barcodes use?"
+    assert rewrite.standalone(question, REWRITE_HISTORY) == question
+
+
+@pytest.mark.llm
+def test_the_follow_up_gets_a_cited_answer_instead_of_a_redirect(ctxs):
+    from server.agent.knowledge import answer
+
+    response = answer("And how long is that exactly?", ctxs["alice"], history=REWRITE_HISTORY)
+    assert response.response_type == "answer"
+    assert "30" in response.text
+    assert response.citations
+
+
+def test_an_over_long_rewrite_is_discarded(monkeypatch):
+    """The failure that matters is the model answering instead of rewriting."""
+    from server.agent import rewrite
+
+    monkeypatch.setattr(
+        rewrite, "chat_json", lambda *a, **k: {"question": "word " * 80}
+    )
+    original = "How long is that?"
+    assert rewrite.standalone(original, REWRITE_HISTORY) == original
+
+
+def test_a_failed_rewrite_returns_the_original(monkeypatch):
+    from server.agent import rewrite
+
+    monkeypatch.setattr(rewrite, "chat_json", lambda *a, **k: {"question": ""})
+    assert rewrite.standalone("How long is that?", REWRITE_HISTORY) == "How long is that?"

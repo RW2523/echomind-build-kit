@@ -327,3 +327,190 @@ def test_demo_login_can_be_opened_deliberately_with_a_strong_secret(monkeypatch)
     open front door by also keeping the secret printed in .env.example — which is in a
     public repository, and would have let anyone forge an admin token."""
     assert _enabled_with(monkeypatch, secret="s" * 48, flag=True)
+
+
+# --- memory holds preferences, never facts --------------------------------------------
+
+
+def test_memory_is_learned_from_approval_and_prefills_the_next_proposal(ctxs):
+    """The whole feature: approve a booking on a code, and the next one is pre-filled.
+
+    Pre-filled, not acted on — the value lands in a proposal the user still approves,
+    and it is visible on the card, so a wrong guess costs one click.
+    """
+    from sqlalchemy import text as sql_text
+
+    from server.agent import memory
+    from server.db import owner_session
+
+    alice = ctxs["alice"]
+    memory.forget(alice.user_id)
+    created = []
+    try:
+        first = T.request_booking(
+            alice, instrument_id="ins-confocal-c2",
+            starts_at="2027-06-01T09:00:00Z", ends_at="2027-06-01T10:00:00Z",
+            account_code="ACC-A1",
+        )
+        created.append(first["action_id"])
+        assert actions_mod.approve(alice, first["action_id"])["status"] == "executed"
+        assert memory.recall(alice.user_id)[memory.ACCOUNT_CODE] == "ACC-A1"
+
+        second = T.request_booking(
+            alice, instrument_id="ins-confocal-c2",
+            starts_at="2027-06-02T09:00:00Z", ends_at="2027-06-02T10:00:00Z",
+        )
+        created.append(second["action_id"])
+        assert second["payload"]["account_code"] == "ACC-A1"
+        assert "ACC-A1" in second["payload_preview"], "the approver must see the guess"
+    finally:
+        with owner_session() as s:
+            for action_id in created:
+                s.execute(sql_text("DELETE FROM echomind.actions WHERE id = :i"), {"i": action_id})
+            s.execute(sql_text(
+                "DELETE FROM infinity.bookings WHERE starts_at IN "
+                "('2027-06-01T09:00:00Z','2027-06-02T09:00:00Z')"))
+        memory.forget(alice.user_id)
+
+
+def test_without_memory_the_account_code_is_still_required(ctxs):
+    """Nothing is invented: no remembered code means the caller must say which."""
+    from server.agent import memory
+
+    memory.forget(ctxs["bob"].user_id)
+    with pytest.raises(ToolError) as excinfo:
+        T.request_booking(
+            ctxs["bob"], instrument_id="ins-miseq",
+            starts_at="2027-06-03T09:00:00Z", ends_at="2027-06-03T10:00:00Z",
+        )
+    assert excinfo.value.code == "invalid_params"
+
+
+def test_memory_only_stores_the_closed_set_of_keys():
+    """An open key set is how "preferences" drifts into being a cache of stale facts."""
+    from server.agent import memory
+
+    memory.forget("u-probe-memory")
+    memory.remember("u-probe-memory", "favourite_number", "42")
+    assert memory.recall("u-probe-memory") == {}
+
+
+def test_changing_a_preference_resets_its_confirmation_count():
+    """Someone who moves to a new account code has not confirmed the old one twice."""
+    from sqlalchemy import text as sql_text
+
+    from server.agent import memory
+    from server.db import owner_session
+
+    user = "u-probe-memory"
+    memory.forget(user)
+    try:
+        memory.remember(user, memory.ACCOUNT_CODE, "ACC-A1")
+        memory.remember(user, memory.ACCOUNT_CODE, "ACC-A1")
+        with owner_session() as s:
+            hits = s.execute(
+                sql_text("SELECT hits FROM echomind.user_memory WHERE user_id=:u AND key=:k"),
+                {"u": user, "k": memory.ACCOUNT_CODE},
+            ).scalar_one()
+        assert hits == 2
+
+        memory.remember(user, memory.ACCOUNT_CODE, "ACC-B1")
+        with owner_session() as s:
+            row = s.execute(
+                sql_text("SELECT value, hits FROM echomind.user_memory "
+                         "WHERE user_id=:u AND key=:k"),
+                {"u": user, "k": memory.ACCOUNT_CODE},
+            ).one()
+        assert row.value == "ACC-B1" and row.hits == 1
+    finally:
+        memory.forget(user)
+
+
+def test_a_user_reads_and_clears_only_their_own_memory(client, tokens):
+    """The key is the verified caller id, never a parameter."""
+    body = client.get("/me/memory", headers={"Authorization": f"Bearer {tokens['alice']}"}).json()
+    assert body["user_id"] == "u-alice"
+    assert client.get("/me/memory").status_code == 401
+
+
+# --- the SSO seam: institutional claims -> the context permissions read ---------------
+
+
+def test_azure_ad_group_claims_map_to_a_role_and_labs():
+    from server.sso import ctx_from_idp_claims
+
+    ctx = ctx_from_idp_claims({
+        "sub": "u-asha", "name": "Asha Patel",
+        "groups": ["lab-lab-a", "principal-investigators", "some-unrelated-group"],
+    })
+    assert ctx.role == "pi"
+    assert ctx.lab_ids == ("lab-a",)
+    assert ctx.is_pi and not ctx.is_admin
+
+
+def test_shibboleth_sends_a_semicolon_string_not_a_list():
+    """Iterating that string character by character silently grants nothing at all."""
+    from server.sso import ClaimMapping, ctx_from_idp_claims
+
+    mapping = ClaimMapping(user_id="eduPersonPrincipalName", groups="isMemberOf")
+    ctx = ctx_from_idp_claims(
+        {
+            "eduPersonPrincipalName": "asha@uni.example",
+            "isMemberOf": "lab-lab-a;principal-investigators",
+        },
+        mapping=mapping,
+    )
+    assert ctx.user_id == "asha@uni.example"
+    assert ctx.role == "pi"
+    assert ctx.lab_ids == ("lab-a",)
+
+
+def test_the_most_privileged_group_wins():
+    """Someone in both groups is an admin, not whichever the dictionary yielded first."""
+    from server.sso import ctx_from_idp_claims
+
+    ctx = ctx_from_idp_claims(
+        {"sub": "u-cora", "groups": ["principal-investigators", "facility-admins"]}
+    )
+    assert ctx.role == "admin"
+
+
+def test_group_membership_is_matched_case_insensitively():
+    """Active Directory is not consistent about case."""
+    from server.sso import ctx_from_idp_claims
+
+    ctx = ctx_from_idp_claims({"sub": "u-cora", "groups": ["Facility-Admins"]})
+    assert ctx.role == "admin"
+
+
+def test_an_unmapped_user_gets_the_least_privilege():
+    from server.sso import ctx_from_idp_claims
+
+    ctx = ctx_from_idp_claims({"sub": "u-new", "groups": []})
+    assert ctx.role == "user"
+    assert ctx.lab_ids == () and ctx.facility_ids == ()
+
+
+def test_explicit_list_claims_beat_group_name_encoding():
+    """An institution that configures the claim has said what it means."""
+    from server.sso import ctx_from_idp_claims
+
+    ctx = ctx_from_idp_claims(
+        {"sub": "u-x", "groups": ["lab-lab-z"], "lab_ids": ["lab-a", "lab-b"]}
+    )
+    assert ctx.lab_ids == ("lab-a", "lab-b")
+
+
+def test_unverified_claims_are_refused_outright():
+    """A mapping that silently accepted unverified claims is the worst bug available."""
+    from server.sso import ctx_from_idp_claims
+
+    with pytest.raises(ValueError, match="verified"):
+        ctx_from_idp_claims({"sub": "u-attacker", "groups": ["facility-admins"]}, verified=False)
+
+
+def test_claims_without_a_subject_are_refused():
+    from server.sso import ctx_from_idp_claims
+
+    with pytest.raises(ValueError, match="missing"):
+        ctx_from_idp_claims({"groups": ["facility-admins"]})

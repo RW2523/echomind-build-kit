@@ -14,6 +14,7 @@ from typing import Any
 from sqlalchemy import text
 
 from server.agent.llm import chat_json
+from server.agent.prompts import register
 from server.agent.responses import AgentResponse
 from server.auth import Ctx
 from server.db import session_scope
@@ -248,3 +249,6 @@ def confirmation_text(action: dict[str, Any]) -> str:
             f"({result['bytes']} bytes)."
         )
     return f"Done. The action completed with status '{status}'."
+
+# Versioned by content hash — see server/agent/prompts.py.
+VERSION_SYSTEM = register("action.system", SYSTEM)

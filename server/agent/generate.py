@@ -6,6 +6,7 @@ import logging
 import re
 
 from server.agent.llm import chat
+from server.agent.prompts import register
 from server.agent.responses import Citation
 from server.rag.retrieval import RetrievedChunk
 
@@ -207,3 +208,6 @@ def generate(question: str, chunks: list[RetrievedChunk]) -> tuple[str, list[Cit
         return text, [], False
 
     return text, build_citations(chunks, indices), True
+
+# Versioned by content hash — see server/agent/prompts.py.
+VERSION_SYSTEM = register("generate.system", SYSTEM)

@@ -9,6 +9,7 @@ import logging
 import re
 
 from server.agent.llm import chat_json
+from server.agent.prompts import register
 
 log = logging.getLogger("echomind.router")
 
@@ -112,3 +113,6 @@ def route(message: str, history: str = "") -> tuple[str, str]:
     why = str(verdict.get("why", ""))[:120]
     log.info("route=%s (%s) for %r", chosen, why, message[:80])
     return chosen, why
+
+# Versioned by content hash — see server/agent/prompts.py.
+VERSION_SYSTEM = register("router.system", SYSTEM)

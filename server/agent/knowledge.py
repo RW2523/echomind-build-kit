@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 
 from server.agent import faithfulness as faith
-from server.agent import gaps
+from server.agent import gaps, rewrite
 from server.agent import gate as gate_mod
 from server.agent import generate as gen
 from server.agent.gate import GateResult
@@ -39,15 +39,18 @@ def _redirect(question: str, gate: GateResult, extra: dict | None = None,
     )
 
 
-def answer(question: str, ctx: Ctx, k: int = 8) -> AgentResponse:
-    chunks = retrieve(question, ctx, k=k)
-    gate = gate_mod.evaluate(question, chunks)
+def answer(question: str, ctx: Ctx, k: int = 8, history: str = "") -> AgentResponse:
+    # Retrieval and the judges work on the resolved question; the user's own words are
+    # what they see. "How long is that?" retrieves on five stopwords otherwise.
+    resolved = rewrite.standalone(question, history)
+    chunks = retrieve(resolved, ctx, k=k)
+    gate = gate_mod.evaluate(resolved, chunks)
 
     if not gate.passed:
         log.info("gate blocked answer: %s (top_score=%.3f)", gate.reason, gate.top_score)
         return _redirect(question, gate, ctx=ctx)
 
-    text, citations, sufficient = gen.generate(question, chunks)
+    text, citations, sufficient = gen.generate(resolved, chunks)
     if not sufficient:
         # The generator saw the same sources the gate approved and still declined, or
         # produced nothing citable. Either way we do not ship it.
@@ -55,7 +58,7 @@ def answer(question: str, ctx: Ctx, k: int = 8) -> AgentResponse:
         gate.reason = "no_coverage"
         return _redirect(question, gate, {"declined_at": "generation"}, ctx=ctx)
 
-    verdict = faith.check(text, chunks, citations, question=question)
+    verdict = faith.check(text, chunks, citations, question=resolved)
 
     # Claims the judge traced to a source other than the one cited: repoint the marker and
     # rebuild the citation list, so what the reader clicks is the document that actually

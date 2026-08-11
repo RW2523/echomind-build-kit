@@ -13,6 +13,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from server.agent.llm import chat_json
+from server.agent.prompts import register
 from server.agent.responses import Citation
 from server.config import settings
 from server.rag.retrieval import RetrievedChunk
@@ -305,3 +306,7 @@ def check(
         passed=passed, score=score, checked=len(verdicts),
         unsupported=unsupported, verdicts=verdicts, corrections=corrections,
     )
+
+# Versioned by content hash — see server/agent/prompts.py.
+VERSION_JUDGE_SYSTEM = register("faithfulness.judge", JUDGE_SYSTEM)
+VERSION_REPAIR_SYSTEM = register("faithfulness.repair", REPAIR_SYSTEM)

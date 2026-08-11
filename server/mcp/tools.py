@@ -28,6 +28,7 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 
+from server.agent import memory
 from server.auth import Ctx
 from server.db import ro_session, session_scope
 from server.mcp import actions as actions_mod
@@ -62,6 +63,11 @@ def _parse_dt(value: str, field_name: str) -> datetime:
             "Use e.g. 2026-03-18T09:00:00Z.",
         ) from exc
     return dt if dt.tzinfo else dt.replace(tzinfo=UTC)
+
+
+def _is_date_only(value: str) -> bool:
+    """True for 2027-12-02, false for 2027-12-02T14:00 — a day, not an instant."""
+    return bool(re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(value).strip()))
 
 
 def _check_month(month: str | None) -> str | None:
@@ -200,6 +206,14 @@ def check_availability(
 ) -> dict[str, Any]:
     start = _parse_dt(date_from, "date_from")
     end = _parse_dt(date_to, "date_to")
+
+    # "Is it free on Thursday?" is one day, and a planner asked for a single day writes
+    # the same bare date twice. Rejecting that as "date_to must be after date_from" is
+    # technically correct and useless: the caller asked a perfectly clear question. A
+    # date with no time means the whole of that day.
+    if end == start and _is_date_only(date_from) and _is_date_only(date_to):
+        end = start + timedelta(days=1)
+
     if end <= start:
         raise invalid_params("date_to must be after date_from.")
     if (end - start).days > 31:
@@ -793,7 +807,19 @@ def create_service_request(ctx: Ctx, template_id: str,
 
 
 def request_booking(ctx: Ctx, instrument_id: str, starts_at: str, ends_at: str,
-                    account_code: str) -> dict[str, Any]:
+                    account_code: str | None = None) -> dict[str, Any]:
+    # Fall back to the code this caller last had a booking approved on. It is a
+    # convenience, not an assumption: the value appears on the approval card, so a wrong
+    # guess costs one click. Entitlement is still checked below, exactly as if it had
+    # been typed.
+    if not account_code:
+        account_code = memory.recall(ctx.user_id).get(memory.ACCOUNT_CODE)
+        if not account_code:
+            raise invalid_params(
+                "account_code is required.",
+                "Say which account code to charge, e.g. ACC-A1.",
+            )
+        log.info("using remembered account code %s for %s", account_code, ctx.user_id)
     start = _parse_dt(starts_at, "starts_at")
     end = _parse_dt(ends_at, "ends_at")
     if end <= start:
