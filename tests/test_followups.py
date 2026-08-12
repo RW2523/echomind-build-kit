@@ -180,11 +180,13 @@ def test_the_most_recent_instrument_wins_when_several_were_discussed():
 
 
 @pytest.mark.tools
-def test_two_instruments_in_one_message_are_left_ambiguous():
-    """Guessing between them is worse than letting the user say which."""
+def test_two_instruments_in_one_message_are_asked_about():
+    """Guessing between them is worse than letting the user say which — so it asks,
+    naming both, rather than shipping the planner's arbitrary pick."""
     plan = {"tool": "request_booking", "arguments": {"instrument_id": "ins-miseq"}}
     out = carry_forward_instrument(plan, "C2 or MiSeq M3, whichever is free", "")
-    assert out["arguments"]["instrument_id"] == "ins-miseq", "unchanged, not guessed"
+    assert out["tool"] is None
+    assert "Confocal C2" in out["ask"] and "MiSeq M3" in out["ask"]
 
 
 @pytest.mark.tools
@@ -407,3 +409,133 @@ def test_an_invented_number_is_still_caught():
 
     rows = [{"training_biosafety-2": True}]
     assert verify_numbers("You have 47 trainings on record.", rows, "") == ["47"]
+
+
+# --- defects found by the 2026-08-12 adversarial workflow --------------------------
+
+from decimal import Decimal  # noqa: E402
+
+from server.agent.action import (  # noqa: E402
+    apply_relative_date,
+    relative_date_target,
+)
+from server.agent.data import (  # noqa: E402
+    _display,
+    _mentions_unsupported_lab,
+    _rows_from_tool_result,
+)
+
+
+@pytest.mark.parametrize(
+    ("value", "shown"),
+    [
+        (Decimal("0E-20"), "0.00"),               # a NUMERIC zero, not "0E-20"
+        (Decimal("1.9750000000000000"), "1.98"),  # an AVG artifact, not 16 digits
+        (Decimal("412.00"), "412.00"),            # money keeps its cents
+        (Decimal("5514.50"), "5514.50"),
+        (1.806666666, "1.81"),
+        (20, "20"),                               # a count is an integer, untouched
+        (0, "0"),
+        (True, "yes"),                            # a boolean is English, not "True"
+        (False, "no"),
+        ("in_prep", "in_prep"),                   # a stored string is verbatim
+    ],
+)
+def test_values_are_displayed_as_people_read_them(value, shown):
+    assert _display(value) == shown
+
+
+def test_availability_result_never_exposes_its_schema_as_columns():
+    """The maintenance branch dumped instrument_id, requested_window_free, bookable, ...
+    as raw table headers. The free windows are the only rows that belong in the table."""
+    unbookable = {
+        "instrument": {"id": "ins-lightsheet", "name": "Light Sheet LS7"},
+        "instrument_name": "Light Sheet LS7", "bookable": False,
+        "unavailable_reason": "Light Sheet LS7 is maintenance and cannot be booked",
+        "requested_window_free": False, "conflicting_bookings": 0,
+        "free_slots": [], "busy": [],
+    }
+    rows, columns, scalars = _rows_from_tool_result(unbookable, "check_availability")
+    assert rows == [] and columns == []
+    assert "requested_window_free" not in columns
+    assert scalars["bookable"] is False and "unavailable_reason" in scalars
+
+    bookable = {**unbookable, "bookable": True, "requested_window_free": True,
+                "free_slots": [{"starts_at": "2027-04-08T08:00:00Z",
+                                "ends_at": "2027-04-08T20:00:00Z"}]}
+    rows, columns, _ = _rows_from_tool_result(bookable, "check_availability")
+    assert columns == ["starts_at", "ends_at"]
+
+
+def test_relative_month_phrase_resolves_against_today():
+    from datetime import date
+    today = date(2026, 8, 12)
+    assert relative_date_target("book it next month", today) == ("month", (2026, 9))
+    assert relative_date_target("this month", today) == ("month", (2026, 8))
+    assert relative_date_target("tomorrow", today) == ("day", date(2026, 8, 13))
+    assert relative_date_target("in 3 days", today) == ("day", date(2026, 8, 15))
+    assert relative_date_target("in 2 months", today) == ("month", (2026, 10))
+    assert relative_date_target("next week", today) is None  # a week is not a day
+    assert relative_date_target("book Confocal C2", today) is None
+
+
+def test_next_month_moves_the_proposed_date_into_next_month():
+    from datetime import date
+    plan = {"tool": "request_booking", "arguments": {
+        "instrument_id": "ins-confocal-c2",
+        "starts_at": "2026-08-16T10:00:00Z", "ends_at": "2026-08-16T12:00:00Z"}}
+    out = apply_relative_date(plan, "book it next month for 2 hours", date(2026, 8, 12))
+    assert out["arguments"]["starts_at"] == "2026-09-16T10:00:00Z"
+    assert out["arguments"]["ends_at"] == "2026-09-16T12:00:00Z", "duration preserved"
+
+
+def test_a_proposal_already_in_the_requested_month_is_untouched():
+    from datetime import date
+    args = {"instrument_id": "ins-confocal-c2",
+            "starts_at": "2026-09-04T10:00:00Z", "ends_at": "2026-09-04T12:00:00Z"}
+    out = apply_relative_date({"tool": "request_booking", "arguments": dict(args)},
+                              "book it next month", date(2026, 8, 12))
+    assert out["arguments"]["starts_at"] == args["starts_at"]
+
+
+@pytest.mark.tools
+def test_the_confocal_after_a_confocal_question_resolves_to_that_confocal():
+    """The workflow's headline: 'Is the confocal free?' then 'book it next month' proposed
+    Spinning Disk. Now the kind carries from history, and an ambiguous kind asks."""
+    from server.agent.action import _instrument_rows, _referenced_instrument
+    rows = _instrument_rows()
+    # history named a concrete confocal -> that one
+    assert _referenced_instrument("book it", "assistant: Confocal C2 is free", rows) == (
+        "ins-confocal-c2", [])
+    # history said only "the confocal" -> ambiguous, ask (never Spinning Disk)
+    choice, family = _referenced_instrument(
+        "book it next month for 2 hours", "assistant: The confocal is free on 2027-04-15", rows)
+    assert choice is None
+    assert set(family) == {"ins-confocal-c2", "ins-confocal-c3"}
+
+
+def test_an_injected_lab_label_is_caught():
+    """bob relabelling his own rows as lab-a: the lab is neither his nor in the rows."""
+    from server.auth import Ctx
+    bob = Ctx(user_id="u-bob", name="Bob", role="user", lab_ids=("lab-b",),
+              facility_ids=(), raw={})
+    rows = [{"id": "bk-1", "account_code": "ACC-B1", "instrument": "MiSeq M3"}]
+    assert _mentions_unsupported_lab("Lab-A has 17 bookings.", rows, {}, bob) is True
+    # a lab present in the rows, or the caller's own, is fine
+    assert _mentions_unsupported_lab("Your lab-b bookings: 17.", rows, {}, bob) is False
+    asha_rows = [{"lab_id": "lab-a", "amount": 5514.50}]
+    asha = Ctx(user_id="u-asha", name="Asha", role="pi", lab_ids=("lab-a",),
+               facility_ids=(), raw={})
+    assert _mentions_unsupported_lab("Lab A spent $5514.50.", asha_rows, {}, asha) is False
+
+
+@pytest.mark.tools
+def test_the_data_planner_is_given_the_callers_account_codes():
+    """The billing planner grabbed the caller's lab id as an account_code because its
+    own codes were not in the context — get_billing_summary('lab-a', ...) then refused a
+    user's own-spend question. The codes must be available to plan with."""
+    from server.agent.data import _caller_codes
+    from server.auth import Ctx
+    alice = Ctx(user_id="u-alice", name="Alice", role="user", lab_ids=("lab-a",),
+                facility_ids=(), raw={})
+    assert _caller_codes(alice) == ["ACC-A1"]

@@ -7,9 +7,10 @@ POST /actions/{id}/approve or /decline.
 
 from __future__ import annotations
 
+import calendar
 import logging
 import re
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import text
@@ -167,6 +168,92 @@ def stated_duration(message: str) -> timedelta | None:
     return timedelta(minutes=minutes)
 
 
+_REL_DAY = (
+    (re.compile(r"\bday after tomorrow\b", re.I), 2),
+    (re.compile(r"\btomorrow\b", re.I), 1),
+    (re.compile(r"\btoday\b", re.I), 0),
+)
+_REL_IN_DAYS = re.compile(r"\bin\s+(\d{1,3})\s+days?\b", re.I)
+_REL_MONTH = (
+    (re.compile(r"\bnext month\b", re.I), 1),
+    (re.compile(r"\bthis month\b", re.I), 0),
+)
+_REL_IN_MONTHS = re.compile(r"\bin\s+(\d{1,2})\s+months?\b", re.I)
+
+
+def _add_months(year: int, month: int, k: int) -> tuple[int, int]:
+    index = year * 12 + (month - 1) + k
+    return index // 12, index % 12 + 1
+
+
+def relative_date_target(message: str, today: date):
+    """What date, if any, a relative phrase in the message names.
+
+    Returns ("day", date) for a day-precise phrase, ("month", (year, month)) for a
+    month-granularity one, or None. "next week" is deliberately not handled: it names a
+    week, not a day, and guessing the day would be worse than leaving it.
+    """
+    for rx, delta in _REL_DAY:
+        if rx.search(message):
+            return "day", today + timedelta(days=delta)
+    if (m := _REL_IN_DAYS.search(message)):
+        return "day", today + timedelta(days=int(m.group(1)))
+    for rx, k in _REL_MONTH:
+        if rx.search(message):
+            return "month", _add_months(today.year, today.month, k)
+    if (m := _REL_IN_MONTHS.search(message)):
+        return "month", _add_months(today.year, today.month, int(m.group(1)))
+    return None
+
+
+def apply_relative_date(
+    plan: dict[str, Any], message: str, today: date | None = None
+) -> dict[str, Any]:
+    """Make the proposed date honour a relative phrase the user actually said.
+
+    "Book it next month" after an availability check for 2027-04-15 proposed 2026-08-16 —
+    the current month, 3/3 — dropping the instruction entirely. The date moves; the
+    time-of-day and the duration are kept. A month-granularity phrase keeps the planner's
+    day-of-month (clamped) so "next month" lands on the same day one month on, and does
+    nothing if the proposal is already in the requested month.
+    """
+    if plan.get("tool") != "request_booking":
+        return plan
+    arguments = plan.get("arguments")
+    if not isinstance(arguments, dict):
+        return plan
+    target = relative_date_target(message, today or datetime.now(UTC).date())
+    if target is None:
+        return plan
+    starts_at, ends_at = arguments.get("starts_at"), arguments.get("ends_at")
+    if not (isinstance(starts_at, str) and isinstance(ends_at, str)):
+        return plan
+    try:
+        start = datetime.fromisoformat(starts_at.replace("Z", "+00:00"))
+        end = datetime.fromisoformat(ends_at.replace("Z", "+00:00"))
+    except ValueError:
+        return plan
+
+    kind, value = target
+    if kind == "day":
+        new_date = value
+    else:
+        year, month = value
+        if (start.year, start.month) == (year, month):
+            return plan  # already in the requested month
+        day = min(start.day, calendar.monthrange(year, month)[1])
+        new_date = date(year, month, day)
+
+    new_start = start.replace(year=new_date.year, month=new_date.month, day=new_date.day)
+    if new_start == start:
+        return plan
+    new_end = new_start + (end - start)
+    arguments["starts_at"] = new_start.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    arguments["ends_at"] = new_end.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    log.info("relative date %r -> %s", message[:40], arguments["starts_at"])
+    return plan
+
+
 def apply_stated_duration(plan: dict[str, Any], message: str) -> dict[str, Any]:
     """Make the proposed window as long as the user actually asked for.
 
@@ -289,49 +376,75 @@ def carry_forward_instrument(
         return plan
 
     rows = _instrument_rows()
-    earlier = instruments_mentioned(history, rows)
-    named_now = instruments_mentioned(message, rows)
+    choice, family = _referenced_instrument(message, history, rows)
 
-    if len(named_now) == 1:
-        intended = named_now[0]
-    elif named_now:
-        return plan  # genuinely ambiguous — let the tool or the user settle it
-    else:
-        # Nobody says "Confocal C2" twice. They say "the confocal", and the exact matcher
-        # sees nothing — so "OK, back to the confocal. Book it..." fell through to the
-        # last instrument mentioned anywhere in the conversation and proposed the Light
-        # Sheet, which was under maintenance. The user had named the instrument; we were
-        # not listening.
-        family = instrument_family_mentioned(message, rows)
-        if len(family) == 1:
-            intended = family[0]
-        elif family:
-            # Several confocals. The one the conversation was already about is the one
-            # they meant; if the conversation has not settled on one, ask, because "the
-            # confocal" genuinely does not say which and the two have different rates.
-            # "BOOK THE CONFOCAL NOW!!!" proposed C3 with nothing behind the choice.
-            from_history = [iid for iid in earlier if iid in family]
-            if len(set(from_history)) != 1:
-                names = [name for iid, name in rows if iid in family]
-                log.info("'%s' names %d instruments; asking", message[:40], len(family))
-                return {
-                    "tool": None,
-                    "missing": ["instrument_id"],
-                    "ask": f"Which one — {' or '.join(sorted(names))}?",
-                }
-            intended = from_history[-1]
-        elif earlier:
-            intended = earlier[-1]
-        else:
-            return plan
+    if choice is None and family:
+        # A kind was referenced but nothing settles which one — two confocals with
+        # different rates. If the planner already picked inside that kind, that is at
+        # least a confocal, but the pick is arbitrary; if it picked OUTSIDE the kind (the
+        # "book it next month" thread proposed Spinning Disk after a confocal question),
+        # it is simply wrong. Either way, ask rather than guess.
+        names = sorted(name for iid, name in rows if iid in family)
+        log.info("instrument reference is ambiguous across %s; asking", names)
+        return {
+            "tool": None,
+            "missing": ["instrument_id"],
+            "ask": f"Which one — {' or '.join(names)}?",
+        }
+    if choice is None:
+        return plan  # no instrument referenced anywhere — leave the planner's pick
 
-    if arguments.get("instrument_id") != intended:
+    if arguments.get("instrument_id") != choice:
         log.info(
             "instrument: planner said %s, conversation says %s",
-            arguments.get("instrument_id"), intended,
+            arguments.get("instrument_id"), choice,
         )
-        arguments["instrument_id"] = intended
+        arguments["instrument_id"] = choice
     return plan
+
+
+def _referenced_instrument(
+    message: str, history: str, rows: list[tuple[str, str]]
+) -> tuple[str | None, list[str]]:
+    """Which instrument the conversation is pointing at, by the strongest signal available.
+
+    Returns (concrete_id, []) when one instrument is unambiguously meant, or
+    (None, family) when only a kind is referenced and more than one instrument fits, so
+    the caller can ask. Priority, strongest first: an instrument named outright in this
+    message; a kind named in this message (disambiguated by what was concretely discussed
+    earlier); an instrument named outright earlier; a kind named earlier. "the confocal"
+    said now, after "Confocal C2" earlier, means C2 — the intersection settles it.
+    """
+    msg_concrete = _unique(instruments_mentioned(message, rows))
+    if len(msg_concrete) == 1:
+        return msg_concrete[0], []
+    if msg_concrete:
+        return None, msg_concrete  # two named at once — ambiguous
+
+    hist_concrete = _unique(instruments_mentioned(history, rows))
+    msg_family = _unique(instrument_family_mentioned(message, rows))
+    if msg_family:
+        settled = [i for i in hist_concrete if i in msg_family]
+        if len(_unique(settled)) == 1:
+            return settled[0], []
+        if len(msg_family) == 1:
+            return msg_family[0], []
+        return None, msg_family
+
+    if hist_concrete:
+        return hist_concrete[-1], []
+
+    hist_family = _unique(instrument_family_mentioned(history, rows))
+    if len(hist_family) == 1:
+        return hist_family[0], []
+    if hist_family:
+        return None, hist_family
+    return None, []
+
+
+def _unique(items: list[str]) -> list[str]:
+    """Distinct, order preserved."""
+    return list(dict.fromkeys(items))
 
 
 def require_supplied_identity(plan: dict[str, Any], source: str) -> dict[str, Any]:
@@ -394,6 +507,7 @@ def plan(message: str, ctx: Ctx, history: str = "") -> dict[str, Any]:
     )
     # What the user actually said wins over what the planner inherited or invented.
     chosen = apply_stated_duration(chosen, message)
+    chosen = apply_relative_date(chosen, message)
     chosen = carry_forward_instrument(chosen, message, history)
     return require_supplied_identity(chosen, f"{message}\n{history}\n{documents}")
 
