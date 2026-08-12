@@ -34,9 +34,12 @@ N-1. `make demo` and `make eval` were both green while a live three-turn convers
 called an instrument available one turn after refusing to book it for being under
 maintenance — every scripted scene is one turn deep, and that class of bug only exists
 between turns. Every proposal it makes is declined, so it leaves the seed untouched and
-you can run it as often as you like; it starts its own API if none is running, and
-leaves one it did not start alone. It also runs nightly in CI. **If you drive the UI by hand before the demo, run
-this rather than trusting that yesterday's run still holds.**
+you can run it as often as you like. It starts its own API if none is running and leaves
+one it did not start alone, so it works from a cold shell — and it runs nightly in CI on
+the GPU runner.
+
+**If you drive the UI by hand before the demo, run this rather than trusting that
+yesterday's run still holds.**
 
 Confirm the model is the one you mean to show:
 
