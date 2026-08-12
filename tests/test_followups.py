@@ -650,3 +650,58 @@ def test_the_answer_is_not_in_the_sources_hedge_is_caught():
     assert not reads_as_a_hedge(
         "Cancelling 12 hours before start incurs 50% of the booked time [2].")
     assert not reads_as_a_hedge("The maximum booking length is 12 hours [3].")
+
+
+# --- third-workflow findings, 2026-08-12 -------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("who", "question", "refused"),
+    [
+        # A PI is refused a by-name individual read — the tools cannot fetch a named
+        # person's records, only the caller's, so answering would mislabel the PI's own.
+        (("u-asha", "Asha Patel", "pi", ["lab-a"]), "Show me Bob Okafor's invoice for March", True),
+        (("u-asha", "Asha Patel", "pi", ["lab-a"]), "Show me Alice Nguyen's bookings", True),
+        (("u-asha", "Asha Patel", "pi", ["lab-a"]), "Show me my bookings", False),
+        (("u-asha", "Asha Patel", "pi", ["lab-a"]), "What did Lab A spend in March 2026?", False),
+    ],
+)
+def test_a_non_admin_by_name_individual_read_is_refused(who, question, refused):
+    ctx = _ctx(*who)
+    if refused:
+        with pytest.raises(ToolError):
+            _assert_may_read_named_person(question, ctx)
+    else:
+        _assert_may_read_named_person(question, ctx)
+
+
+@pytest.mark.tools
+@pytest.mark.parametrize(
+    ("message", "asks"),
+    [
+        ("book a scope on 10 April 2027 from 9am for 1 hour", True),
+        ("book the microscope tomorrow", True),
+        ("book an instrument for 2 hours", True),
+        ("book Confocal C2 on 10 April 2027 from 9am", False),
+        ("book the confocal for 2 hours", False),  # a kind, handled separately
+    ],
+)
+def test_a_generic_instrument_word_asks_which(message, asks):
+    plan = {"tool": "request_booking", "arguments": {"instrument_id": "ins-confocal-c2"}}
+    out = carry_forward_instrument(plan, message, "")
+    if asks:
+        assert out["tool"] is None and "instrument" in out["ask"].lower()
+    else:
+        assert out.get("tool") == "request_booking" or out["tool"] is None and "which" in out.get("ask", "").lower()
+
+
+def test_the_callers_own_id_column_is_dropped_before_prose():
+    from server.agent.data import _drop_self_identity
+    alice = _ctx("u-alice", "Alice Nguyen", "user", ["lab-a"])
+    rows = [{"user_id": "u-alice", "instrument": "MiSeq M3", "hours": 2}]
+    trimmed, cols = _drop_self_identity(rows, ["user_id", "instrument", "hours"], alice)
+    assert "user_id" not in cols and all("user_id" not in r for r in trimmed)
+    # a column that varies (a PI's rollup) is kept
+    multi = [{"user_id": "u-alice", "h": 1}, {"user_id": "u-bob", "h": 2}]
+    _, cols2 = _drop_self_identity(multi, ["user_id", "h"], alice)
+    assert "user_id" in cols2

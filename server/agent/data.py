@@ -365,6 +365,30 @@ def _quantise_rows(rows: list[dict]) -> list[dict]:
     return [{k: _quantise(v) for k, v in row.items()} for row in rows]
 
 
+def _drop_self_identity(
+    rows: list[dict], columns: list[str], ctx: Ctx
+) -> tuple[list[dict], list[str]]:
+    """Remove an id/name column that is just the caller, repeated on every row.
+
+    A bare "2026-03" planned get_usage_records(scope=user), whose rows carry
+    user_id='u-alice' on every line, and the model wrote "u-alice has scheduled hours..."
+    — the raw handle in the prose. The column says only "this is you", on every row, so it
+    is dropped before generation; nothing meaningful is lost and the handle cannot leak.
+    Kept whenever the column varies (a PI's lab rollup with several users needs it).
+    """
+    own = {ctx.user_id.lower(), (ctx.name or "").lower()}
+    drop = {
+        key for key in (columns or (rows[0].keys() if rows else []))
+        if key in ("user_id", "user_name", "name")
+        and rows and all(str(row.get(key, "")).lower() in own for row in rows)
+    }
+    if not drop:
+        return rows, columns
+    trimmed = [{k: v for k, v in row.items() if k not in drop} for row in rows]
+    kept_cols = [c for c in (columns or list(rows[0])) if c not in drop]
+    return trimmed, kept_cols
+
+
 def _all_null(rows: list[dict]) -> bool:
     """A single aggregate row whose every value is NULL — an empty SUM/AVG, not an answer.
 
@@ -758,17 +782,21 @@ _PERSON_POSSESSIVE_RE = re.compile(
 
 
 def _assert_may_read_named_person(question: str, ctx: Ctx) -> None:
-    """A plain user asking about another named person's records is refused, before answering.
+    """A non-admin asking about another named person's records is refused, before answering.
 
-    "What is on <name>'s invoice?" from a user whose planner forgot to set subject_user_id
-    narrowed to the caller's OWN invoice and returned it stamped with the other name — and,
-    tellingly, a real name (Alice) was refused while a made-up one (u-nobody) fell through,
-    which is an existence oracle. A user may read only their own records, so any possessive
-    reference to a person who is not the caller is refused outright, real name or not, which
-    also makes the two refusals identical.
+    "What is on <name>'s invoice?" from a caller whose planner forgot subject_user_id
+    narrowed to the caller's OWN invoice and returned it stamped with the other name — a
+    real name (Alice) refused while a made-up one (u-nobody) fell through, an existence
+    oracle. A PI hit the same flaw from the other side: asked for a lab-b user's invoice,
+    or even a lab member's bookings they are entitled to, the by-name lookup collapsed to
+    the PI's OWN account and mislabelled it, because the caller-scoped tools cannot fetch a
+    named individual's records — they only ever return the caller's. So any possessive
+    reference to a person who is not the caller is refused, real name or not: honest,
+    since the data cannot be fetched correctly, and identical for every such request.
+    Admins keep the subject-user path, which does resolve to real people.
     """
-    if ctx.is_admin or ctx.is_pi:
-        return  # a PI/admin may read others; the subject-user check governs that path
+    if ctx.is_admin:
+        return
     own = {w.lower() for w in re.findall(r"[a-z]+", ctx.name.lower())} | {
         ctx.user_id.lower(), ctx.user_id.split("-")[-1].lower(),
     }
@@ -865,6 +893,7 @@ def answer(question: str, ctx: Ctx, history: str = "") -> AgentResponse:
         if _all_null(rows):
             rows, columns = [], []
         rows = _quantise_rows(rows)
+        rows, columns = _drop_self_identity(rows, columns, ctx)
     except ToolError as exc:
         if exc.code == "forbidden":
             return AgentResponse(

@@ -456,3 +456,48 @@ across every trial. What was real:
   written as prose. The hedge detector now catches "The <X> is not (explicitly) detailed
   in the sources", so it redirects, 6/6. Tested against real answers so a mid-sentence
   caveat is never mistaken for a refusal.
+
+## A third workflow, the by-name flaw, and where the line is drawn
+
+The third confirmation run held the round-2 fixes and its skeptic again refuted the two
+scariest finder claims (an access-levels misattribution and a cancellation contradiction,
+neither reproducible — 14/16 and 14/14 correct). Isolation held for a third time: asha only
+ever received her own entitled data, never another lab's. Four more real defects were fixed
+and two were judged out of scope for a prompt-level fix.
+
+- 2026-08-12 | The by-name individual read is refused for every non-admin, not just users |
+  My person guard exempted PIs, and that was the hole: asked for a lab-b user's invoice, or
+  even a lab member's bookings a PI is entitled to, the caller-scoped tools returned the
+  PI's OWN records mislabelled under the other person's name — the tools cannot fetch a
+  named individual's data, only the caller's. Refusing is honest (the data cannot be
+  fetched correctly) and identical for real and invented names. Admins keep the subject-user
+  path, which does resolve to real people.
+- 2026-08-12 | A generic instrument word asks which one | "book a scope", "book the
+  microscope", "book an instrument" named no specific machine and the planner picked one
+  with nothing behind it. Treated like an ambiguous kind now: it asks.
+- 2026-08-12 | The caller's own id is not printed back at them | A bare "2026-03" planned a
+  usage lookup whose rows carry user_id='u-alice' on every line, and the model wrote
+  "u-alice has scheduled hours...". A self-identity column — the same handle on every row —
+  is dropped before generation; a column that varies (a PI's rollup) is kept.
+- 2026-08-12 | Two deeper edges are documented, not patched | "The average cost per
+  instrument is $5514.50" reports the sum relabelled as the average (the figure is a
+  verified column total, so number-checking cannot catch the wrong label), and "free slots
+  on 1 April 2027" over-ranges the date to a month and the prose then contradicts its own
+  rows. A planner rule to compute AVG for average questions did not fix the first and
+  rippled into a bare-month query dropping its month filter — the third time a prompt tweak
+  has regressed a passing case — so it was reverted. Both are planner/generation edges on
+  unusual phrasings, on the correctness layer, never the isolation layer, and are left as
+  known limitations rather than traded for the stability three rounds have built.
+
+## Where the adversarial loop stopped
+
+Three full nine-agent rounds. Round one found six, round two eight, round three six; every
+round the skeptic refuted the finders' scariest claims as non-reproducible, and every round
+server-side isolation held with zero cross-tenant leaks across more than a hundred
+cross-scope trials. Nineteen defects fixed, every one on the presentation or correctness
+layer; three self-inflicted regressions from prompt tweaks caught before commit; two deep
+edges documented. The loop is stopped here deliberately: the finders' yield is now
+dominated by non-reproducible claims and long-tail generation edges on unusual inputs,
+while the security surface — the thing that would actually matter — has been quiet for
+three rounds. Further prompt-level chasing trades a stable, fully-green system for
+diminishing returns.

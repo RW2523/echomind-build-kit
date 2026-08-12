@@ -327,6 +327,13 @@ def instruments_mentioned(text_: str, rows: list[tuple[str, str]]) -> list[str]:
 # catalogue by dropping the model number, so it stays right as instruments are added.
 _FAMILY_STOPWORDS = frozenset({"the", "a", "an"})
 
+# Generic references that name no specific instrument at all — a category, or none.
+_GENERIC_INSTRUMENT_RE = re.compile(
+    r"\b(scope|microscope|instrument|machine|sequencer|imager|analy[sz]er|"
+    r"a\s+tool|some\s+equipment)\b",
+    re.IGNORECASE,
+)
+
 
 def instrument_family_mentioned(
     text_: str, rows: list[tuple[str, str]]
@@ -377,6 +384,17 @@ def carry_forward_instrument(
 
     rows = _instrument_rows()
     choice, family = _referenced_instrument(message, history, rows)
+
+    # A generic word — "book a scope", "book the microscope", "book an instrument" — names
+    # no specific machine, and the planner just picked one (Confocal C2) with nothing behind
+    # it. Ask which, the same as an ambiguous kind, rather than proposing a guess.
+    if choice is None and not family and _GENERIC_INSTRUMENT_RE.search(message):
+        log.info("generic instrument term with no specific one; asking")
+        return {
+            "tool": None,
+            "missing": ["instrument_id"],
+            "ask": "Which instrument would you like to book?",
+        }
 
     if choice is None and family:
         # A kind was referenced but nothing settles which one — two confocals with
