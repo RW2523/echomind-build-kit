@@ -1,22 +1,29 @@
 /* ==========================================================================
    EchoMind — a scientific instrument facility tool.
 
-   The look is meant to read like calibrated equipment rather than a chat toy:
-   cool steel neutrals, one teal accent that only ever marks something interactive,
-   and four signal colours reserved exclusively for state that came out of the data
-   (ok / warn / info / muted). Nothing decorative is allowed to borrow a signal
+   The shape is a conversation: one centred column, generous vertical rhythm, the
+   assistant's prose set plain and full width with its mark in the gutter. The look is
+   meant to read like calibrated equipment rather than a chat toy — cool steel neutrals,
+   one teal accent that only ever marks something interactive or something a tool
+   measured, and four signal colours reserved exclusively for state that came out of the
+   data (ok / warn / info / muted). Nothing decorative is allowed to borrow a signal
    colour, because the moment green means "pretty" it stops meaning "operational".
+
+   Chrome is spent deliberately. An ordinary reply gets none: it is prose, and a border
+   around a sentence claims a structure the sentence does not have. Panels, rules and
+   shadows are kept for the three things that really are structured — a result card, a
+   pending write, and the composer.
    ========================================================================== */
 
 :root {
   color-scheme: light;
 
   /* --- neutrals: slightly blue-green, like a bench under fluorescent light --- */
-  --bg: #f1f4f5;
+  --bg: #f7f9f9;
   --surface: #ffffff;
-  --surface-2: #f7f9fa;
-  --surface-3: #edf1f2;
-  --rail: #e9eef0;
+  --surface-2: #f2f5f6;
+  --surface-3: #e9eeef;
+  --rail: #eff3f3;
   --ink: #101819;
   --ink-soft: #4b585d;
   /* Faint ink is darker than it looks like it wants to be. It is the colour of every
@@ -24,7 +31,7 @@
      on the palest surface it ever lands on. The hierarchy is carried by size and weight
      instead, which costs nothing and does not depend on the reader's eyesight. */
   --ink-faint: #5f6d72;
-  --line: #dbe3e5;
+  --line: #dde4e5;
   --line-strong: #c3ced2;
 
   /* --- the single accent --- */
@@ -33,6 +40,7 @@
   --accent-ink: #ffffff;
   --accent-soft: #e1f0f1;
   --accent-line: #b3d9dc;
+  --accent-ring: rgba(12, 107, 118, 0.18);
 
   /* --- signals, reserved for data-derived state --- */
   --ok: #14724a;
@@ -54,18 +62,24 @@
   --danger-line: #eecccc;
 
   --shadow-1: 0 1px 2px rgba(10, 24, 28, 0.06);
-  --shadow-2: 0 2px 6px rgba(10, 24, 28, 0.07);
+  --shadow-2: 0 2px 10px rgba(10, 24, 28, 0.07);
   --shadow-3: 0 18px 46px rgba(10, 24, 28, 0.18);
   --backdrop: rgba(16, 24, 26, 0.42);
+  --scrollbar: rgba(16, 30, 34, 0.22);
+  --scrollbar-hover: rgba(16, 30, 34, 0.38);
 
   /* --- type scale: 1.22 ratio off a 15px base, rounded to half pixels --- */
   --t-2xs: 10.5px;
   --t-xs: 11.5px;
   --t-sm: 13px;
   --t-base: 15px;
+  /* Reading size, used only for the two things that are actually read at length: the
+     assistant's prose and the question above it. */
+  --t-read: 16px;
   --t-md: 16.5px;
   --t-lg: 20px;
   --t-xl: 25px;
+  --t-2xl: 30px;
 
   /* --- spacing: 4px grid --- */
   --s1: 4px;
@@ -80,6 +94,12 @@
   --r-lg: 14px;
   --r-full: 999px;
 
+  /* --- the conversation column --- */
+  --col: 48rem;
+  --rail-w: 264px;
+  --gutter: 34px;
+  --composer-max: 208px;
+
   --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, "Helvetica Neue",
     sans-serif;
   --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
@@ -92,22 +112,23 @@
   :root:not([data-theme="light"]) {
     color-scheme: dark;
 
-    --bg: #0b1113;
-    --surface: #131c1f;
-    --surface-2: #182225;
-    --surface-3: #1e292c;
-    --rail: #0f171a;
-    --ink: #e6eeef;
-    --ink-soft: #a2b1b6;
-    --ink-faint: #849499;
-    --line: #243135;
-    --line-strong: #354a4f;
+    --bg: #14191b;
+    --surface: #1b2224;
+    --surface-2: #202829;
+    --surface-3: #273031;
+    --rail: #0f1416;
+    --ink: #e7eded;
+    --ink-soft: #a5b1b3;
+    --ink-faint: #889496;
+    --line: #2a3436;
+    --line-strong: #3b4749;
 
     --accent: #4ab8c2;
     --accent-hover: #63cad3;
     --accent-ink: #04252a;
-    --accent-soft: #10333a;
-    --accent-line: #1d525b;
+    --accent-soft: #12343a;
+    --accent-line: #1f545d;
+    --accent-ring: rgba(74, 184, 194, 0.24);
 
     --ok: #62c791;
     --ok-ink: #04251a;
@@ -119,38 +140,41 @@
     --info: #84b4e8;
     --info-soft: #122536;
     --info-line: #1e3d59;
-    --muted-soft: #1b2528;
-    --muted-line: #2b3a3e;
+    --muted-soft: #1e2729;
+    --muted-line: #2e3a3c;
     --danger: #e58a8a;
     --danger-soft: #301818;
     --danger-line: #4c2727;
 
     --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
-    --shadow-2: 0 2px 8px rgba(0, 0, 0, 0.42);
+    --shadow-2: 0 2px 12px rgba(0, 0, 0, 0.44);
     --shadow-3: 0 18px 46px rgba(0, 0, 0, 0.6);
     --backdrop: rgba(3, 8, 9, 0.66);
+    --scrollbar: rgba(190, 214, 218, 0.18);
+    --scrollbar-hover: rgba(190, 214, 218, 0.32);
   }
 }
 
 :root[data-theme="dark"] {
   color-scheme: dark;
 
-  --bg: #0b1113;
-  --surface: #131c1f;
-  --surface-2: #182225;
-  --surface-3: #1e292c;
-  --rail: #0f171a;
-  --ink: #e6eeef;
-  --ink-soft: #a2b1b6;
-  --ink-faint: #849499;
-  --line: #243135;
-  --line-strong: #354a4f;
+  --bg: #14191b;
+  --surface: #1b2224;
+  --surface-2: #202829;
+  --surface-3: #273031;
+  --rail: #0f1416;
+  --ink: #e7eded;
+  --ink-soft: #a5b1b3;
+  --ink-faint: #889496;
+  --line: #2a3436;
+  --line-strong: #3b4749;
 
   --accent: #4ab8c2;
   --accent-hover: #63cad3;
   --accent-ink: #04252a;
-  --accent-soft: #10333a;
-  --accent-line: #1d525b;
+  --accent-soft: #12343a;
+  --accent-line: #1f545d;
+  --accent-ring: rgba(74, 184, 194, 0.24);
 
   --ok: #62c791;
   --ok-ink: #04251a;
@@ -162,19 +186,22 @@
   --info: #84b4e8;
   --info-soft: #122536;
   --info-line: #1e3d59;
-  --muted-soft: #1b2528;
-  --muted-line: #2b3a3e;
+  --muted-soft: #1e2729;
+  --muted-line: #2e3a3c;
   --danger: #e58a8a;
   --danger-soft: #301818;
   --danger-line: #4c2727;
 
   --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
-  --shadow-2: 0 2px 8px rgba(0, 0, 0, 0.42);
+  --shadow-2: 0 2px 12px rgba(0, 0, 0, 0.44);
   --shadow-3: 0 18px 46px rgba(0, 0, 0, 0.6);
   --backdrop: rgba(3, 8, 9, 0.66);
+  --scrollbar: rgba(190, 214, 218, 0.18);
+  --scrollbar-hover: rgba(190, 214, 218, 0.32);
 }
 
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 
 html, body, #root { height: 100%; margin: 0; }
 
@@ -196,29 +223,73 @@ body {
   border-radius: var(--r-sm);
 }
 
-button { font-family: inherit; }
-button:disabled { opacity: 0.5; cursor: not-allowed; }
+button { font-family: inherit; color: inherit; }
+button:disabled { cursor: not-allowed; }
 
-.app {
-  display: grid;
-  grid-template-columns: 268px minmax(0, 1fr);
+/* Scrollbars: present enough to grab, quiet enough not to draw a line down the page. */
+* { scrollbar-width: thin; scrollbar-color: var(--scrollbar) transparent; }
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb {
+  background: var(--scrollbar);
+  border-radius: var(--r-full);
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+*::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-hover); background-clip: content-box; }
+
+/* ==========================================================================
+   frame
+   ========================================================================== */
+
+.app { height: 100%; }
+
+/* The rail is taken out of flow and the main column is inset by its width instead of
+   sharing a grid track with it. Two reasons: the rail's contents never squash mid-
+   animation, and on a narrow screen the very same element becomes an overlay drawer
+   without a second layout. */
+.main {
+  display: flex;
+  flex-direction: column;
   height: 100%;
+  min-width: 0;
+  padding-left: 0;
+  transition: padding-left 0.24s cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+@media (min-width: 900px) {
+  .app.rail-open .main { padding-left: var(--rail-w); }
 }
 
 /* ---------- left rail ---------- */
 
 .rail {
-  background: var(--rail);
-  border-right: 1px solid var(--line);
+  position: fixed;
+  z-index: 40;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: var(--rail-w);
   display: flex;
   flex-direction: column;
-  overflow-y: auto;
-  padding: var(--s4) var(--s3);
-  gap: var(--s5);
-  min-width: 0;
+  gap: var(--s3);
+  padding: var(--s3) var(--s2) var(--s2);
+  background: var(--rail);
+  border-right: 1px solid var(--line);
+  transform: translateX(-100%);
+  transition: transform 0.24s cubic-bezier(0.32, 0.72, 0, 1);
+}
+.app.rail-open .rail { transform: none; }
+
+.rail-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s2);
+  padding-left: var(--s2);
 }
 
-.brand { display: flex; align-items: center; gap: var(--s2); padding: 0 var(--s1); }
+.brand { display: flex; align-items: center; gap: var(--s2); min-width: 0; }
 .brand-mark {
   width: 20px;
   height: 20px;
@@ -230,19 +301,54 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 }
 .brand-name { display: flex; flex-direction: column; line-height: 1.15; min-width: 0; }
 .brand-name strong { font-size: var(--t-base); letter-spacing: -0.012em; }
-.brand-name span { font-size: var(--t-2xs); color: var(--ink-faint); letter-spacing: 0.08em;
-  text-transform: uppercase; }
+.brand-name span {
+  font-size: var(--t-2xs);
+  color: var(--ink-faint);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
 
 .rail h2 {
   font-size: var(--t-2xs);
   text-transform: uppercase;
   letter-spacing: 0.09em;
   color: var(--ink-faint);
-  margin: 0 var(--s1) var(--s2);
+  margin: 0 var(--s2) var(--s2);
   font-weight: 600;
 }
 
+.rail-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s5);
+  padding-bottom: var(--s2);
+}
 .rail-section { min-width: 0; }
+
+.rail-new {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  font-size: var(--t-sm);
+  font-weight: 500;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  padding: var(--s2) var(--s3);
+  cursor: pointer;
+  box-shadow: var(--shadow-1);
+  transition: border-color 0.14s ease, color 0.14s ease;
+}
+.rail-new svg { width: 16px; height: 16px; flex: 0 0 auto; color: var(--ink-faint); }
+.rail-new:hover { border-color: var(--accent-line); color: var(--accent); }
+.rail-new:hover svg { color: var(--accent); }
 
 .user-btn {
   display: block;
@@ -299,9 +405,13 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   border-color: var(--accent-line);
 }
 
-.rail-actions { margin-top: auto; display: flex; flex-direction: column; gap: var(--s1); }
+.rail-actions { display: flex; flex-direction: column; gap: var(--s1); }
 
 .link-btn {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  width: 100%;
   background: none;
   border: none;
   padding: var(--s2);
@@ -312,8 +422,10 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   font-size: var(--t-sm);
   border-radius: var(--r-sm);
 }
+.link-btn svg { width: 15px; height: 15px; flex: 0 0 auto; }
 .link-btn:hover { background: var(--surface-3); }
 .link-btn.subtle { color: var(--ink-soft); }
+.link-btn.subtle:hover { color: var(--ink); }
 
 .uploads-list { display: flex; flex-direction: column; gap: var(--s1); }
 .upload-row {
@@ -338,10 +450,12 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   background: none;
   cursor: pointer;
   color: var(--ink-faint);
-  font-size: var(--t-md);
-  line-height: 1;
+  line-height: 0;
+  padding: 2px;
+  border-radius: var(--r-sm);
   flex: 0 0 auto;
 }
+.upload-row button svg { width: 14px; height: 14px; }
 .upload-row button:hover { color: var(--danger); }
 .uploads-empty { font-size: var(--t-xs); color: var(--ink-faint); padding: 0 var(--s2); }
 
@@ -355,23 +469,44 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   margin-top: var(--s2);
 }
 
-/* ---------- main column ---------- */
+/* The drawer's backdrop. Only ever drawn where the rail overlays the conversation. */
+.rail-scrim { display: none; }
+@media (max-width: 899px) {
+  .app.rail-open .rail-scrim {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 35;
+    background: var(--backdrop);
+    animation: fade-in 0.16s ease-out;
+  }
+}
 
-.main { display: flex; flex-direction: column; min-width: 0; }
+/* ---------- top bar ---------- */
 
 .topbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--s3);
-  padding: var(--s2) var(--s5);
+  padding: var(--s2) var(--s4);
   border-bottom: 1px solid var(--line);
-  background: var(--surface);
-  min-height: 48px;
+  background: color-mix(in srgb, var(--bg) 86%, transparent);
+  backdrop-filter: saturate(140%) blur(8px);
+  min-height: 50px;
+  flex: 0 0 auto;
+  z-index: 10;
 }
-.ctx { display: flex; align-items: center; gap: var(--s2); font-size: var(--t-sm);
-  color: var(--ink-soft); min-width: 0; }
-.ctx-name { font-weight: 600; color: var(--ink); }
+.topbar-left { display: flex; align-items: center; gap: var(--s2); min-width: 0; }
+.ctx {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  font-size: var(--t-sm);
+  color: var(--ink-soft);
+  min-width: 0;
+}
+.ctx-name { font-weight: 600; color: var(--ink); white-space: nowrap; }
 .ctx-labs {
   font-family: var(--mono);
   font-size: var(--t-xs);
@@ -380,8 +515,35 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.topbar-right { display: flex; align-items: center; gap: var(--s3); flex: 0 0 auto; }
-.thread-id { font-family: var(--mono); font-size: var(--t-xs); color: var(--ink-faint); }
+.topbar-right { display: flex; align-items: center; gap: var(--s2); flex: 0 0 auto; }
+.thread-id {
+  font-family: var(--mono);
+  font-size: var(--t-xs);
+  color: var(--ink-faint);
+  max-width: 22ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  background: none;
+  color: var(--ink-soft);
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.icon-btn svg { width: 17px; height: 17px; }
+.icon-btn:hover { background: var(--surface-3); color: var(--ink); }
+.icon-btn--sm { width: 26px; height: 26px; }
+.icon-btn--sm svg { width: 15px; height: 15px; }
 
 .theme-toggle {
   display: inline-flex;
@@ -407,111 +569,211 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   box-shadow: var(--shadow-1);
 }
 
-/* ---------- transcript ---------- */
+/* ==========================================================================
+   transcript
+   ========================================================================== */
 
-.transcript { flex: 1; overflow-y: auto; overflow-x: hidden; padding: var(--s5); }
-.transcript-inner {
-  max-width: 780px;
-  margin: 0 auto;
+/* The composer lives inside the scroller as a sticky footer rather than outside it as a
+   sibling. That is what keeps it exactly as wide as, and exactly in line with, the
+   column above it — a scrollbar appearing cannot nudge one and not the other. */
+.transcript {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable both-edges;
   display: flex;
   flex-direction: column;
-  gap: var(--s5);
+  padding: 0 var(--s5);
+}
+
+.thread {
+  flex: 1 0 auto;
+  width: 100%;
+  max-width: var(--col);
+  margin-inline: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s6);
+  padding: var(--s6) 0 var(--s5);
   min-width: 0;
 }
 
-.empty { color: var(--ink-soft); text-align: center; padding: var(--s6) var(--s4) var(--s5); }
-.empty h3 {
+/* ---------- empty state ---------- */
+
+.empty {
+  margin-block: auto;
+  text-align: center;
+  color: var(--ink-soft);
+  padding: var(--s5) 0;
+}
+.empty-mark {
+  display: inline-flex;
+  color: var(--accent);
+  margin-bottom: var(--s3);
+}
+.empty-mark svg { width: 30px; height: 30px; }
+.empty h1 {
   color: var(--ink);
-  font-size: var(--t-lg);
+  font-size: var(--t-2xl);
   font-weight: 600;
-  letter-spacing: -0.015em;
+  letter-spacing: -0.022em;
+  line-height: 1.2;
   margin: 0 0 var(--s2);
 }
-.empty p { margin: 0 auto; max-width: 46ch; font-size: var(--t-sm); }
+.empty p { margin: 0 auto; max-width: 48ch; font-size: var(--t-sm); }
 
 .suggestions {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--s2);
-  margin-top: var(--s5);
+  margin-top: var(--s6);
   text-align: left;
 }
 .suggestions button {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--s1);
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: var(--r-md);
-  padding: var(--s3);
+  padding: var(--s3) var(--s4);
   font: inherit;
   cursor: pointer;
   color: var(--ink);
-  transition: border-color 0.12s ease, box-shadow 0.12s ease, transform 0.12s ease;
+  transition: border-color 0.14s ease, box-shadow 0.14s ease, transform 0.14s ease;
 }
 .suggestions button:hover {
   border-color: var(--accent-line);
   box-shadow: var(--shadow-2);
   transform: translateY(-1px);
 }
-.suggestion-text { font-size: var(--t-sm); line-height: 1.4; }
+.suggestion-text { font-size: var(--t-sm); line-height: 1.45; }
 .suggestion-note {
   font-size: var(--t-2xs);
   text-transform: uppercase;
-  letter-spacing: 0.07em;
+  letter-spacing: 0.08em;
+  font-weight: 600;
   color: var(--ink-faint);
 }
+.suggestions button:hover .suggestion-note { color: var(--accent); }
 
-.turn { display: flex; flex-direction: column; gap: var(--s2); min-width: 0; }
+/* ---------- turns ---------- */
 
-.bubble-user {
-  align-self: flex-end;
-  max-width: 80%;
-  background: var(--accent);
-  color: var(--accent-ink);
-  padding: var(--s2) var(--s3);
-  border-radius: var(--r-lg) var(--r-lg) 3px var(--r-lg);
-  font-size: var(--t-sm);
+.turn { display: flex; flex-direction: column; gap: var(--s5); min-width: 0; }
+
+.turn-user { display: flex; justify-content: flex-end; }
+.user-msg {
+  max-width: 82%;
+  background: var(--surface-3);
+  border: 1px solid var(--line);
+  color: var(--ink);
+  padding: var(--s2) var(--s4);
+  border-radius: var(--r-lg) var(--r-lg) var(--r-sm) var(--r-lg);
+  font-size: var(--t-read);
+  line-height: 1.55;
+  white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 
-/* ---------- reply panels ---------- */
-
-.reply {
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: var(--r-md);
-  padding: var(--s3) var(--s4);
-  box-shadow: var(--shadow-1);
-  min-width: 0;
+/* The mark sits in a gutter beside the prose rather than above it, so a reply of any
+   length stays one block the eye can follow down the left edge. */
+.turn-assistant {
+  display: grid;
+  grid-template-columns: var(--gutter) minmax(0, 1fr);
+  align-items: start;
 }
-.reply-text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
-.reply-text + .reply-text { margin-top: var(--s2); }
+.turn-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  margin-top: 2px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--accent);
+  flex: 0 0 auto;
+}
+.turn-mark svg { width: 15px; height: 15px; }
+.turn-assistant.is-streaming .turn-mark {
+  animation: mark-breathe 1.8s ease-in-out infinite;
+}
+.turn-body { min-width: 0; }
 
-.reply--redirect { background: var(--warn-soft); border-color: var(--warn-line); box-shadow: none; }
-.reply--scope { background: var(--info-soft); border-color: var(--info-line); box-shadow: none; }
+.turn-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  margin-top: var(--s2);
+  opacity: 0;
+  transition: opacity 0.14s ease;
+}
+.turn-assistant:hover .turn-actions,
+.turn-actions:focus-within { opacity: 1; }
+/* On a touch screen there is no hover to reveal them with. */
+@media (hover: none) {
+  .turn-actions { opacity: 1; }
+}
+.turn-actions-note { font-size: var(--t-xs); color: var(--ink-faint); }
+
+/* ==========================================================================
+   replies
+   ========================================================================== */
+
+/* An ordinary answer is prose. No card, no border, no shadow — the structure it has is
+   the structure sentences have. */
+.reply { min-width: 0; }
+.reply-text {
+  margin: 0;
+  font-size: var(--t-read);
+  line-height: 1.68;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.reply-text + .reply-text { margin-top: var(--s3); }
+
+/* The three replies that are not ordinary answers get an inset block: a hairline, a
+   left rule and a quiet tint. Enough to say "this one is different in kind", not
+   enough to say "something went wrong". */
+.reply--redirect,
+.reply--scope,
+.reply--clarify {
+  padding: var(--s3) var(--s4);
+  border: 1px solid var(--line);
+  border-left: 2px solid var(--line-strong);
+  border-radius: 0 var(--r-md) var(--r-md) 0;
+  background: var(--surface-2);
+}
+
+/* The honest refusal. Deliberately not amber and deliberately not red: nothing failed
+   here — the assistant checked, could not support an answer, and said so. That is the
+   product working, and dressing it as a warning teaches the reader to distrust the one
+   reply that has earned the most trust. */
+.reply--redirect { border-left-color: var(--accent); }
+
+.reply--scope { border-left-color: var(--info); }
 .reply--scope .badge { color: var(--info); }
 /* A question whose reference cannot be resolved. Styled like scope rather than like a
    redirect: nothing failed, the assistant simply needs one more word from the user. */
-.reply--clarify { background: var(--info-soft); border-color: var(--info-line); box-shadow: none; }
+.reply--clarify { border-left-color: var(--info); }
 .reply--clarify .badge { color: var(--info); }
-.reply--approval { background: var(--warn-soft); border-color: var(--warn-line); box-shadow: none; }
+
+/* Small talk is not a result, and neither is a pending write's covering sentence: the
+   ApprovalCard under it carries all the weight that turn needs. */
+.reply--plain,
+.reply--approval { background: none; border: none; padding: 0; }
 .reply--approval .badge { color: var(--warn); }
-/* Small talk is not a result. Giving it panel chrome puts a frame around "hello" and
-   makes it look as sourced as a figure. */
-.reply--plain {
-  background: none;
-  border-color: transparent;
-  box-shadow: none;
-  padding: 0 var(--s1);
-}
-.reply--working { background: var(--surface-2); border-style: dashed; box-shadow: none; }
+
+.reply--working { background: none; border: none; padding: 0; }
 
 .badge {
   display: inline-block;
   font-size: var(--t-2xs);
   text-transform: uppercase;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.09em;
   font-weight: 600;
   color: var(--ink-faint);
   margin-bottom: var(--s2);
@@ -557,6 +819,11 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   50% { box-shadow: 0 0 0 4px var(--accent-soft); opacity: 0.65; }
 }
 @keyframes caret { 0%, 49% { opacity: 1; } 50%, 100% { opacity: 0; } }
+@keyframes mark-breathe {
+  0%, 100% { border-color: var(--line); box-shadow: 0 0 0 0 var(--accent-ring); }
+  50% { border-color: var(--accent-line); box-shadow: 0 0 0 4px var(--accent-ring); }
+}
+@keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
 
 /* ---------- citations ---------- */
 
@@ -581,12 +848,13 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   align-items: center;
   gap: 6px;
   font-size: var(--t-xs);
-  background: var(--surface-2);
+  background: var(--surface);
   color: var(--ink-soft);
   border: 1px solid var(--line);
   border-radius: var(--r-full);
   padding: 3px 10px 3px 4px;
   cursor: pointer;
+  transition: border-color 0.12s ease, color 0.12s ease;
 }
 .chip:hover { border-color: var(--accent-line); color: var(--accent); }
 .chip-index {
@@ -614,25 +882,27 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   font-size: var(--t-sm);
   color: var(--ink);
   cursor: pointer;
-  transition: border-color 0.12s ease, background 0.12s ease;
+  transition: border-color 0.12s ease, background 0.12s ease, color 0.12s ease;
 }
 .option:hover { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
 
 /* ---------- result card ---------- */
 
+/* Chrome earned: this really is a structured result, and the frame is what says the
+   figures inside it came out of a tool rather than out of a sentence. */
 .card-panel {
-  margin-top: var(--s3);
+  margin-top: var(--s4);
   border: 1px solid var(--line);
   border-radius: var(--r-md);
-  background: var(--surface-2);
+  background: var(--surface);
+  box-shadow: var(--shadow-1);
   overflow: hidden;
 }
-.reply--plain .card-panel, .reply--clarify .card-panel { background: var(--surface); }
 
 .card-head {
   padding: var(--s3) var(--s4);
   border-bottom: 1px solid var(--line);
-  background: var(--surface);
+  background: var(--surface-2);
 }
 .card-kind {
   display: block;
@@ -640,7 +910,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   text-transform: uppercase;
   letter-spacing: 0.09em;
   font-weight: 600;
-  color: var(--accent);
+  color: var(--ink-faint);
   margin-bottom: 2px;
 }
 .card-title {
@@ -740,7 +1010,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .meta-chip {
   font-size: var(--t-xs);
   color: var(--ink-soft);
-  background: var(--surface-3);
+  background: var(--surface-2);
   border: 1px solid var(--line);
   border-radius: var(--r-sm);
   padding: 1px 7px;
@@ -752,7 +1022,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   border-top: 1px solid var(--line);
   font-size: var(--t-xs);
   color: var(--ink-faint);
-  background: var(--surface);
+  background: var(--surface-2);
 }
 
 /* ---------- evidence ---------- */
@@ -774,7 +1044,8 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   cursor: pointer;
   transition: border-color 0.12s ease, color 0.12s ease;
 }
-.source-btn:hover { border-color: var(--accent); color: var(--accent); }
+.source-btn svg { width: 13px; height: 13px; }
+.source-btn:hover { border-color: var(--accent-line); color: var(--accent); }
 .source-btn-count { color: var(--ink-faint); font-variant-numeric: tabular-nums; }
 .source-btn:hover .source-btn-count { color: var(--accent); }
 
@@ -787,7 +1058,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   align-items: center;
   justify-content: center;
   padding: var(--s5);
-  animation: preview-fade 0.12s ease-out;
+  animation: fade-in 0.12s ease-out;
 }
 .preview {
   background: var(--surface);
@@ -811,18 +1082,24 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   background: var(--surface-2);
 }
 .preview-head h3 { margin: 0; font-size: var(--t-sm); font-weight: 600; color: var(--ink); }
-.crumb { font-size: var(--t-xs); color: var(--ink-faint); font-family: var(--mono); margin-top: 3px;
-  overflow-wrap: anywhere; }
+.crumb {
+  font-size: var(--t-xs);
+  color: var(--ink-faint);
+  font-family: var(--mono);
+  margin-top: 3px;
+  overflow-wrap: anywhere;
+}
 .preview-close {
   border: none;
   background: none;
   cursor: pointer;
-  font-size: var(--t-xl);
-  line-height: 1;
+  line-height: 0;
   color: var(--ink-faint);
-  padding: 0 2px;
+  padding: 4px;
+  border-radius: var(--r-sm);
 }
-.preview-close:hover { color: var(--ink); }
+.preview-close svg { width: 16px; height: 16px; }
+.preview-close:hover { color: var(--ink); background: var(--surface-3); }
 .preview-body { padding: var(--s3) var(--s4); overflow: auto; }
 .preview-body .table-wrap { margin-top: 0; }
 .source-text {
@@ -836,7 +1113,6 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 }
 .sql-block { margin-top: var(--s4); padding-top: var(--s3); border-top: 1px solid var(--line); }
 
-@keyframes preview-fade { from { opacity: 0; } to { opacity: 1; } }
 @keyframes preview-rise {
   from { opacity: 0; transform: translateY(6px) scale(0.99); }
   to { opacity: 1; transform: none; }
@@ -879,13 +1155,13 @@ tr:last-child td { border-bottom: none; }
 /* ---------- approval ---------- */
 
 .approval {
-  margin-top: var(--s2);
+  margin-top: var(--s4);
   border: 1px solid var(--warn-line);
   border-left: 3px solid var(--warn);
   border-radius: var(--r-md);
   background: var(--surface);
   overflow: hidden;
-  box-shadow: var(--shadow-2);
+  box-shadow: var(--shadow-1);
 }
 .approval-head {
   display: flex;
@@ -970,6 +1246,7 @@ tr:last-child td { border-bottom: none; }
   border: 1px solid transparent;
   transition: background 0.12s ease, border-color 0.12s ease;
 }
+.btn:disabled { opacity: 0.5; }
 .btn--go { background: var(--ok); color: var(--ok-ink); }
 .btn--go:not(:disabled):hover { filter: brightness(1.08); }
 .btn--quiet {
@@ -978,49 +1255,109 @@ tr:last-child td { border-bottom: none; }
   color: var(--ink-soft);
 }
 .btn--quiet:not(:disabled):hover { border-color: var(--ink-faint); color: var(--ink); }
-.btn--send { background: var(--accent); color: var(--accent-ink); padding: 10px 20px; }
-.btn--send:not(:disabled):hover { background: var(--accent-hover); }
 
-/* ---------- composer ---------- */
+/* ==========================================================================
+   composer
+   ========================================================================== */
+
+.dock {
+  position: sticky;
+  bottom: 0;
+  z-index: 5;
+  width: 100%;
+  background: var(--bg);
+  padding-bottom: var(--s3);
+}
+/* The transcript does not stop at the composer, it fades into it. A hard edge reads as
+   the end of the conversation; a fade reads as more of it above. */
+.dock::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 100%;
+  height: 40px;
+  background: linear-gradient(to top, var(--bg), transparent);
+  pointer-events: none;
+}
 
 .composer {
-  border-top: 1px solid var(--line);
-  background: var(--surface);
-  padding: var(--s3) var(--s5);
-}
-.composer-inner {
-  max-width: 780px;
-  margin: 0 auto;
+  max-width: var(--col);
+  margin-inline: auto;
   display: flex;
-  gap: var(--s2);
   align-items: flex-end;
+  gap: var(--s2);
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-lg);
+  padding: var(--s1) var(--s1) var(--s1) var(--s4);
+  box-shadow: var(--shadow-2);
+  transition: border-color 0.14s ease, box-shadow 0.14s ease;
 }
+.composer:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-ring), var(--shadow-2);
+}
+.composer.is-busy { border-color: var(--line); }
+
 .composer textarea {
   flex: 1;
   min-width: 0;
   resize: none;
-  border: 1px solid var(--line-strong);
-  border-radius: var(--r-md);
-  padding: 10px 12px;
-  font: inherit;
-  background: var(--surface-2);
-  color: var(--ink);
-  min-height: 44px;
-  max-height: 160px;
+  border: none;
   outline: none;
+  background: none;
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--t-read);
+  line-height: 1.5;
+  padding: 9px 0;
+  max-height: var(--composer-max);
+  overflow-y: auto;
 }
 .composer textarea::placeholder { color: var(--ink-faint); }
-.composer textarea:focus { border-color: var(--accent); background: var(--surface); }
-.composer .hint {
-  max-width: 780px;
+.composer textarea:disabled { color: var(--ink-soft); -webkit-text-fill-color: var(--ink-soft); }
+
+.send-btn {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  margin-bottom: 2px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  cursor: pointer;
+  transition: background 0.12s ease, opacity 0.12s ease;
+}
+.send-btn svg { width: 17px; height: 17px; }
+.send-btn:not(:disabled):hover { background: var(--accent-hover); }
+.send-btn:disabled {
+  background: var(--surface-3);
+  color: var(--ink-faint);
+  border-color: var(--line);
+}
+.composer.is-busy .send-btn:disabled { background: var(--surface-3); color: var(--accent); }
+
+.spinner { animation: spin 0.9s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.hint {
+  max-width: var(--col);
   margin: var(--s2) auto 0;
   font-size: var(--t-xs);
   color: var(--ink-faint);
+  text-align: center;
 }
 
-/* ---------- admin ---------- */
+/* ==========================================================================
+   admin
+   ========================================================================== */
 
-.admin { padding: var(--s5); overflow-y: auto; overflow-x: hidden; }
+.admin { flex: 1; min-height: 0; padding: var(--s5); overflow-y: auto; overflow-x: hidden; }
 .admin-inner { max-width: 1040px; margin: 0 auto; min-width: 0; }
 .cards {
   display: grid;
@@ -1094,90 +1431,63 @@ tr:last-child td { border-bottom: none; }
   font-size: var(--t-sm);
 }
 
-/* ---------- narrow screens ----------
-   The layout is a 268px rail beside the chat, which is unusable below about 820px: the
-   rail eats a third of a phone screen and the composer ends up under the keyboard.
-   Below that width the rail becomes a horizontal strip of identities above the
-   transcript — switching user is the one thing the demo needs on a phone, and it is
-   also the proof (sign in as bob, watch alice's document disappear).
+/* ==========================================================================
+   narrow screens
+   ==========================================================================
+   Below 900px there is no room for a rail beside a readable column, so the same
+   element becomes an overlay drawer. Switching identity is the one thing the demo
+   needs on a phone — it is also the proof (sign in as bob, watch alice's document
+   disappear) — so the toggle stays in the top bar at every width. */
 
-   No JavaScript and no markup change: a drawer would need state, and this needs none. */
-
-@media (max-width: 820px) {
+@media (max-width: 899px) {
   /* dvh, not vh: on iOS Safari 100vh is taller than the visible area, which pushes the
      composer behind the browser chrome. */
-  .app {
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: auto minmax(0, 1fr);
-    height: 100dvh;
-  }
+  .app { height: 100dvh; }
+  .main { height: 100dvh; }
+  .transcript { padding: 0 var(--s4); }
+  .thread { gap: var(--s5); padding-top: var(--s5); }
+  .turn { gap: var(--s4); }
+  .empty h1 { font-size: var(--t-xl); }
+}
 
-  .rail {
-    flex-direction: row;
-    align-items: center;
-    gap: var(--s2);
-    overflow-x: auto;
-    overflow-y: hidden;
-    padding: var(--s2) var(--s3);
-    border-right: none;
-    border-bottom: 1px solid var(--line);
-    -webkit-overflow-scrolling: touch;
-  }
-  /* Section headings and the blurb under each name are the first things to go: they
-     cost a whole line each and say nothing a demo audience needs on a phone. */
-  .rail h2,
-  .rail .blurb,
-  .rail .uploads-list,
-  .rail .private-note {
-    display: none;
-  }
-  .rail-section {
-    display: flex;
-    align-items: center;
-    gap: var(--s2);
-    flex: 0 0 auto;
-  }
-  .brand { flex: 0 0 auto; margin-right: var(--s1); }
-  .brand-name span { display: none; }
-  .user-btn { flex: 0 0 auto; width: auto; white-space: nowrap; padding: 6px 10px; margin: 0; }
-  .user-btn .who { flex-direction: row; align-items: baseline; gap: 6px; }
-  .rail-actions { margin-left: auto; flex: 0 0 auto; flex-direction: row; }
+@media (min-width: 900px) {
+  /* The rail's own toggle lives inside it, so the top-bar one is only needed when the
+     rail is shut. It is rendered conditionally; nothing to do here but keep the row
+     from collapsing when it disappears. */
+  .topbar-left { min-height: 30px; }
+}
 
-  .topbar { padding: var(--s2) var(--s3); }
-  .transcript { padding: var(--s3); }
-  .transcript-inner { gap: var(--s4); }
-  .composer { padding: var(--s2) var(--s3); }
-
+@media (max-width: 640px) {
+  :root { --gutter: 28px; }
+  .suggestions { grid-template-columns: minmax(0, 1fr); }
+  .thread-id { display: none; }
+  .ctx-labs { display: none; }
+  .user-msg { max-width: 90%; }
+  .card-fields { grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); }
   /* A 148px label column leaves nothing for the value on a 360px screen. */
   .approval-row { grid-template-columns: minmax(0, 1fr); gap: 0; }
   .approval-row dt { color: var(--ink-soft); }
   .approval-row dd { margin-bottom: var(--s1); }
-
-  .bubble-user { max-width: 88%; }
-  .card-fields { grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); }
-}
-
-/* Phones proper: the suggestion cards stack, and anything that was a side-by-side row
-   inside a card stops competing for the same 360px. */
-@media (max-width: 520px) {
-  .suggestions { grid-template-columns: minmax(0, 1fr); }
-  .thread-id { display: none; }
-  .ctx-labs { display: none; }
   .card-item { flex-direction: column; gap: var(--s2); align-items: flex-start; }
   .card-item-value { text-align: left; }
   .card-items--located .card-item-value { font-size: var(--t-md); }
   .card-field.is-emphasis dd { font-size: var(--t-lg); }
+  .topbar { padding: var(--s2) var(--s3); }
+  .theme-toggle button { padding: 3px 8px; }
 }
 
 /* Motion here is feedback, never decoration, so removing it costs nothing: the stage
-   trail still marks done stages green and the active one teal without the pulse. */
+   trail still marks done stages green and the active one teal without the pulse, and
+   the rail still opens and shuts — it simply arrives rather than travels. */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.001ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
   }
   .suggestions button:hover { transform: none; }
   .stage.is-active .stage-mark { box-shadow: 0 0 0 3px var(--accent-soft); }
   .reply-text.is-streaming::after { opacity: 1; }
+  .turn-assistant.is-streaming .turn-mark { border-color: var(--accent-line); }
 }

@@ -185,7 +185,9 @@ def conversations() -> list[Conversation]:
             "ambiguous-kind-asks", "alice",
             "Two confocals, nothing to choose by, different hourly rates: ask.",
             [
-                Turn("BOOK THE CONFOCAL NOW!!!", kind="redirect",
+                # An ask is a clarification, not a refusal — the UI turns it into
+                # clickable options, which only happens for response_type "clarify".
+                Turn("BOOK THE CONFOCAL NOW!!!", kind="clarify",
                      contains=("Confocal C2", "Confocal C3")),
             ],
         ),
@@ -254,7 +256,7 @@ def conversations() -> list[Conversation]:
             "missing-field-is-asked-for", "cora",
             "A write missing something only the user can supply asks, never invents.",
             [
-                Turn("Onboard a new user for Lab A", kind="redirect"),
+                Turn("Onboard a new user for Lab A", kind="clarify"),
             ],
         ),
         Conversation(

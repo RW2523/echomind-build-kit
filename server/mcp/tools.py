@@ -48,6 +48,7 @@ DOCUMENT_TEMPLATES = (
     "usage_report", "onboarding_packet", "monthly_summary",
     # Feature documents: the printable form of what the chat path already answers.
     "invoice_statement", "facility_directory", "capability_report",
+    "booking_confirmation", "usage_summary",
 )
 # monthly_summary aggregates every lab's spend and the whole estate's downtime, so it is
 # an admin template (spec 05: "generate_document admin templates" is T3).
@@ -169,7 +170,9 @@ def get_facility_catalog(ctx: Ctx, facility_id: str | None = None) -> dict[str, 
     with session_scope() as s:
         facilities = s.execute(
             text(
-                """SELECT id, name, code FROM infinity.facilities
+                """SELECT id, name, code, campus, building, room, address,
+                          latitude, longitude, contact_email, opening_hours
+                   FROM infinity.facilities
                    WHERE (CAST(:fid AS text) IS NULL OR id = :fid) ORDER BY name"""
             ),
             {"fid": facility_id},
@@ -178,7 +181,9 @@ def get_facility_catalog(ctx: Ctx, facility_id: str | None = None) -> dict[str, 
             raise not_found("facility")
         instruments = s.execute(
             text(
-                """SELECT i.id, i.name, i.hourly_rate, i.status, i.facility_id, f.name AS facility
+                """SELECT i.id, i.name, i.hourly_rate, i.status, i.facility_id,
+                          f.name AS facility, i.modality, i.techniques, i.sample_types,
+                          i.specification, i.room
                    FROM infinity.instruments i
                    JOIN infinity.facilities f ON f.id = i.facility_id
                    WHERE (CAST(:fid AS text) IS NULL OR i.facility_id = :fid)
@@ -977,9 +982,12 @@ def generate_document(ctx: Ctx, template: str,
     # The approval card is the last thing a human reads before this happens, so it is
     # written for them: a repr'd dict put `{'account_code': 'ACC-A1', 'lab_id': ...}` on
     # screen, which is the schema talking, not the proposal.
+    # A parameter the caller did not give is not a parameter. Printed anyway it read
+    # "Generate monthly summary as MD (account code None)" on the card a human approves.
+    given = {k: v for k, v in params.items() if v is not None and v != ""}
     detail = (
-        ", ".join(f"{k.replace('_', ' ')} {v}" for k, v in sorted(params.items()))
-        if params else "no parameters"
+        ", ".join(f"{k.replace('_', ' ')} {v}" for k, v in sorted(given.items()))
+        if given else "no parameters"
     )
     preview = f"Generate {template.replace('_', ' ')} as {fmt.upper()} ({detail})"
     return actions_mod.create_pending(ctx, "generate_document", payload, preview)

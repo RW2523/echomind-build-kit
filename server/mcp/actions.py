@@ -376,6 +376,8 @@ def _exec_document(action: dict, payload: dict) -> dict[str, Any]:
         "invoice_statement": _render_invoice_statement,
         "facility_directory": _render_facility_directory,
         "capability_report": _render_capability_report,
+        "booking_confirmation": _render_booking_confirmation,
+        "usage_summary": _render_usage_summary,
     }[template]
     title, body = renderer(user_id, params)
 
@@ -607,3 +609,50 @@ def _ctx_for(user_id: str) -> Ctx:
         lab_ids=(row["lab_id"],) if row["lab_id"] else (),
         facility_ids=(), raw={},
     )
+
+
+def _render_booking_confirmation(user_id: str, params: dict) -> tuple[str, str]:
+    """The confirmation for one booking, including where the instrument physically is.
+
+    Scoped by the caller in SQL rather than fetched and then checked: a booking that is not
+    theirs is not found, which is the same answer whether it exists or not.
+    """
+    booking_id = params.get("booking_id")
+    if not booking_id:
+        raise invalid_params(
+            "A booking confirmation needs to know which booking.",
+            "Give the booking id, e.g. bk-0133.",
+        )
+    with session_scope() as s:
+        row = s.execute(
+            text(
+                """SELECT b.id, b.starts_at, b.ends_at, b.status, b.account_code,
+                          i.name AS instrument, i.room, f.name AS facility,
+                          f.campus, f.building, f.address
+                   FROM infinity.bookings b
+                   JOIN infinity.instruments i ON i.id = b.instrument_id
+                   JOIN infinity.facilities f ON f.id = i.facility_id
+                   WHERE b.id = :bid AND b.user_id = :uid"""
+            ),
+            {"bid": booking_id, "uid": user_id},
+        ).mappings().first()
+    if row is None:
+        raise not_found("booking")
+    body = documents.build_booking_confirmation(dict(row))
+    return f"Booking confirmation — {booking_id}", body
+
+
+def _render_usage_summary(user_id: str, params: dict) -> tuple[str, str]:
+    """Scheduled versus tracked hours, through the tool that already enforces the scope."""
+    from server.mcp import tools as tools_mod  # deferred: tools imports this module
+
+    ctx = _ctx_for(user_id)
+    scope = params.get("scope") or "user"
+    found = tools_mod.get_usage_records(
+        ctx, scope=scope, id=params.get("id"), month=params.get("month")
+    )
+    subject = found.get("id") or user_id
+    body = documents.build_usage_summary(
+        subject, params.get("month"), found.get("rows") or [], found.get("totals") or {}
+    )
+    return f"Usage summary — {subject}", body

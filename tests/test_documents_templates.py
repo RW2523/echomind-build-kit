@@ -447,3 +447,78 @@ def test_no_builder_prints_a_number_absent_from_its_input(name):
     )
     printed = _numbers(_every_document()[name])
     assert printed <= allowed, f"{name} invented {sorted(printed - allowed)}"
+
+
+# --- the renderers, wired end to end (2026-08-12) ----------------------------------
+
+
+@pytest.mark.tools
+def test_every_registered_document_template_has_a_renderer():
+    """A template the tool accepts but the executor cannot render is an approval that
+    fails after the human has already said yes."""
+    import inspect
+
+    from server.mcp import actions
+    from server.mcp import tools as T
+    source = inspect.getsource(actions._exec_document)
+    for template in T.DOCUMENT_TEMPLATES:
+        assert f'"{template}"' in source, f"{template} has no renderer in _exec_document"
+
+
+@pytest.mark.tools
+def test_booking_confirmation_renders_from_a_real_booking():
+    from sqlalchemy import text
+
+    from server.db import session_scope
+    from server.mcp import actions
+    with session_scope() as s:
+        bid = s.execute(
+            text("SELECT id FROM infinity.bookings WHERE user_id='u-alice' LIMIT 1")
+        ).scalar_one()
+    title, body = actions._render_booking_confirmation("u-alice", {"booking_id": bid})
+    assert bid in title and bid in body
+    assert "Facility:" in body and "Where:" in body
+
+
+@pytest.mark.tools
+def test_a_booking_that_is_not_yours_is_not_found():
+    """Scoped in SQL, so the answer is the same whether or not the booking exists."""
+    from sqlalchemy import text
+
+    from server.db import session_scope
+    from server.mcp import actions
+    from server.mcp.errors import ToolError
+    with session_scope() as s:
+        other = s.execute(
+            text("SELECT id FROM infinity.bookings WHERE user_id='u-bob' LIMIT 1")
+        ).scalar_one()
+    for booking_id in (other, "bk-does-not-exist"):
+        with pytest.raises(ToolError) as exc:
+            actions._render_booking_confirmation("u-alice", {"booking_id": booking_id})
+        assert exc.value.code == "not_found"
+
+
+@pytest.mark.tools
+def test_usage_summary_renders_through_the_scoped_tool():
+    from server.mcp import actions
+    title, body = actions._render_usage_summary("u-alice", {"month": "2026-03"})
+    assert "u-alice" in title
+    assert "Scheduled h" in body and "Tracked h" in body
+
+
+@pytest.mark.tools
+def test_the_facility_catalogue_exposes_location_and_capability():
+    """get_facility_catalog predates migration 008 and returned id/name/code only, so the
+    tool the planner reaches for most knew least about the facility."""
+    from server.auth import Ctx
+    from server.mcp import tools as T
+    ctx = Ctx(user_id="u-alice", name="Alice", role="user", lab_ids=("lab-a",),
+              facility_ids=(), raw={})
+    out = T.get_facility_catalog(ctx)
+    assert len(out["facilities"]) == 3 and len(out["instruments"]) == 12
+    facility = next(f for f in out["facilities"] if f["id"] == "fac-imaging")
+    for key in ("campus", "building", "room", "address", "opening_hours", "contact_email"):
+        assert facility.get(key), f"{key} missing from the catalogue"
+    titan = next(i for i in out["instruments"] if i["name"] == "Cryo-EM Titan")
+    assert "cryo-EM" in titan["techniques"]
+    assert titan["modality"] == "electron microscopy" and titan["room"]

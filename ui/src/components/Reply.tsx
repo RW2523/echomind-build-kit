@@ -1,8 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { chunkText } from "../api";
 import { asCard } from "../card";
 import { clarifyOptions } from "../clarify";
 import type { AgentResponse, Citation } from "../types";
+import { CloseIcon, ShieldIcon } from "./icons";
 import { ResultCard } from "./ResultCard";
 
 /**
@@ -39,6 +40,8 @@ function Preview({
   onClose: () => void;
   children: React.ReactNode;
 }) {
+  const closeRef = useRef<HTMLButtonElement>(null);
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
@@ -47,9 +50,15 @@ function Preview({
     // The page behind must not scroll while a preview is over it.
     const previous = document.body.style.overflow;
     document.body.style.overflow = "hidden";
+    // aria-modal="true" tells a screen reader nothing outside this dialog exists, so focus
+    // has to actually be inside it — otherwise the announcement and the caret disagree and
+    // the first Tab walks the page behind. Focus returns to whatever opened it on close.
+    const opener = document.activeElement as HTMLElement | null;
+    closeRef.current?.focus();
     return () => {
       window.removeEventListener("keydown", onKey);
       document.body.style.overflow = previous;
+      opener?.focus?.();
     };
   }, [onClose]);
 
@@ -67,8 +76,13 @@ function Preview({
             <h3>{title}</h3>
             {subtitle && <div className="crumb">{subtitle}</div>}
           </div>
-          <button className="preview-close" onClick={onClose} aria-label="Close preview">
-            ×
+          <button
+            ref={closeRef}
+            className="preview-close"
+            onClick={onClose}
+            aria-label="Close preview"
+          >
+            <CloseIcon />
           </button>
         </header>
         <div className="preview-body">{children}</div>
@@ -177,7 +191,7 @@ function Evidence({ response }: { response: AgentResponse }) {
   return (
     <>
       <button className="source-btn" onClick={() => setOpen(true)}>
-        <span aria-hidden="true">◧</span> Source
+        <ShieldIcon /> Source
         <span className="source-btn-count">{label}</span>
       </button>
       {open && (

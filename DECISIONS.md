@@ -562,3 +562,36 @@ diminishing returns.
   three, so it could not propose what the tool would happily have executed. The same seam as
   the card contract, one layer up — a capability exists only where every layer that must
   name it does.
+
+## The remaining wiring, and a chat interface
+
+- 2026-08-12 | All five document builders are reachable, not three | booking_confirmation and
+  usage_summary were tested and unreachable. The booking one is scoped in SQL rather than
+  fetched and then checked, so a booking that is not yours is not found — the same answer
+  whether or not it exists. A test now asserts every registered template has a renderer: a
+  template the tool accepts but the executor cannot render is an approval that fails after
+  the human has already said yes.
+- 2026-08-12 | get_facility_catalog was the tool that knew least about the facility | It
+  predated migration 008 and still returned id/name/code, so the tool the planner reaches
+  for most could not answer where anything is. Widened to the location and capability
+  columns, additively — the flat instruments list and the counts are unchanged, so nothing
+  that depended on its shape breaks.
+- 2026-08-12 | An ask is a clarification, not a refusal | The action branch typed its
+  question back to the user as response_type "redirect". The UI turns "Which one — Confocal
+  C2 or Confocal C3?" into clickable options, but only for "clarify", so the most
+  demo-visible clarification in the product never rendered the feature built for it — and
+  the reader was told their request had failed when one word would have completed it.
+- 2026-08-12 | The refusal is not an error, and must not be dressed as one | The redirect was
+  styled amber, beside a red error banner. Nothing failed when the assistant declines to
+  answer; dressing that as a warning teaches a reader to distrust the reply that has earned
+  the most trust. It is now a neutral block with a teal rule — visually distinct, calm.
+- 2026-08-12 | Chrome is spent only on things that are actually structured | An ordinary
+  answer lost its card border: a frame around a sentence claims a structure the sentence
+  does not have. The three things that keep chrome are the result card, the pending write
+  and the composer.
+- 2026-08-12 | No stop button, because nothing can stop the turn | The composer has no
+  cancel control: the graph cannot abort mid-turn, and a stop button that does not stop is
+  precisely the wrong thing to ship in a product whose claim is that it does not pretend.
+- 2026-08-12 | A parameter the caller did not give is not a parameter | The approval card a
+  human reads printed "Generate monthly summary as MD (account code None)". Empty values are
+  dropped from the preview rather than rendered as Python's None.

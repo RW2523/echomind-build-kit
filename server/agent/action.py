@@ -35,7 +35,8 @@ request_booking(instrument_id, starts_at, ends_at, account_code)
 generate_document(template, params)
     template is one of usage_report, onboarding_packet, monthly_summary,
     invoice_statement (params: account_code, period), facility_directory
-    (params: technique?, campus?), capability_report (params: goal)."""
+    (params: technique?, campus?), capability_report (params: goal),
+    booking_confirmation (params: booking_id), usage_summary (params: month?)."""
 
 SYSTEM = """You turn a user's request into exactly one write-tool call for the Infinity X
 platform. You never execute anything: the call you describe becomes a pending action that
@@ -545,8 +546,12 @@ def propose(
         # or firing a call that the tool will only reject.
         question = str(chosen.get("ask") or "").strip()
         if question:
+            # A question back to the user is a clarification, not a refusal. It was typed
+            # as a redirect, so the UI — which turns "Which one — A or B?" into clickable
+            # options — never saw the case it was built for, and the reader was told the
+            # request had failed when in fact one word would complete it.
             return AgentResponse(
-                response_type="redirect",
+                response_type="clarify",
                 route="action",
                 text=question,
                 meta={"plan": chosen, "awaiting": chosen.get("missing")},
