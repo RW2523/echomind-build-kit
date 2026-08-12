@@ -119,7 +119,16 @@ HEDGE_RE = re.compile(
           (context|information|detail|specifics)\b
         |^\W{0,3}i\s+(cannot|can't|am\s+unable\s+to)\s+
           (tell|determine|know|identify)\s+what\b
-        |^\W{0,3}(it\s+is|it's)\s+(not\s+clear|unclear)\s+what\b""",
+        |^\W{0,3}(it\s+is|it's)\s+(not\s+clear|unclear)\s+what\b
+        # "The procedure for X is not explicitly detailed in the provided sources" —
+        # the model saying INSUFFICIENT_CONTEXT in prose, then dumping tangential chunks
+        # and shipping it as an answer. It knows it cannot answer; take it at its word.
+        |^\W{0,3}the\s+[\w\s'/-]{0,80}?\bis\s+not\s+
+          (explicitly\s+|clearly\s+|directly\s+|specifically\s+)?
+          (detailed|specified|mentioned|described|provided|stated|listed|documented|
+           covered|available|given|outlined|defined|addressed|found|included)\b
+          [^.!?]{0,50}?\b(in|within|by)\s+the\s+(provided\s+|available\s+)?
+          (source|document|context|record|material|corpus|polic|information)""",
     re.IGNORECASE | re.VERBOSE,
 )
 

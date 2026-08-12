@@ -343,6 +343,37 @@ def verify_numbers(
 _TWO_DP = Decimal("0.01")
 
 
+def _quantise(value: Any) -> Any:
+    """Round a real number to two places, keeping it numeric; leave everything else.
+
+    Applied to the rows themselves, so the evidence table shows 225.50 rather than the
+    stored 225.5000000000000000 — the sixteen-digit tail is a NUMERIC/AVG artifact, not
+    precision — and so the table matches the prose. Integers, strings, dates and None are
+    returned unchanged.
+    """
+    if isinstance(value, bool) or value is None:
+        return value
+    if isinstance(value, Decimal | float):
+        try:
+            return Decimal(str(value)).quantize(_TWO_DP, rounding=ROUND_HALF_UP)
+        except (InvalidOperation, ValueError):
+            return value
+    return value
+
+
+def _quantise_rows(rows: list[dict]) -> list[dict]:
+    return [{k: _quantise(v) for k, v in row.items()} for row in rows]
+
+
+def _all_null(rows: list[dict]) -> bool:
+    """A single aggregate row whose every value is NULL — an empty SUM/AVG, not an answer.
+
+    A SUM over no permitted rows comes back NULL, which rendered as a bare Python "None"
+    in "The records show sum: None." Treated as no records, which is what it means.
+    """
+    return len(rows) == 1 and all(v is None for v in rows[0].values())
+
+
 def _display(value: Any) -> str:
     """A value as a person should read it, not as Postgres stored it.
 
@@ -707,18 +738,133 @@ def _assert_may_read_subject(plan: dict[str, Any], ctx: Ctx) -> None:
     tools_mod.get_user_profile(ctx, user_id=subject)  # raises forbidden / not_found
 
 
+# A lab named in a question, and whether the question is about that lab's DATA (its spend,
+# usage, bookings) rather than the facility catalogue (its instruments, which anyone sees).
+_LAB_REF_RE = re.compile(r"\blab[-\s]([a-f])\b", re.IGNORECASE)
+_OWN_LAB_RE = re.compile(r"\b(?:my|our|the)\s+lab\b", re.IGNORECASE)
+_LAB_DATA_INTENT_RE = re.compile(
+    r"\b(spen[dt]|charg\w*|cost\w*|bill\w*|invoic\w*|total\w*|usage|used|hours?|"
+    r"booking\w*|booked|utili[sz]\w*|budget|allocation)\b",
+    re.IGNORECASE,
+)
+
+
+# A possessive reference to a named person: "Alice's", "Alice Nguyen's", "u-bob's". Not a
+# pronoun ("my", "their") and not a lab ("Lab A's" is handled by the lab guard).
+_PERSON_POSSESSIVE_RE = re.compile(
+    r"\b(?!(?:my|our|your|their|its|his|her|the|a|an|lab)\b)"
+    r"([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2}|u-[a-z0-9]+)'s\b"
+)
+
+
+def _assert_may_read_named_person(question: str, ctx: Ctx) -> None:
+    """A plain user asking about another named person's records is refused, before answering.
+
+    "What is on <name>'s invoice?" from a user whose planner forgot to set subject_user_id
+    narrowed to the caller's OWN invoice and returned it stamped with the other name — and,
+    tellingly, a real name (Alice) was refused while a made-up one (u-nobody) fell through,
+    which is an existence oracle. A user may read only their own records, so any possessive
+    reference to a person who is not the caller is refused outright, real name or not, which
+    also makes the two refusals identical.
+    """
+    if ctx.is_admin or ctx.is_pi:
+        return  # a PI/admin may read others; the subject-user check governs that path
+    own = {w.lower() for w in re.findall(r"[a-z]+", ctx.name.lower())} | {
+        ctx.user_id.lower(), ctx.user_id.split("-")[-1].lower(),
+    }
+    for match in _PERSON_POSSESSIVE_RE.finditer(question):
+        ref = match.group(1)
+        words = {w.lower() for w in re.findall(r"[a-z0-9]+", ref.lower())}
+        if not (words & own):  # names someone who is not the caller
+            raise forbidden()
+
+
+def _may_read_lab_aggregate(ctx: Ctx, lab_id: str) -> bool:
+    """Who may see a whole lab's totals: an admin, or the PI of that lab. Never a user."""
+    if ctx.is_admin:
+        return True
+    if ctx.is_pi:
+        return lab_id in ctx.lab_ids
+    return False
+
+
+def _assert_may_read_lab(question: str, ctx: Ctx) -> None:
+    """Refuse a lab-aggregate question the caller is not entitled to, before answering it.
+
+    A plain user cannot see a lab's totals — not even their own lab's — only their own
+    records. Asked "What did Lab A spend?", the planner would quietly narrow to the
+    caller's own account and the answer would state "Lab A spent $2689.00", which is both
+    a scope the user may not read and a false figure (the real lab total is higher). The
+    subject-user check already guards "another person"; this is the same guarantee for
+    "a lab". Catalogue questions ("what instruments are in Lab A") carry no data-intent
+    word and are left alone.
+    """
+    if not _LAB_DATA_INTENT_RE.search(question):
+        return
+    named = {f"lab-{m.group(1).lower()}" for m in _LAB_REF_RE.finditer(question)}
+    for lab in named:
+        if not _may_read_lab_aggregate(ctx, lab):
+            raise forbidden()
+    if not named and _OWN_LAB_RE.search(question) and not (ctx.is_admin or ctx.is_pi):
+        raise forbidden()  # a user asking about "my lab"'s totals — still not theirs to see
+
+
+def _availability_disambiguation(question: str, plan: dict) -> AgentResponse | None:
+    """Ask which instrument when an availability question names an ambiguous kind.
+
+    "Is the confocal free?" resolved to a random one of the two confocals each time, so
+    the same question in one thread answered "booked" then "free" — a contradiction only
+    because it silently checked different instruments. The booking path already asks in
+    this case; availability should too, so the answer is about the instrument the user
+    actually means.
+    """
+    if plan.get("tool") != "check_availability":
+        return None
+    from server.agent.action import (
+        _instrument_rows,
+        instrument_family_mentioned,
+        instruments_mentioned,
+    )
+
+    rows = _instrument_rows()
+    if instruments_mentioned(question, rows):
+        return None  # a concrete instrument was named
+    family = list(dict.fromkeys(instrument_family_mentioned(question, rows)))
+    if len(family) <= 1:
+        return None
+    names = sorted(name for iid, name in rows if iid in family)
+    return AgentResponse(
+        response_type="clarify",
+        route="data",
+        text=f"Which one — {' or '.join(names)}?",
+        meta={"awaiting": "instrument_id"},
+    )
+
+
 def answer(question: str, ctx: Ctx, history: str = "") -> AgentResponse:
     plan = _normalise_plan(_plan(question, ctx, history))
     log.info("data plan: %s", plan)
 
+    if (clar := _availability_disambiguation(question, plan)) is not None:
+        return clar
+
     executed_sql: str | None = None
     try:
+        _assert_may_read_lab(question, ctx)
+        _assert_may_read_named_person(question, ctx)
         _assert_may_read_subject(plan, ctx)
         if plan.get("mode") == "sql":
             rows, columns, executed_sql = _run_sql(plan.get("sql", ""), ctx, question)
             scalars: dict[str, Any] = {}
         else:
             rows, columns, scalars = _run_tool(plan, ctx)
+        # An empty aggregate (SUM over no rows = NULL) is no records, not a "None" to
+        # print; and a sixteen-digit NUMERIC tail is a storage artifact, not precision.
+        # Normalise once, here, so the evidence table, the model's context and the prose
+        # all show the same clean figures.
+        if _all_null(rows):
+            rows, columns = [], []
+        rows = _quantise_rows(rows)
     except ToolError as exc:
         if exc.code == "forbidden":
             return AgentResponse(

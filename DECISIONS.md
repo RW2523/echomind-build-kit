@@ -397,3 +397,62 @@ presentation-layer or multi-turn:
   never an account code. A worked reminder that a change to what a turn *says* is a change
   to what the next turn *plans*: the multi-turn suite caught it, single-turn checks could
   not.
+
+## A second adversarial workflow, and eight more defects
+
+The confirmation run of the nine-agent workflow verified the first six fixes held and found
+eight more, its skeptic again independently reproducing each — and again refuting the
+scariest finder claim (a booking silently retargeted to Cryo-EM Titan proved to be a
+knowledge answer with no pending action, not a wrong booking). Server-side isolation held
+across every trial. What was real:
+
+- 2026-08-12 | A plain user cannot read a lab's totals, not even their own lab's | My own
+  account-codes fix caused this: with her codes now in the planner context, "What did Lab A
+  spend?" from alice narrowed to her ACC-A1 and answered "Lab A spent $2689.00" — a scope
+  she cannot see and a false figure (the real total is $5514.50). A lab-scope guard now
+  refuses a lab-aggregate question the caller is not entitled to — a user never, a PI only
+  for their own labs — before it is answered. The mirror of the existing subject-user check,
+  for a lab.
+- 2026-08-12 | A user reading another named person is refused identically whether or not
+  that person exists | "What is on <name>'s invoice?" from bob whose planner forgot the
+  subject narrowed to bob's own invoice and stamped it with the other name; a real name
+  (Alice) refused while a made-up one (u-nobody) fell through — an existence oracle. A
+  person-scope guard refuses any possessive reference to someone who is not the caller,
+  real or invented, so the two refusals are byte-identical.
+- 2026-08-12 | A question about the booking in progress is answered from the conversation,
+  not the corpus | "Which instrument am I about to book?" routed to knowledge, retrieved a
+  tangential SOP and answered, confidently, "Cryo-EM Titan" — one turn after the user set it
+  to Confocal C2. The corpus cannot know the pending action; the conversation can. It now
+  answers from the last proposal in history, or says honestly that nothing is prepared.
+- 2026-08-12 | An ambiguous instrument-kind in an availability question asks, like booking
+  does | "Is the confocal free?" resolved to a random one of the two confocals, so the same
+  question answered "booked" then "free" in one thread. It now asks which, consistent with
+  the booking path.
+- 2026-08-12 | A NUL byte no longer 500s the endpoint | A message with a NUL reached
+  Postgres, which cannot store it, and crashed the turn. Control characters are stripped at
+  the request edge; a message that is nothing but control bytes is a calm 422, and a
+  client-supplied thread_id must match our own shape so it cannot smuggle one into the
+  store either.
+- 2026-08-12 | NUMERIC artifacts are quantised in the evidence rows, not just the prose |
+  The first fix cleaned the answer text; the evidence table still showed
+  225.5000000000000000. Every real number in a row is now quantised to two places at the
+  source, so the table and the prose agree, and an empty SUM (NULL) is treated as no
+  records rather than printed as "None".
+- 2026-08-12 | The retention/hazardous faithfulness edge is a documented limitation, not a
+  prompt patch | The retention answer sometimes lumped hazardous material into the 90-day
+  bucket, though the source says "per the risk assessment" for it, and the faithfulness
+  check passed the number because it does appear in the source — for a different row. A
+  generation rule telling the model to attach each table value to its own category fixed
+  the hazardous case but immediately regressed k02 (the cancellation policy), which the
+  faithfulness judge then declined 3/3 — an enforced eval item traded for a subtle one.
+  Reverted. The narrow miscategorisation on one multi-row table is left as a known edge
+  rather than destabilising the whole knowledge path; the second time a knowledge-prompt
+  change has regressed a passing case, and the lesson holds.
+- 2026-08-12 | The "answer isn't in the sources" prose hedge is caught | Surfaced while
+  fixing the above: "What is the procedure for reserving the seminar room?" (not in the
+  corpus) was answered — "The procedure ... is not explicitly detailed in the provided
+  sources. However, based on the information available: ..." — then dumped tangential
+  booking rules and shipped it as an answer, 4 times in 5. That is INSUFFICIENT_CONTEXT
+  written as prose. The hedge detector now catches "The <X> is not (explicitly) detailed
+  in the sources", so it redirects, 6/6. Tested against real answers so a mid-sentence
+  caveat is never mistaken for a refusal.

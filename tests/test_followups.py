@@ -539,3 +539,114 @@ def test_the_data_planner_is_given_the_callers_account_codes():
     alice = Ctx(user_id="u-alice", name="Alice", role="user", lab_ids=("lab-a",),
                 facility_ids=(), raw={})
     assert _caller_codes(alice) == ["ACC-A1"]
+
+
+# --- defects found by the confirmation workflow, 2026-08-12 (round 2) ---------------
+
+from server.agent.data import (  # noqa: E402
+    _all_null,
+    _assert_may_read_lab,
+    _assert_may_read_named_person,
+    _quantise,
+)
+from server.mcp.errors import ToolError  # noqa: E402
+
+
+def _ctx(uid, name, role, labs):
+    from server.auth import Ctx
+    return Ctx(user_id=uid, name=name, role=role, lab_ids=tuple(labs), facility_ids=(), raw={})
+
+
+@pytest.mark.parametrize(
+    ("who", "question", "refused"),
+    [
+        (("u-alice", "Alice Nguyen", "user", ["lab-a"]), "What did Lab A spend in March 2026?", True),
+        (("u-alice", "Alice Nguyen", "user", ["lab-a"]), "How much has my lab spent?", True),
+        (("u-alice", "Alice Nguyen", "user", ["lab-a"]), "How much did I spend in March 2026?", False),
+        (("u-alice", "Alice Nguyen", "user", ["lab-a"]), "What instruments are in Lab A?", False),
+        (("u-asha", "Asha Patel", "pi", ["lab-a"]), "What did Lab A spend in March 2026?", False),
+        (("u-asha", "Asha Patel", "pi", ["lab-a"]), "What did Lab B spend in March 2026?", True),
+        (("u-cora", "Cora", "admin", ["lab-a", "lab-b"]), "What did Lab B spend?", False),
+    ],
+)
+def test_a_lab_aggregate_the_caller_cannot_see_is_refused(who, question, refused):
+    ctx = _ctx(*who)
+    if refused:
+        with pytest.raises(ToolError):
+            _assert_may_read_lab(question, ctx)
+    else:
+        _assert_may_read_lab(question, ctx)  # must not raise
+
+
+@pytest.mark.parametrize(
+    ("who", "question", "refused"),
+    [
+        (("u-bob", "Bob Okafor", "user", ["lab-b"]), "What is on Alice Nguyen's invoice?", True),
+        (("u-bob", "Bob Okafor", "user", ["lab-b"]), "What is on u-nobody's invoice?", True),
+        (("u-bob", "Bob Okafor", "user", ["lab-b"]), "What is on Jordan Fakeperson's invoice?", True),
+        (("u-bob", "Bob Okafor", "user", ["lab-b"]), "What is on my invoice?", False),
+        (("u-alice", "Alice Nguyen", "user", ["lab-a"]), "What is on Alice's invoice?", False),
+        (("u-alice", "Alice Nguyen", "user", ["lab-a"]), "How much did I spend?", False),
+    ],
+)
+def test_a_user_reading_another_named_person_is_refused_identically(who, question, refused):
+    """Real name and made-up name must refuse the same way — no existence oracle."""
+    ctx = _ctx(*who)
+    if refused:
+        with pytest.raises(ToolError):
+            _assert_may_read_named_person(question, ctx)
+    else:
+        _assert_may_read_named_person(question, ctx)
+
+
+def test_numeric_artifacts_are_quantised_for_display():
+    from decimal import Decimal
+    assert _quantise(Decimal("225.5000000000000000")) == Decimal("225.50")
+    assert _quantise(Decimal("0E-20")) == Decimal("0.00")
+    assert _quantise(Decimal("412.00")) == Decimal("412.00")
+    assert _quantise(20) == 20                # a count is left an int
+    assert _quantise("in_prep") == "in_prep"
+    assert _quantise(None) is None
+
+
+def test_an_all_null_aggregate_row_is_recognised():
+    assert _all_null([{"sum": None}]) is True
+    assert _all_null([{"sum": None, "count": None}]) is True
+    assert _all_null([{"sum": Decimal("5")}]) is False
+    assert _all_null([{"a": None}, {"a": None}]) is False  # more than one row
+
+
+def test_the_pending_booking_question_is_answered_from_state():
+    from server.agent.knowledge import _pending_booking_answer
+    hist = ("  assistant (approval_request): Book Confocal C2 for 2.0 h on "
+            "2027-04-06 (09:00-11:00 UTC), account ACC-A1")
+    r = _pending_booking_answer("which instrument am I about to book?", hist)
+    assert r is not None and "Confocal C2" in r.text
+    # a corpus question is not hijacked
+    assert _pending_booking_answer("what instruments can I book?", hist) is None
+    assert _pending_booking_answer("which instrument am I trained on?", hist) is None
+    # nothing pending -> honest
+    assert _pending_booking_answer("my pending booking?", "").response_type == "redirect"
+
+
+def test_a_control_character_message_is_cleaned_not_crashed():
+    from server.api.chat import ChatRequest
+    assert ChatRequest(message="book" + chr(0) + " confocal").message == "book confocal"
+    with pytest.raises(Exception):  # nothing legible left -> validation error, not a 500
+        ChatRequest(message=chr(0) + chr(0))
+    with pytest.raises(Exception):
+        ChatRequest(message="hi", thread_id="thr-" + chr(0))
+
+
+def test_the_answer_is_not_in_the_sources_hedge_is_caught():
+    """The model saying "The procedure for X is not detailed in the provided sources"
+    then dumping tangential chunks is INSUFFICIENT_CONTEXT in prose — a redirect."""
+    from server.agent.generate import reads_as_a_hedge
+    assert reads_as_a_hedge(
+        "The procedure for reserving the seminar room is not explicitly detailed in the "
+        "provided sources. However, based on the information available: ...")
+    assert reads_as_a_hedge("The parking policy is not specified in the sources.")
+    # a real answer that merely contains a caveat is NOT a hedge
+    assert not reads_as_a_hedge(
+        "Cancelling 12 hours before start incurs 50% of the booked time [2].")
+    assert not reads_as_a_hedge("The maximum booking length is 12 hours [3].")

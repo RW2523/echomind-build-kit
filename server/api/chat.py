@@ -5,13 +5,14 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import uuid
 from typing import Any
 
 import anyio.to_thread
 from fastapi import APIRouter, Body, Depends, HTTPException
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import text
 
 from server.agent.graph import get_graph, run_turn
@@ -23,9 +24,33 @@ log = logging.getLogger("echomind.chat")
 router = APIRouter(tags=["chat"])
 
 
+# C0 control characters except tab, newline and carriage return. A NUL byte in particular
+# reaches Postgres, which cannot store it in a text column, and crashed the turn with an
+# unhandled 500. Stripped at the edge so degenerate input is a calm reply (or a 422 when
+# nothing legible remains), never a server error.
+_CONTROL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+_THREAD_RE = re.compile(r"^thr-[a-z0-9]{1,64}$")
+
+
 class ChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=4000)
     thread_id: str | None = None
+
+    @field_validator("message", mode="before")
+    @classmethod
+    def _clean_message(cls, value: object) -> object:
+        if isinstance(value, str):
+            return _CONTROL_RE.sub("", value).strip()
+        return value
+
+    @field_validator("thread_id")
+    @classmethod
+    def _valid_thread(cls, value: str | None) -> str | None:
+        # A client-supplied id becomes a checkpointer key; only our own shape is allowed,
+        # so a hostile id cannot smuggle a control byte into the store either.
+        if value is not None and not _THREAD_RE.match(value):
+            raise ValueError("thread_id must look like thr-<hex>")
+        return value
 
 
 def _new_thread_id() -> str:

@@ -7,6 +7,7 @@ them. Anything else is an honest redirect.
 from __future__ import annotations
 
 import logging
+import re
 
 from server.agent import faithfulness as faith
 from server.agent import gaps, rewrite
@@ -18,6 +19,49 @@ from server.auth import Ctx
 from server.rag.retrieval import retrieve
 
 log = logging.getLogger("echomind.knowledge")
+
+# A question about the booking the user is in the middle of preparing — "which instrument
+# am I about to book?" — is about conversation state, not the corpus. Routed to knowledge
+# it retrieved a tangential SOP and answered, confidently, "Cryo-EM Titan" — an instrument
+# never mentioned, one turn after the user set it to Confocal C2. The corpus cannot answer
+# a question about the pending action; the conversation can. Deliberately narrow: it must
+# say "book", so "which instrument am I trained on?" is untouched.
+_PENDING_BOOKING_Q = re.compile(
+    r"\b(about to book|going to book"
+    r"|which (?:instrument|one) am i (?:about to |going to )?book"
+    r"|what am i (?:about to |going to )?book"
+    r"|what did i just book"
+    r"|my (?:pending|prepared|current) booking"
+    r"|what(?:'s| is) my (?:pending|prepared|current) booking)\b",
+    re.IGNORECASE,
+)
+_PROPOSED_BOOKING_RE = re.compile(r"Book\s+(.+?)\s+for\s+[\d.]+\s*h\b", re.IGNORECASE)
+
+
+def _pending_booking_answer(question: str, history: str) -> AgentResponse | None:
+    """Answer a question about the in-progress booking from state, not from the corpus."""
+    if not _PENDING_BOOKING_Q.search(question):
+        return None
+    proposals = _PROPOSED_BOOKING_RE.findall(history or "")
+    if proposals:
+        instrument = proposals[-1].strip()
+        log.info("answering a pending-booking question from state: %s", instrument)
+        return AgentResponse(
+            response_type="answer",
+            route="knowledge",
+            text=(
+                f"You're about to book {instrument} — it is prepared and waiting for your "
+                "approval. Nothing has been booked yet; approve it to go ahead, or decline."
+            ),
+        )
+    return AgentResponse(
+        response_type="redirect",
+        route="knowledge",
+        text=(
+            "You don't have a booking prepared right now. Ask me to book an instrument and "
+            "I'll prepare it for your approval first."
+        ),
+    )
 
 
 def _redirect(question: str, gate: GateResult, extra: dict | None = None,
@@ -40,6 +84,12 @@ def _redirect(question: str, gate: GateResult, extra: dict | None = None,
 
 
 def answer(question: str, ctx: Ctx, k: int = 8, history: str = "") -> AgentResponse:
+    # A question about the booking in progress is answered from the conversation, not the
+    # corpus — the corpus has no idea what the caller is about to book, and answering from
+    # it invents an instrument.
+    if (pending := _pending_booking_answer(question, history)) is not None:
+        return pending
+
     # Retrieval and the judges work on the resolved question; the user's own words are
     # what they see. "How long is that?" retrieves on five stopwords otherwise.
     if rewrite.is_unresolvable(question, history):
