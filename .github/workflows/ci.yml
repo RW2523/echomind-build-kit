@@ -171,6 +171,16 @@ jobs:
       - run: .venv/bin/pytest -q
       - run: make eval
       - run: make demo
+      # Whole conversations on one thread. `make eval` scores twenty independent
+      # questions and `make demo` walks six scripted scenes, and both were green while a
+      # live three-turn conversation called an instrument available one turn after
+      # refusing to book it for being under maintenance. Every other check here is one
+      # turn deep, so nothing else in this file can see that class of bug.
+      #
+      # `if: always()` so a demo failure does not hide a conversation failure: they fail
+      # for different reasons and the run is more useful when it reports both.
+      - if: always()
+        run: make convo
 
       - name: Publish the eval report
         if: always()

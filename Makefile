@@ -97,7 +97,8 @@ demo: venv
 	$(PY) -m scripts.demo
 
 # Whole conversations on one thread. Single-turn evals cannot see a turn that
-# contradicts the one before it; this can. Needs `make api` running.
+# contradicts the one before it; this can. Starts its own API if none is running,
+# and leaves one it did not start alone.
 convo: venv
 	$(PY) -m scripts.conversations
 

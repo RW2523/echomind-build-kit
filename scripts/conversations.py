@@ -349,12 +349,17 @@ class Runner:
 
 def main() -> int:
     only = sys.argv[1] if len(sys.argv) > 1 else None
+
+    # Start the API if nothing is listening, exactly as `make demo` does, so this runs
+    # from a cold shell and from a CI job without a separate "start the server" step. An
+    # API someone else started is left running afterwards; one we started is stopped.
+    from scripts.demo import start_api, stop_api
+
+    process = start_api()
     try:
-        httpx.get(f"{BASE}/readyz", timeout=5).raise_for_status()
-    except Exception:
-        print(f"{RED}API is not up at {BASE} — start it with `make api`.{RESET}")
-        return 2
-    return Runner().run(only)
+        return Runner().run(only)
+    finally:
+        stop_api(process)
 
 
 if __name__ == "__main__":
