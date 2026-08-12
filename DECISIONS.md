@@ -479,25 +479,30 @@ and two were judged out of scope for a prompt-level fix.
   usage lookup whose rows carry user_id='u-alice' on every line, and the model wrote
   "u-alice has scheduled hours...". A self-identity column — the same handle on every row —
   is dropped before generation; a column that varies (a PI's rollup) is kept.
-- 2026-08-12 | Two deeper edges are documented, not patched | "The average cost per
-  instrument is $5514.50" reports the sum relabelled as the average (the figure is a
-  verified column total, so number-checking cannot catch the wrong label), and "free slots
-  on 1 April 2027" over-ranges the date to a month and the prose then contradicts its own
-  rows. A planner rule to compute AVG for average questions did not fix the first and
-  rippled into a bare-month query dropping its month filter — the third time a prompt tweak
-  has regressed a passing case — so it was reverted. Both are planner/generation edges on
-  unusual phrasings, on the correctness layer, never the isolation layer, and are left as
-  known limitations rather than traded for the stability three rounds have built.
+- 2026-08-12 | The two deeper edges, fixed in code after the prompt route failed | A
+  planner rule to compute AVG rippled into a bare-month query dropping its month filter —
+  the third prompt tweak to regress a passing case — so both were fixed deterministically.
+  "Average cost per instrument" reported the SUM ($5514.50) relabelled as the average;
+  both sum and mean are verified numbers, so number-checking cannot tell them apart by
+  value, only by role. column_averages computes the mean, it is handed to the model as a
+  verified fact for average questions, and a guard restates it deterministically if the
+  reply gives the sum where the mean was asked ($1102.90). "Free slots on 1 April 2027"
+  was planned as the whole month, so the prose contradicted its own row dump: when a
+  question names exactly one date that is the window's start and the plan spans more than a
+  day, the window is narrowed to that day — held back for a between-range or a single-day
+  time window (the demo's 14:00-16:00 check), which are left exactly as they are. Both were
+  fixed without touching a prompt.
 
 ## Where the adversarial loop stopped
 
 Three full nine-agent rounds. Round one found six, round two eight, round three six; every
 round the skeptic refuted the finders' scariest claims as non-reproducible, and every round
 server-side isolation held with zero cross-tenant leaks across more than a hundred
-cross-scope trials. Nineteen defects fixed, every one on the presentation or correctness
-layer; three self-inflicted regressions from prompt tweaks caught before commit; two deep
-edges documented. The loop is stopped here deliberately: the finders' yield is now
-dominated by non-reproducible claims and long-tail generation edges on unusual inputs,
-while the security surface — the thing that would actually matter — has been quiet for
-three rounds. Further prompt-level chasing trades a stable, fully-green system for
+cross-scope trials. Twenty-one defects fixed, every one on the presentation or correctness
+layer — including the two deepest edges, once a deterministic route round the prompt-ripple
+problem was found; three self-inflicted regressions from prompt tweaks caught before commit.
+The loop is stopped here deliberately: the finders' yield is now dominated by
+non-reproducible claims and long-tail generation edges on unusual inputs, while the
+security surface — the thing that would actually matter — has been quiet for three rounds.
+Further prompt-level chasing trades a stable, fully-green system for
 diminishing returns.

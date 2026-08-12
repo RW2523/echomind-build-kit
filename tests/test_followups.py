@@ -705,3 +705,62 @@ def test_the_callers_own_id_column_is_dropped_before_prose():
     multi = [{"user_id": "u-alice", "h": 1}, {"user_id": "u-bob", "h": 2}]
     _, cols2 = _drop_self_identity(multi, ["user_id", "h"], alice)
     assert "user_id" in cols2
+
+
+# --- the two documented edges, now fixed (2026-08-12) ------------------------------
+
+from datetime import date  # noqa: E402
+
+
+def test_a_single_named_date_narrows_an_over_ranged_availability_window():
+    from server.agent.data import _narrow_availability_to_named_day
+    a = {"instrument_id": "ins-confocal-c2", "date_from": "2027-04-01", "date_to": "2027-04-30"}
+    _narrow_availability_to_named_day(a, "what free slots does Confocal C2 have on 1 April 2027?")
+    assert a["date_from"] == "2027-04-01" and a["date_to"] == "2027-04-01"
+
+
+def test_a_real_date_range_is_not_narrowed():
+    from server.agent.data import _narrow_availability_to_named_day
+    a = {"date_from": "2027-04-01", "date_to": "2027-04-05"}
+    _narrow_availability_to_named_day(a, "free slots between 1 April and 5 April 2027")
+    assert a["date_to"] == "2027-04-05", "a between-range must be left alone"
+
+
+def test_a_single_day_time_window_is_not_narrowed():
+    """The demo's '14:00-16:00 on one day' spans zero days — leave the specific window."""
+    from server.agent.data import _narrow_availability_to_named_day
+    a = {"date_from": "2027-12-02T14:00:00Z", "date_to": "2027-12-02T16:00:00Z"}
+    _narrow_availability_to_named_day(
+        a, "Is Confocal C2 free on Thursday 2027-12-02 between 14:00 and 16:00 UTC?")
+    assert a["date_from"] == "2027-12-02T14:00:00Z"
+
+
+def test_explicit_dates_finds_the_dates_a_question_names():
+    from server.agent.data import _explicit_dates
+    assert _explicit_dates("free slots on 1 April 2027") == {date(2027, 4, 1)}
+    assert _explicit_dates("on 2027-04-01") == {date(2027, 4, 1)}
+    assert _explicit_dates("next month") == set()
+
+
+def test_an_average_question_reports_the_mean_not_the_sum():
+    from decimal import Decimal
+
+    from server.agent.data import (
+        _correct_sum_reported_as_average,
+        column_averages,
+        column_totals,
+        wants_average,
+    )
+    rows = [{"instrument": n, "total_cost": Decimal(v)} for n, v in [
+        ("B4", "451.00"), ("C2", "412.00"), ("Titan", "2972.50"),
+        ("LS7", "680.00"), ("Nano", "999.00")]]
+    assert column_totals(rows)["total_cost"] == Decimal("5514.50")
+    assert column_averages(rows)["total_cost"] == Decimal("1102.90")
+    assert wants_average("the average cost per instrument")
+    assert not wants_average("what did Lab A spend")
+    q = "What was the average cost per instrument?"
+    # the sum stated as the average is corrected...
+    fixed = _correct_sum_reported_as_average("The average is $5514.50.", q, rows)
+    assert fixed is not None and "1102.90" in fixed and "5514.50" in fixed
+    # ...but a correct mean is left alone
+    assert _correct_sum_reported_as_average("The average is $1102.90.", q, rows) is None

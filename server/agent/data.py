@@ -12,8 +12,11 @@ import contextlib
 import logging
 import re
 from collections.abc import Iterable
+from datetime import date
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any
+
+from dateutil import parser as date_parser
 
 from server.agent.llm import chat, chat_json
 from server.agent.responses import AgentResponse
@@ -287,6 +290,31 @@ def column_totals(rows: list[dict]) -> dict[str, Decimal]:
     return totals
 
 
+_AVERAGE_RE = re.compile(r"\b(average|mean|avg|typical|on average|per\b.{0,20}\bon average)\b",
+                         re.IGNORECASE)
+
+
+def wants_average(question: str) -> bool:
+    """The question asks for a mean, not a sum or a breakdown."""
+    return bool(_AVERAGE_RE.search(question))
+
+
+def column_averages(rows: list[dict]) -> dict[str, Decimal]:
+    """Mean of each purely-numeric column — the average across the returned groups.
+
+    "The average cost per instrument" is the mean of the per-instrument totals, and the
+    model kept reporting their SUM instead (a real, verified total, so number-checking
+    could not catch the wrong label). Computed here so the correct figure is available and
+    the wrong one can be spotted, the same guarantee column_totals gives for a sum.
+    """
+    totals = column_totals(rows)
+    n = len(rows)
+    if n == 0:
+        return {}
+    return {col: (total / n).quantize(_TWO_DP, rounding=ROUND_HALF_UP)
+            for col, total in totals.items()}
+
+
 def _allowed_numbers(
     rows: list[dict], question: str, scalars: dict[str, Any] | None = None
 ) -> set[Decimal]:
@@ -310,6 +338,8 @@ def _allowed_numbers(
         allowed |= _numbers_in(key) | _numbers_in(humanise_key(key))
     # Verified aggregates over the returned rows.
     allowed |= set(column_totals(rows).values())
+    if wants_average(question):
+        allowed |= set(column_averages(rows).values())
 
     # Accept equivalent spellings: 412 for 412.00, and 2dp rounding of long decimals.
     widened: set[Decimal] = set()
@@ -659,6 +689,7 @@ def answer_from_rows(
         )
 
     totals = column_totals(rows)
+    averages = column_averages(rows) if wants_average(question) and len(rows) > 1 else {}
     context = (f"QUESTION:\n{question}\n\nROWS ({len(rows)} returned):\n"
                f"{_render_rows(rows, limit=25)}")
     if scalars:
@@ -668,6 +699,13 @@ def answer_from_rows(
         context += "\n\nVERIFIED COLUMN TOTALS (computed from the rows above):\n" + "\n".join(
             f"  sum({k}) = {v}" for k, v in totals.items()
         )
+    if averages:
+        # The question asked for an average; the mean of each column is the figure it
+        # wants, not the sum. Given explicitly so the reply states the average and not
+        # the total that happens to sit beside it.
+        context += ("\n\nVERIFIED COLUMN AVERAGES (the mean across the rows — use these "
+                    "for an 'average' question, NOT the sum):\n" + "\n".join(
+                        f"  average({k}) = {v}" for k, v in averages.items()))
 
     draft = chat(
         [
@@ -690,10 +728,100 @@ def answer_from_rows(
             offenders,
         )
         return _deterministic_answer(rows, question), False
+
+    if averages and (fixed := _correct_sum_reported_as_average(draft, question, rows)):
+        return fixed, False
     return draft, True
 
 
-def _normalise_plan(plan: dict[str, Any]) -> dict[str, Any]:
+def _correct_sum_reported_as_average(draft: str, question: str, rows: list[dict]) -> str | None:
+    """Catch "the average is $5514.50" when $5514.50 is actually the sum.
+
+    Both the sum and the mean are verified numbers, so the number check cannot tell them
+    apart — only their roles differ. If, for a column whose sum and mean are not equal, the
+    reply states the sum and never the mean, it has answered an average question with a
+    total. Restated deterministically as the mean, which is the figure that was asked for.
+    """
+    totals, averages = column_totals(rows), column_averages(rows)
+    for column, total in totals.items():
+        mean = averages.get(column)
+        if mean is None or mean == total:
+            continue
+        if _states_number(draft, total) and not _states_number(draft, mean):
+            label = humanise_key(column)
+            log.info("average question answered with the sum of %s; restating the mean", column)
+            return (f"The average {label} is {mean} "
+                    f"(the mean across {len(rows)} rows; their total is {total}).")
+    return None
+
+
+def _states_number(text: str, value: Decimal) -> bool:
+    """Does the prose contain this number, in any of its equivalent spellings?"""
+    forms = {str(value), str(value.normalize()),
+             str(value.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP))}
+    with contextlib.suppress(Exception):
+        forms.add(str(int(value)))
+    stripped = CANONICAL_NUMBER_RE.sub(lambda m: m.group(0).replace(",", ""), text)
+    return any(re.search(rf"(?<![\d.]){re.escape(f)}(?![\d])", stripped) for f in forms)
+
+
+_MONTHS = ("January|February|March|April|May|June|July|August|September|October|"
+           "November|December|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec")
+_DATE_PATTERNS = (
+    re.compile(r"\b\d{4}-\d{2}-\d{2}\b"),
+    re.compile(rf"\b\d{{1,2}}(?:st|nd|rd|th)?\s+(?:{_MONTHS})\s+\d{{4}}\b", re.IGNORECASE),
+    re.compile(rf"\b(?:{_MONTHS})\s+\d{{1,2}}(?:st|nd|rd|th)?,?\s+\d{{4}}\b", re.IGNORECASE),
+)
+
+
+def _explicit_dates(question: str) -> set[date]:
+    """Every specific calendar date the question names, e.g. {2027-04-01}."""
+    found: set[date] = set()
+    for pattern in _DATE_PATTERNS:
+        for match in pattern.finditer(question):
+            with contextlib.suppress(Exception):
+                found.add(date_parser.parse(match.group(0).replace(",", ""), fuzzy=False).date())
+    return found
+
+
+_DATE_RANGE_RE = re.compile(
+    r"\bbetween\b|\bthrough\b|\buntil\b|\bfrom\b.{0,40}\bto\b", re.IGNORECASE
+)
+
+
+def _narrow_availability_to_named_day(arguments: dict[str, Any], question: str) -> None:
+    """Pull an over-ranged availability window back to the single day the question named.
+
+    "what free slots does Confocal C2 have on 1 April 2027?" was planned as 1 April through
+    the end of the month, so it returned a wall of daily slots the model then summarised
+    wrongly ("no free slots" beside rows that listed them). When the question names exactly
+    one date, and that date is the window's start, and the window spans more than a day, the
+    plan over-reached: narrow it to that day.
+
+    Held back deliberately: a phrase that spans dates ("between 1 April and 5 April") is a
+    real range, and a single day carrying only a time window (the demo's 14:00-16:00 check)
+    spans zero days — both are left exactly as they are.
+    """
+    if _DATE_RANGE_RE.search(question):
+        return
+    named = _explicit_dates(question)
+    start_s, end_s = arguments.get("date_from"), arguments.get("date_to")
+    if len(named) != 1 or not (isinstance(start_s, str) and isinstance(end_s, str)):
+        return
+    try:
+        start = date_parser.parse(start_s).date()
+        end = date_parser.parse(end_s).date()
+    except (ValueError, OverflowError):
+        return
+    day = next(iter(named))
+    if day == start and (end - start).days > 1:  # over-ranged past the named day
+        arguments["date_from"] = day.isoformat()
+        arguments["date_to"] = day.isoformat()  # equal date-only values read as that day
+        log.info("availability over-ranged to %s..%s; narrowing to named day %s",
+                 start_s, end_s, day.isoformat())
+
+
+def _normalise_plan(plan: dict[str, Any], question: str = "") -> dict[str, Any]:
     """Lift plan-level keys out of `arguments`, where the model sometimes buries them.
 
     `subject_user_id` is a plan-level field: the entitlement check reads it from the top
@@ -733,6 +861,7 @@ def _normalise_plan(plan: dict[str, Any]) -> dict[str, Any]:
         elif arguments.get("date_to") and not arguments.get("date_from"):
             arguments["date_from"] = arguments["date_to"]
             log.info("one date given; reading it as the whole of that day")
+        _narrow_availability_to_named_day(arguments, question)
 
     if plan.get("tool") == "get_usage_records":
         scope = arguments.get("scope")
@@ -870,7 +999,7 @@ def _availability_disambiguation(question: str, plan: dict) -> AgentResponse | N
 
 
 def answer(question: str, ctx: Ctx, history: str = "") -> AgentResponse:
-    plan = _normalise_plan(_plan(question, ctx, history))
+    plan = _normalise_plan(_plan(question, ctx, history), question)
     log.info("data plan: %s", plan)
 
     if (clar := _availability_disambiguation(question, plan)) is not None:
