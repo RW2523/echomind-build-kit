@@ -357,7 +357,10 @@ def get_my_bookings(ctx: Ctx, date_from: str | None = None,
 def get_usage_records(ctx: Ctx, scope: str = "user", id: str | None = None,
                       month: str | None = None) -> dict[str, Any]:
     if scope not in ("user", "lab", "instrument"):
-        raise invalid_params("scope must be one of: user, lab, instrument.")
+        raise invalid_params(
+            "Usage can be read for a user, a lab or an instrument.",
+            "Say which of those you mean.",
+        )
     month = _check_month(month)
 
     with session_scope() as s:
@@ -367,7 +370,10 @@ def get_usage_records(ctx: Ctx, scope: str = "user", id: str | None = None,
             where, params = "user_id = :target", {"target": target}
         elif scope == "lab":
             if not id:
-                raise invalid_params("scope='lab' requires the lab id in `id`.")
+                raise invalid_params(
+                    "Usage for a lab needs to say which lab.",
+                    "Name the lab, e.g. lab-a.",
+                )
             _assert_can_read_lab(ctx, id)
             where, params = "lab_id = :target", {"target": id}
         else:
@@ -421,7 +427,7 @@ def get_usage_records(ctx: Ctx, scope: str = "user", id: str | None = None,
 def get_request_status(ctx: Ctx, request_id: str | None = None,
                        mine: bool = False) -> dict[str, Any]:
     if not request_id and not mine:
-        raise invalid_params("Pass request_id, or mine=true for your own requests.")
+        raise invalid_params("Say which request, or ask for your own.")
 
     with session_scope() as s:
         if request_id:
@@ -478,7 +484,7 @@ def get_request_status(ctx: Ctx, request_id: str | None = None,
 def track_sample(ctx: Ctx, barcode: str | None = None,
                  sample_id: str | None = None) -> dict[str, Any]:
     if not barcode and not sample_id:
-        raise invalid_params("Pass either barcode or sample_id.")
+        raise invalid_params("Give either the barcode or the sample id.")
 
     with session_scope() as s:
         row = s.execute(
@@ -849,7 +855,7 @@ def request_booking(ctx: Ctx, instrument_id: str, starts_at: str, ends_at: str,
     start = _parse_dt(starts_at, "starts_at")
     end = _parse_dt(ends_at, "ends_at")
     if end <= start:
-        raise invalid_params("ends_at must be after starts_at.")
+        raise invalid_params("The end of the booking must be after its start.")
     if (end - start) > timedelta(hours=12):
         raise invalid_params("A single booking may not exceed 12 hours.")
 
@@ -1069,9 +1075,47 @@ def _accepted_parameters(handler: Callable) -> tuple[set[str], bool]:
     return names, takes_kwargs
 
 
+# What each argument is called in a sentence. Underscores alone are not enough:
+# "That lookup needs date to. Say which date to you mean." is what the mechanical
+# version produced, and it reads like a broken machine rather than a question.
+_SPOKEN_ARGUMENTS = {
+    "date_from": "a start date",
+    "date_to": "an end date",
+    "starts_at": "a start time",
+    "ends_at": "an end time",
+    "instrument_id": "an instrument",
+    "project_id": "a project",
+    "request_id": "a request",
+    "sample_id": "a sample id",
+    "account_code": "an account code",
+    "template_id": "a request template",
+    "user_id": "a user",
+    "facility_id": "a facility",
+    "subject_user_id": "a user",
+    "period": "a period",
+    "month": "a month",
+    "barcode": "a barcode",
+    "scope": "a scope",
+    "fields": "the form fields",
+    "template": "a template",
+    "params": "parameters",
+    "name": "a name",
+    "email": "an email address",
+    "lab_id": "a lab",
+    "pi_ack": "the PI's acknowledgement",
+    "mine": "whether you mean your own",
+    "format": "a format",
+    "sql": "a query",
+    "id": "an id",
+}
+
+
 def _spoken(names: list[str]) -> str:
-    """Argument names as a sentence. These strings reach users, so `date_from` does not."""
-    return ", ".join(n.replace("_", " ") for n in names)
+    """Argument names as a person would say them. These strings reach users."""
+    said = [_SPOKEN_ARGUMENTS.get(n, n.replace("_", " ")) for n in names]
+    if len(said) <= 1:
+        return "".join(said)
+    return ", ".join(said[:-1]) + " and " + said[-1]
 
 
 def accepted_arguments(name: str) -> set[str]:
@@ -1129,6 +1173,6 @@ def call(ctx: Ctx, name: str, arguments: dict[str, Any] | None = None) -> dict[s
     if missing:
         raise invalid_params(
             f"That lookup needs {_spoken(missing)}.",
-            f"Say which {_spoken(missing)} you mean.",
+            "Add that and I will run it.",
         )
     return spec.handler(ctx, **arguments)

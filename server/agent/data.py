@@ -274,6 +274,15 @@ def _allowed_numbers(
         allowed |= _numbers_in(value)
     # Numbers the user themselves supplied (a month, a year, an id) are fair to echo.
     allowed |= _numbers_in(question)
+    # And numbers that are part of a column's *name* rather than of a value: a training
+    # level called biosafety-2 is a label, and quoting it is quoting the schema, not
+    # inventing a quantity. Without this, "you hold biosafety-2" counted the 2 as an
+    # unsupported figure and threw away a correct answer for the raw table.
+    for row in rows[:1]:
+        for key in row:
+            allowed |= _numbers_in(key) | _numbers_in(humanise_key(key))
+    for key in (scalars or {}):
+        allowed |= _numbers_in(key) | _numbers_in(humanise_key(key))
     # Verified aggregates over the returned rows.
     allowed |= set(column_totals(rows).values())
 
@@ -307,10 +316,19 @@ def verify_numbers(
 
 
 def _render_rows(rows: list[dict], limit: int = 10) -> str:
+    """Rows as a table, with headers in English.
+
+    Headers were the one place schema spelling still reached both the model and the
+    reader: RESULT FACTS were relabelled while the table beside them still said
+    `training_confocal`, and the deterministic fallback prints that table verbatim. A
+    reader who triggers the fallback is already getting the least polished answer the
+    system produces; they should not also have to read the schema.
+    """
     if not rows:
         return ""
     columns = list(rows[0])
-    lines = [" | ".join(columns), "-|-".join("-" * len(c) for c in columns)]
+    headers = [humanise_key(c) for c in columns]
+    lines = [" | ".join(headers), "-|-".join("-" * len(h) for h in headers)]
     for row in rows[:limit]:
         lines.append(" | ".join(str(row[c]) for c in columns))
     if len(rows) > limit:
@@ -379,7 +397,15 @@ _IDENTIFIER_RE = re.compile(r"\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b")
 
 def humanise_key(key: str) -> str:
     """A field name as a person would say it."""
-    return _FIELD_LABELS.get(key.lower(), key.replace("_", " "))
+    lowered = key.lower()
+    if lowered in _FIELD_LABELS:
+        return _FIELD_LABELS[lowered]
+    # Flattening `training: {confocal: true}` produces `training_confocal`, which the
+    # generic rule turns into "training confocal" and the model reads back as "you are
+    # trained on training confocal". The nesting is what the label has to express.
+    if lowered.startswith("training_") and len(lowered) > len("training_"):
+        return f"trained on {lowered[len('training_'):].replace('_', ' ')}"
+    return key.replace("_", " ")
 
 
 def humanise_field_names(text: str, keys: Iterable[str]) -> str:
@@ -518,6 +544,18 @@ def _normalise_plan(plan: dict[str, Any]) -> dict[str, Any]:
     # so a bad scope carrying none can only have meant the caller. An id whose prefix is
     # unfamiliar is left alone and the tool's own error stands: inventing a scope when the
     # question named something specific would answer a question nobody asked.
+    # "Is the MiSeq free on 6 April 2027?" names one date and the planner sends one date,
+    # which used to be a lookup failure telling the user to supply an end date they had
+    # no reason to think about. check_availability already reads the same value twice as
+    # that whole day, so the repair is to say the day twice rather than to ask.
+    if plan.get("tool") == "check_availability":
+        if arguments.get("date_from") and not arguments.get("date_to"):
+            arguments["date_to"] = arguments["date_from"]
+            log.info("one date given; reading it as the whole of that day")
+        elif arguments.get("date_to") and not arguments.get("date_from"):
+            arguments["date_from"] = arguments["date_to"]
+            log.info("one date given; reading it as the whole of that day")
+
     if plan.get("tool") == "get_usage_records":
         scope = arguments.get("scope")
         if scope not in (None, *USAGE_SCOPES):

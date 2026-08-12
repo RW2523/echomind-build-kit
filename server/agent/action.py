@@ -236,6 +236,38 @@ def instruments_mentioned(text_: str, rows: list[tuple[str, str]]) -> list[str]:
     return [iid for iid, _ in sorted(hits.items(), key=lambda kv: kv[1])]
 
 
+# Words that identify a kind of instrument rather than a specific one. Derived from the
+# catalogue by dropping the model number, so it stays right as instruments are added.
+_FAMILY_STOPWORDS = frozenset({"the", "a", "an"})
+
+
+def instrument_family_mentioned(
+    text_: str, rows: list[tuple[str, str]]
+) -> list[str]:
+    """Instruments whose *kind* this text names — "the confocal" -> both confocals.
+
+    Names in the catalogue are a kind followed by a model: "Confocal C2", "Light Sheet
+    LS7", "Cryo-EM Titan". People say the kind. Returns every instrument of every kind
+    named, so the caller can decide whether that is specific enough to act on.
+    """
+    found: dict[str, int] = {}
+    for iid, name in rows:
+        # The kind is the name without its model: "Confocal C2" -> Confocal, "Cryo-EM
+        # Titan" -> Cryo-EM, "Spinning Disk SD1" -> Spinning Disk. Dropping the last
+        # token rather than only digit-bearing ones, because plenty of models are words
+        # (Titan, Exploris, PromethION) and "the cryo-EM" has to work too.
+        words = [w for w in name.split() if w.lower() not in _FAMILY_STOPWORDS]
+        kind = " ".join(words[:-1]).strip() if len(words) > 1 else ""
+        if len(kind) < 3:
+            continue
+        # "Cryo-EM" is also said "cryo em"; "Light Sheet" as "lightsheet".
+        pattern = r"[\s\-]*".join(re.escape(part) for part in re.split(r"[\s\-]+", kind))
+        match = re.search(rf"(?<![\w-]){pattern}(?![\w-])", text_, re.I)
+        if match:
+            found[iid] = match.start()
+    return [iid for iid, _ in sorted(found.items(), key=lambda kv: kv[1])]
+
+
 def carry_forward_instrument(
     plan: dict[str, Any], message: str, history: str
 ) -> dict[str, Any]:
@@ -257,16 +289,41 @@ def carry_forward_instrument(
         return plan
 
     rows = _instrument_rows()
+    earlier = instruments_mentioned(history, rows)
     named_now = instruments_mentioned(message, rows)
+
     if len(named_now) == 1:
         intended = named_now[0]
     elif named_now:
         return plan  # genuinely ambiguous — let the tool or the user settle it
     else:
-        earlier = instruments_mentioned(history, rows)
-        if not earlier:
+        # Nobody says "Confocal C2" twice. They say "the confocal", and the exact matcher
+        # sees nothing — so "OK, back to the confocal. Book it..." fell through to the
+        # last instrument mentioned anywhere in the conversation and proposed the Light
+        # Sheet, which was under maintenance. The user had named the instrument; we were
+        # not listening.
+        family = instrument_family_mentioned(message, rows)
+        if len(family) == 1:
+            intended = family[0]
+        elif family:
+            # Several confocals. The one the conversation was already about is the one
+            # they meant; if the conversation has not settled on one, ask, because "the
+            # confocal" genuinely does not say which and the two have different rates.
+            # "BOOK THE CONFOCAL NOW!!!" proposed C3 with nothing behind the choice.
+            from_history = [iid for iid in earlier if iid in family]
+            if len(set(from_history)) != 1:
+                names = [name for iid, name in rows if iid in family]
+                log.info("'%s' names %d instruments; asking", message[:40], len(family))
+                return {
+                    "tool": None,
+                    "missing": ["instrument_id"],
+                    "ask": f"Which one — {' or '.join(sorted(names))}?",
+                }
+            intended = from_history[-1]
+        elif earlier:
+            intended = earlier[-1]
+        else:
             return plan
-        intended = earlier[-1]
 
     if arguments.get("instrument_id") != intended:
         log.info(

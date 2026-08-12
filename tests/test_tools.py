@@ -306,16 +306,16 @@ def test_unexpected_argument_is_a_typed_error_not_a_raw_typeerror(ctxs):
     honest refusal belonged.
 
     These messages are shown to the user when the data branch cannot repair the call, so
-    they name the argument in words rather than in schema spelling: "subject user id",
-    not `subject_user_id`. The identifier is still identifiable, which is the point.
+    they name the argument the way a person would say it — "a user", not
+    `subject_user_id` and not "subject user id", which reads like a broken machine.
     """
     with pytest.raises(ToolError) as excinfo:
         T.call(ctxs["bob"], "get_my_bookings", {"subject_user_id": "u-alice"})
     err = excinfo.value
     assert err.code == "invalid_params"
-    assert "subject user id" in err.message
+    assert err.message == "That lookup does not take a user."
     assert "_" not in err.message, "schema spelling must not reach the reader"
-    assert "date from" in err.hint, "the hint should name what the tool does accept"
+    assert "a start date" in err.hint, "the hint should name what the tool does accept"
 
 
 def test_a_missing_required_argument_is_also_a_typed_error(ctxs):
@@ -324,7 +324,7 @@ def test_a_missing_required_argument_is_also_a_typed_error(ctxs):
     with pytest.raises(ToolError) as excinfo:
         T.call(ctxs["cora"], "get_project_overview", {})
     assert excinfo.value.code == "invalid_params"
-    assert "project id" in excinfo.value.message
+    assert excinfo.value.message == "That lookup needs a project."
 
 
 def test_valid_arguments_still_dispatch(ctxs):

@@ -283,3 +283,127 @@ def test_a_valid_scope_is_never_touched():
             {"tool": "get_usage_records", "arguments": {"scope": scope}}
         )
         assert plan["arguments"]["scope"] == scope
+
+
+# --- naming an instrument the way people actually do -------------------------------
+
+
+@pytest.mark.tools
+@pytest.mark.parametrize(
+    ("said", "expected"),
+    [
+        ("the light sheet", ["ins-lightsheet"]),
+        ("book the cryo-EM", ["ins-em-titan"]),
+        ("the cryo em", ["ins-em-titan"]),          # hyphen optional
+        ("on the miseq", ["ins-miseq"]),
+        ("the spinning disk", ["ins-spinning-disk"]),
+        ("the orbitrap", ["ins-orbitrap"]),
+        ("book it", []),
+        ("for 2 hours", []),
+    ],
+)
+def test_an_instrument_kind_is_recognised_without_its_model_number(said, expected):
+    """Nobody says "Confocal C2" twice. They say "the confocal"."""
+    from server.agent.action import _instrument_rows, instrument_family_mentioned
+
+    assert instrument_family_mentioned(said, _instrument_rows()) == expected
+
+
+@pytest.mark.tools
+def test_back_to_the_confocal_does_not_book_the_light_sheet():
+    """The real failure: "OK, back to the confocal. Book it..." proposed the Light Sheet,
+    which was under maintenance, because the exact matcher saw no instrument in the
+    message and fell through to the last one mentioned anywhere in the conversation."""
+    history = "assistant: Light Sheet LS7 and Confocal C2."
+    plan = {"tool": "request_booking", "arguments": {"instrument_id": "ins-lightsheet"}}
+    out = carry_forward_instrument(
+        plan, "OK, back to the confocal. Book it on 5 April 2027 from 10am", history
+    )
+    assert out["arguments"]["instrument_id"] == "ins-confocal-c2"
+
+
+@pytest.mark.tools
+def test_a_kind_naming_two_instruments_with_nothing_to_choose_by_asks():
+    """"BOOK THE CONFOCAL NOW!!!" silently picked C3. They bill at different rates."""
+    plan = {"tool": "request_booking", "arguments": {"instrument_id": "ins-confocal-c3"}}
+    out = carry_forward_instrument(plan, "BOOK THE CONFOCAL NOW!!!", "")
+    assert out["tool"] is None
+    assert "Confocal C2" in out["ask"] and "Confocal C3" in out["ask"]
+
+
+# --- one date means that day -------------------------------------------------------
+
+
+def test_availability_given_one_date_reads_it_as_that_whole_day():
+    """"Is the MiSeq free on 6 April 2027?" asked the user for an end date they had no
+    reason to think about."""
+    from server.agent.data import _normalise_plan
+
+    plan = _normalise_plan({
+        "tool": "check_availability",
+        "arguments": {"instrument_id": "ins-miseq", "date_from": "2027-04-06"},
+    })
+    assert plan["arguments"]["date_to"] == "2027-04-06"
+
+
+def test_availability_given_only_an_end_date_is_repaired_the_same_way():
+    from server.agent.data import _normalise_plan
+
+    plan = _normalise_plan({
+        "tool": "check_availability",
+        "arguments": {"instrument_id": "ins-miseq", "date_to": "2027-04-06"},
+    })
+    assert plan["arguments"]["date_from"] == "2027-04-06"
+
+
+def test_a_complete_availability_window_is_untouched():
+    from server.agent.data import _normalise_plan
+
+    args = {"instrument_id": "ins-miseq", "date_from": "2027-04-06", "date_to": "2027-04-08"}
+    assert _normalise_plan({"tool": "check_availability", "arguments": dict(args)})[
+        "arguments"] == args
+
+
+# --- errors a person can read ------------------------------------------------------
+
+
+@pytest.mark.tools
+def test_a_missing_argument_is_named_in_words_not_schema():
+    """"That lookup needs date to. Say which date to you mean." reads like a broken
+    machine, which is worse than the TypeError it replaced."""
+    from server.mcp import tools as T
+    from server.mcp.errors import ToolError
+
+    ctx = __import__("server.auth", fromlist=["Ctx"]).Ctx(
+        user_id="u-alice", name="Alice", role="user",
+        lab_ids=("lab-a",), facility_ids=(), raw={},
+    )
+    with pytest.raises(ToolError) as exc:
+        T.call(ctx, "get_billing_summary", {})
+    assert exc.value.message == "That lookup needs an account code and a period."
+    assert "_" not in exc.value.message and "_" not in exc.value.hint
+
+
+def test_a_flattened_nested_key_reads_as_the_nesting_meant():
+    """`training: {confocal: true}` flattens to `training_confocal`, and the generic
+    rule made the model answer "You are trained on training confocal"."""
+    assert humanise_key("training_confocal") == "trained on confocal"
+    assert humanise_key("training_biosafety-2") == "trained on biosafety-2"
+    assert humanise_key("training") == "training"
+
+
+def test_a_number_inside_a_column_name_is_quotable():
+    """A training level called biosafety-2 is a label. Counting its 2 as an unsupported
+    figure threw away a correct answer in favour of the raw table."""
+    from server.agent.data import verify_numbers
+
+    rows = [{"training_biosafety-2": True, "training_confocal": True}]
+    assert verify_numbers("You hold biosafety-2 and confocal training.", rows, "") == []
+
+
+def test_an_invented_number_is_still_caught():
+    """The guard must not have been widened into uselessness."""
+    from server.agent.data import verify_numbers
+
+    rows = [{"training_biosafety-2": True}]
+    assert verify_numbers("You have 47 trainings on record.", rows, "") == ["47"]
