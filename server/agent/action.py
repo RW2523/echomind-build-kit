@@ -15,6 +15,7 @@ from typing import Any
 
 from sqlalchemy import text
 
+from server.agent import progress
 from server.agent.llm import chat_json
 from server.agent.prompts import register
 from server.agent.responses import AgentResponse
@@ -32,7 +33,9 @@ create_service_request(template_id, fields)
 request_booking(instrument_id, starts_at, ends_at, account_code)
     Propose an instrument booking. ISO-8601 UTC timestamps, max 12 hours.
 generate_document(template, params)
-    template is one of usage_report, onboarding_packet, monthly_summary."""
+    template is one of usage_report, onboarding_packet, monthly_summary,
+    invoice_statement (params: account_code, period), facility_directory
+    (params: technique?, campus?), capability_report (params: goal)."""
 
 SYSTEM = """You turn a user's request into exactly one write-tool call for the Infinity X
 platform. You never execute anything: the call you describe becomes a pending action that
@@ -65,8 +68,8 @@ Rules:
   longer than 12 hours, so a whole calendar day is never a valid one. Ask for a start
   time if the conversation settled only a date.
 - "Submit", "file" or "raise" a request means create_service_request. generate_document
-  produces the three named report templates and nothing else — it is never how a filled
-  form gets submitted.
+  produces the named report templates and nothing else — it is never how a filled form
+  gets submitted.
 - Take the date and time from the conversation. If an earlier turn discussed a specific
   date and window, "book it" means exactly that date and window — do not substitute
   today's date. Fall back to the next occurrence after today only when no date appears
@@ -572,6 +575,7 @@ def propose(
             meta={"error": exc.to_dict()["error"], "plan": chosen},
         )
 
+    progress.emit("prepared the change — nothing has happened yet")
     if thread_id:
         with session_scope() as s:
             s.execute(

@@ -373,6 +373,9 @@ def _exec_document(action: dict, payload: dict) -> dict[str, Any]:
         "usage_report": _render_usage_report,
         "onboarding_packet": _render_onboarding_packet,
         "monthly_summary": _render_monthly_summary,
+        "invoice_statement": _render_invoice_statement,
+        "facility_directory": _render_facility_directory,
+        "capability_report": _render_capability_report,
     }[template]
     title, body = renderer(user_id, params)
 
@@ -524,3 +527,83 @@ def _render_monthly_summary(user_id: str, params: dict) -> tuple[str, str]:
     if not downtime:
         lines.append("| _no maintenance events_ | | | |")
     return f"Monthly summary — {period}", "\n".join(lines) + "\n"
+
+def _render_invoice_statement(user_id: str, params: dict) -> tuple[str, str]:
+    """A statement for one account and period, from the ledger the invoice was built from.
+
+    The builders in server/mcp/documents.py deliberately do not query — they compose from
+    data handed to them — so the fetch lives here, beside the other renderers, and the
+    caller's entitlement is checked by the same tool the chat path uses rather than by a
+    second copy of the rule.
+    """
+    account_code = params.get("account_code")
+    period = params.get("period")
+    if not account_code or not period:
+        raise invalid_params(
+            "An invoice statement needs an account code and a period.",
+            "For example account ACC-A1, period 2026-03.",
+        )
+    from server.mcp import tools as tools_mod  # deferred: tools imports this module
+
+    ctx = _ctx_for(user_id)
+    summary = tools_mod.get_billing_summary(ctx, account_code=account_code, period=period)
+    body = documents.build_invoice_statement(
+        account_code=account_code, period=period, lines=summary.get("lines") or [],
+        total=summary.get("total"), lab=summary.get("lab_id"),
+    )
+    return f"Invoice statement — {account_code} {period}", body
+
+
+def _render_facility_directory(user_id: str, params: dict) -> tuple[str, str]:
+    """Where every core is and what it holds — the printable form of find_facilities."""
+    from server.mcp import tools as tools_mod  # deferred: tools imports this module
+
+    ctx = _ctx_for(user_id)
+    found = tools_mod.find_facilities(
+        ctx,
+        technique=params.get("technique"),
+        campus=params.get("campus"),
+        near_latitude=params.get("near_latitude"),
+        near_longitude=params.get("near_longitude"),
+    )
+    body = documents.build_facility_directory(found.get("facilities") or [])
+    return "Facility directory", body
+
+
+def _render_capability_report(user_id: str, params: dict) -> tuple[str, str]:
+    """What can do a stated job, where it is, and why each one qualified."""
+    goal = params.get("goal")
+    if not goal:
+        raise invalid_params(
+            "A capability report needs to know what you want to do.",
+            'For example goal "cryo-EM of a protein complex".',
+        )
+    from server.mcp import tools as tools_mod  # deferred: tools imports this module
+
+    ctx = _ctx_for(user_id)
+    found = tools_mod.recommend_instrument(
+        ctx, goal=goal, sample_type=params.get("sample_type")
+    )
+    body = documents.build_capability_report(goal, found.get("matches") or [])
+    return f"Capability report — {goal}", body
+
+
+def _ctx_for(user_id: str) -> Ctx:
+    """The stored actor's context, rebuilt from the database at execution time.
+
+    An approval can be executed long after it was proposed, so the role and labs are read
+    fresh rather than carried on the action row: a user who lost access between proposing
+    and approving must not have the old entitlement honoured.
+    """
+    with session_scope() as s:
+        row = s.execute(
+            text("SELECT id, name, role, lab_id FROM infinity.users WHERE id = :id"),
+            {"id": user_id},
+        ).mappings().first()
+    if row is None:
+        raise not_found("user")
+    return Ctx(
+        user_id=row["id"], name=row["name"], role=row["role"],
+        lab_ids=(row["lab_id"],) if row["lab_id"] else (),
+        facility_ids=(), raw={},
+    )

@@ -506,3 +506,59 @@ non-reproducible claims and long-tail generation edges on unusual inputs, while 
 security surface — the thing that would actually matter — has been quiet for three rounds.
 Further prompt-level chasing trades a stable, fully-green system for
 diminishing returns.
+
+## Facility discovery, a data catalog, feature documents and a dynamic UI
+
+- 2026-08-12 | Facilities got a location and instruments got capabilities (migration 008) |
+  "Where is the nearest core that does cryo-EM?" was unanswerable, not because retrieval was
+  weak but because the facts did not exist: a facility knew its name and code and nothing
+  about where it is, an instrument knew its hourly rate and nothing about what it does. Three
+  cores across two campuses with coordinates, twelve instruments with modality, techniques,
+  sample types, specification and room. Coordinates are plain numerics and the haversine is
+  six lines inline — adding PostGIS to a demo box to save that arithmetic would be the wrong
+  trade at campus scale.
+- 2026-08-12 | find_facilities and recommend_instrument, both deterministic | Ranking uses
+  token overlap with exact technique matches weighted highest, and every result carries
+  why_matched — the evidence for its own position, so a ranking can be argued with rather
+  than taken on faith. No LLM call: a recommendation that cannot be reproduced cannot be
+  tested. An unavailable instrument is still returned, carrying its status: the honest answer
+  to "what can do this" includes the machine that can, and is under maintenance.
+- 2026-08-12 | A card is evidence in a readable shape, not prose | Tools that fetch structured
+  data now also build a card from the rows they just returned, and the UI renders it. Every
+  value in a card is copied from those rows, so the card cannot drift from the evidence table
+  beside it. The flattener explicitly skips it — left in, a facilities lookup surfaced ONE row
+  whose columns were card_kind | card_title | card_footer, the card's own schema put in front
+  of the reader while the facilities it described never appeared.
+- 2026-08-12 | Internal ids never reach the reader | "The three instruments are ins-novaseq,
+  ins-bioanalyzer and ins-nanopore" — the platform's keys read out to a scientist. The id is
+  genuinely in the rows, so the number check was satisfied and nothing else would have caught
+  it. Ids are swapped for the name the same row gives them, and an id with no name beside it
+  is left alone rather than guessed at.
+- 2026-08-12 | Progress is reported by the code that did the work | The stream invented three
+  stages on a 0.4-second timer and the new UI rendered them as a completed checklist, so a
+  turn refused before retrieval still showed "verifying against sources" ticked off. That is a
+  small lie in the one place this product cannot afford one — a progress trail claiming
+  verification that did not happen is the same error as a confident wrong answer wearing a
+  spinner. Stages now come from the retrieval, gate, faithfulness and planning code itself,
+  and a turn that skips a step shows no line for it.
+- 2026-08-12 | Four builds in parallel needed an integrator, and the tests could not be it |
+  591 tests passed while the flagship feature was unreachable through the product: the card
+  contract was implemented at both ends and connected at neither, the router sent discovery
+  questions to knowledge, the planner menu never listed the new tools, and the flattener would
+  have shown the card's schema instead of the data. Four independent breaks in series, none
+  visible to a suite with no router-to-card test. Parallel agents on disjoint files produce
+  sound parts and unsound seams; the seams are the integration work.
+- 2026-08-12 | The fourth prompt-ripple regression, and the rule it earns | Adding two tools to
+  the planner menu made "Why was lab A charged $412 in March?" group by account code instead of
+  instrument — the demo's own billing question, broken 3/3, by three lines of menu text one of
+  which wrapped and broke the one-tool-per-line shape. Compacting it to one line per tool
+  restored the correct grouping 4/4 with discovery still selecting the new tools. Four times
+  now a prompt edit has regressed a passing case. The rule: treat every prompt as load-bearing
+  structure, change it in the smallest possible increment, and re-run the enforced cases
+  immediately — the failure is never where the edit was.
+- 2026-08-12 | Registering a template in two places is registering it in neither | The three
+  new document templates were added to DOCUMENT_TEMPLATES and the renderer map, and asking
+  for one still failed: the action planner's own tool description still listed the original
+  three, so it could not propose what the tool would happily have executed. The same seam as
+  the card contract, one layer up — a capability exists only where every layer that must
+  name it does.

@@ -10,7 +10,7 @@ import logging
 import re
 
 from server.agent import faithfulness as faith
-from server.agent import gaps, rewrite
+from server.agent import gaps, progress, rewrite
 from server.agent import gate as gate_mod
 from server.agent import generate as gen
 from server.agent.gate import GateResult
@@ -100,7 +100,9 @@ def answer(question: str, ctx: Ctx, k: int = 8, history: str = "") -> AgentRespo
 
     resolved = rewrite.standalone(question, history)
     chunks = retrieve(resolved, ctx, k=k)
+    progress.emit(f"searched the documents you can see — {len(chunks)} passage(s) matched")
     gate = gate_mod.evaluate(resolved, chunks)
+    progress.emit("checked confidence" if gate.passed else "not confident enough to answer")
 
     if not gate.passed:
         log.info("gate blocked answer: %s (top_score=%.3f)", gate.reason, gate.top_score)
@@ -114,7 +116,10 @@ def answer(question: str, ctx: Ctx, k: int = 8, history: str = "") -> AgentRespo
         gate.reason = "no_coverage"
         return _redirect(question, gate, {"declined_at": "generation"}, ctx=ctx)
 
+    progress.emit("drafted an answer from those passages")
     verdict = faith.check(text, chunks, citations, question=resolved)
+    progress.emit("checked every claim against its source"
+                  if verdict.passed else "a claim could not be verified")
 
     # Claims the judge traced to a source other than the one cited: repoint the marker and
     # rebuild the citation list, so what the reader clicks is the document that actually

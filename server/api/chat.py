@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import queue
 import re
 import uuid
 from typing import Any
@@ -15,6 +16,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import text
 
+from server.agent import progress
 from server.agent.graph import get_graph, run_turn
 from server.auth import Ctx, require_ctx
 from server.db import session_scope
@@ -80,18 +82,29 @@ async def chat_stream(req: ChatRequest, ctx: Ctx = Depends(require_ctx)) -> Stre
 
     async def events():
         yield _sse("start", {"thread_id": thread_id})
-        task = asyncio.create_task(anyio.to_thread.run_sync(_turn, req.message, ctx, thread_id))
-        stage = 0
-        stages = [
-            "understanding the question",
-            "checking what you have access to",
-            "verifying against sources",
-        ]
+
+        # Stages are drained from the turn itself, not invented on a timer. The turn runs
+        # in a worker thread, so a plain thread-safe queue is the whole mechanism; anyio
+        # copies the context across, which is what carries the sink to the agent code.
+        stages: queue.Queue[str] = queue.Queue()
+
+        def run() -> dict[str, Any]:
+            with progress.reporting_to(stages.put_nowait):
+                return _turn(req.message, ctx, thread_id)
+
+        task = asyncio.create_task(anyio.to_thread.run_sync(run))
         while not task.done():
-            await asyncio.sleep(0.4)
-            if stage < len(stages):
-                yield _sse("status", {"stage": stages[stage]})
-                stage += 1
+            await asyncio.sleep(0.08)
+            while True:
+                try:
+                    yield _sse("status", {"stage": stages.get_nowait()})
+                except queue.Empty:
+                    break
+        while True:  # anything reported between the last poll and completion
+            try:
+                yield _sse("status", {"stage": stages.get_nowait()})
+            except queue.Empty:
+                break
         try:
             payload = task.result()
         except Exception as exc:

@@ -229,7 +229,8 @@ def test_tampered_payload_is_rejected(client, tokens):
 def test_valid_token_reaches_the_tool_list(client, tokens):
     r = client.get("/tools", headers={"Authorization": f"Bearer {tokens['alice']}"})
     assert r.status_code == 200
-    assert len(r.json()["tools"]) == 15
+    # 17 since discovery added find_facilities (16) and recommend_instrument (17).
+    assert len(r.json()["tools"]) == len(T.TOOLS) == 17
 
 
 def test_forbidden_over_http_keeps_the_error_shape(client, tokens):

@@ -1,6 +1,9 @@
 import { useEffect, useState } from "react";
 import { chunkText } from "../api";
+import { asCard } from "../card";
+import { clarifyOptions } from "../clarify";
 import type { AgentResponse, Citation } from "../types";
+import { ResultCard } from "./ResultCard";
 
 /**
  * A redirect deliberately carries no badge.
@@ -20,11 +23,6 @@ const BADGES: Record<string, string> = {
   smalltalk: "",
   approval_request: "Needs your approval",
 };
-
-/** Renders the text with [n] markers turned into clickable citation chips. */
-function CitedText({ text }: { text: string }) {
-  return <p>{text}</p>;
-}
 
 /**
  * The preview popup. Everything a reader might want to check lives behind one of these:
@@ -79,7 +77,46 @@ function Preview({
   );
 }
 
-function Citations({ citations }: { citations: Citation[] }) {
+/**
+ * The answer's prose, with every [n] marker turned into a control that opens the source
+ * it points at.
+ *
+ * The marker is where the reader's doubt actually lands — mid-sentence, on the clause
+ * carrying the claim. Leaving it as inert text and putting the only affordance in a chip
+ * row underneath asks them to remember which number they were suspicious of.
+ */
+function CitedText({ text, citations, onOpen }: {
+  text: string;
+  citations: Citation[];
+  onOpen: (citation: Citation) => void;
+}) {
+  const byIndex = new Map(citations.map((c) => [c.index, c]));
+  const parts = text.split(/(\[\d+\])/g);
+
+  return (
+    <p className="reply-text">
+      {parts.map((part, i) => {
+        const match = /^\[(\d+)\]$/.exec(part);
+        const citation = match ? byIndex.get(Number(match[1])) : undefined;
+        // An index with no citation behind it stays plain text rather than becoming a
+        // button that opens nothing.
+        if (!citation) return <span key={i}>{part}</span>;
+        return (
+          <button
+            key={i}
+            className="marker"
+            onClick={() => onOpen(citation)}
+            aria-label={`Open source ${citation.index}: ${citation.title}`}
+          >
+            {citation.index}
+          </button>
+        );
+      })}
+    </p>
+  );
+}
+
+function Sources({ text, citations }: { text: string; citations: Citation[] }) {
   const [open, setOpen] = useState<Citation | null>(null);
   const [body, setBody] = useState<string>("");
   const [loading, setLoading] = useState(false);
@@ -97,16 +134,19 @@ function Citations({ citations }: { citations: Citation[] }) {
     }
   }
 
-  if (!citations.length) return null;
   return (
     <>
-      <div className="chips">
-        {citations.map((c) => (
-          <button key={c.chunk_id} className="chip" onClick={() => show(c)}>
-            [{c.index}] {c.title}
-          </button>
-        ))}
-      </div>
+      <CitedText text={text} citations={citations} onOpen={show} />
+      {citations.length > 0 && (
+        <div className="chips">
+          {citations.map((c) => (
+            <button key={c.chunk_id} className="chip" onClick={() => show(c)}>
+              <span className="chip-index">{c.index}</span>
+              {c.title}
+            </button>
+          ))}
+        </div>
+      )}
       {open && (
         <Preview title={open.title} subtitle={open.breadcrumb} onClose={() => setOpen(null)}>
           <pre className="source-text">{loading ? "Loading source…" : body}</pre>
@@ -121,7 +161,9 @@ function Citations({ citations }: { citations: Citation[] }) {
  *
  * They used to sit open under every reply. The answer already states the figures in
  * plain words — the table is what confirms them, and confirmation is something a reader
- * asks for rather than something that should crowd out the sentence they came for.
+ * asks for rather than something that should crowd out the sentence they came for. The
+ * same holds once a card is drawn: the card is still a rendering, and the rows stay one
+ * click away from it.
  */
 function Evidence({ response }: { response: AgentResponse }) {
   const [open, setOpen] = useState(false);
@@ -179,24 +221,55 @@ function Evidence({ response }: { response: AgentResponse }) {
   );
 }
 
-export function Reply({ response }: { response: AgentResponse }) {
-  const style =
-    response.response_type === "redirect"
-      ? "redirect"
-      : response.response_type === "scope"
-        ? "scope"
-        : response.response_type === "clarify"
-          ? "clarify"
-        : response.response_type === "approval_request"
-          ? "approval"
-          : "";
-  const badge = BADGES[response.response_type] ?? "";
+/**
+ * The options of a clarify turn as buttons that ask the question for the user.
+ *
+ * The button sends the option verbatim rather than an id: the next turn is a normal
+ * message through the normal graph, so nothing here can smuggle a selection past the
+ * permission checks that a typed question would have gone through.
+ */
+function Options({ text, onSend }: { text: string; onSend: (message: string) => void }) {
+  const options = clarifyOptions(text);
+  if (!options.length) return null;
 
   return (
-    <div className={`reply ${style}`}>
+    <div className="options">
+      {options.map((option) => (
+        <button key={option} className="option" onClick={() => onSend(option)}>
+          {option}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+const PANEL: Record<string, string> = {
+  redirect: "reply--redirect",
+  scope: "reply--scope",
+  clarify: "reply--clarify",
+  approval_request: "reply--approval",
+  smalltalk: "reply--plain",
+};
+
+export function Reply({
+  response,
+  onSend,
+}: {
+  response: AgentResponse;
+  onSend?: (message: string) => void;
+}) {
+  const panel = PANEL[response.response_type] ?? "";
+  const badge = BADGES[response.response_type] ?? "";
+  const card = asCard(response.card);
+
+  return (
+    <div className={`reply ${panel}`}>
       {badge && <div className="badge">{badge}</div>}
-      <CitedText text={response.text} />
-      <Citations citations={response.citations} />
+      <Sources text={response.text} citations={response.citations} />
+      {response.response_type === "clarify" && onSend && (
+        <Options text={response.text} onSend={onSend} />
+      )}
+      {card && <ResultCard card={card} />}
       <Evidence response={response} />
     </div>
   );

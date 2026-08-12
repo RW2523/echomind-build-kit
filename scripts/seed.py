@@ -36,26 +36,89 @@ RNG_SEED = 1337
 
 # --- Fixed reference data ---------------------------------------------------
 
+# (id, name, code, campus, building, room, address, lat, lon, contact, hours)
+# Three sites on two campuses, deliberately: a "nearest core that can do X" question is
+# only meaningful when the answer is not always the same building.
 FACILITIES = [
-    ("fac-imaging", "Advanced Imaging Core", "IMG"),
-    ("fac-genomics", "Genomics Core", "GEN"),
-    ("fac-massspec", "Mass Spectrometry Core", "MS"),
+    ("fac-imaging", "Advanced Imaging Core", "IMG",
+     "North Campus", "Wellcome Building", "Level 2, Rooms 2.10-2.24",
+     "14 Rutherford Way, North Campus", 51.524310, -0.133910,
+     "imaging-core@example.edu", "08:00-20:00 Mon-Fri"),
+    ("fac-genomics", "Genomics Core", "GEN",
+     "North Campus", "Crick Wing", "Level 4, Rooms 4.02-4.11",
+     "3 Franklin Road, North Campus", 51.526870, -0.129440,
+     "genomics-core@example.edu", "08:00-20:00 Mon-Fri"),
+    ("fac-massspec", "Mass Spectrometry Core", "MS",
+     "Riverside Campus", "Perutz Laboratories", "Basement, Rooms B.01-B.09",
+     "88 Sanger Street, Riverside Campus", 51.498220, -0.176500,
+     "massspec-core@example.edu", "09:00-18:00 Mon-Fri"),
 ]
 
-# (id, facility, name, hourly_rate, status)
+# (id, facility, name, hourly_rate, status, modality, room, techniques, sample_types, spec)
+# `techniques` is what a scientist searches on — they ask for "cryo-EM" or "single-cell
+# RNA-seq", never for an instrument id they have never seen.
 INSTRUMENTS = [
-    ("ins-confocal-c2", "fac-imaging", "Confocal C2", 42.00, "available"),
-    ("ins-confocal-c3", "fac-imaging", "Confocal C3", 46.00, "available"),
-    ("ins-spinning-disk", "fac-imaging", "Spinning Disk SD1", 55.00, "available"),
-    ("ins-lightsheet", "fac-imaging", "Light Sheet LS7", 68.00, "maintenance"),
-    ("ins-em-titan", "fac-imaging", "Cryo-EM Titan", 145.00, "available"),
-    ("ins-novaseq", "fac-genomics", "NovaSeq X", 120.00, "available"),
-    ("ins-miseq", "fac-genomics", "MiSeq M3", 38.00, "available"),
-    ("ins-nanopore", "fac-genomics", "Nanopore PromethION", 74.00, "available"),
-    ("ins-bioanalyzer", "fac-genomics", "Bioanalyzer B4", 22.00, "available"),
-    ("ins-orbitrap", "fac-massspec", "Orbitrap Exploris", 96.00, "available"),
-    ("ins-qtof", "fac-massspec", "Q-TOF 6546", 61.00, "offline"),
-    ("ins-maldi", "fac-massspec", "MALDI-TOF R2", 44.00, "available"),
+    ("ins-confocal-c2", "fac-imaging", "Confocal C2", 42.00, "available",
+     "light microscopy", "2.10",
+     ["confocal microscopy", "immunofluorescence", "live-cell imaging", "colocalisation"],
+     ["fixed cells", "live cells", "tissue sections"],
+     "Point-scanning confocal, 405/488/561/640 nm, 63x oil, resolution ~180 nm lateral."),
+    ("ins-confocal-c3", "fac-imaging", "Confocal C3", 46.00, "available",
+     "light microscopy", "2.12",
+     ["confocal microscopy", "immunofluorescence", "FRAP", "live-cell imaging"],
+     ["fixed cells", "live cells", "organoids"],
+     "Point-scanning confocal with FRAP module and environmental chamber, 37C and CO2."),
+    ("ins-spinning-disk", "fac-imaging", "Spinning Disk SD1", 55.00, "available",
+     "light microscopy", "2.14",
+     ["spinning disk confocal", "live-cell imaging", "high-speed timelapse"],
+     ["live cells", "organoids", "zebrafish embryos"],
+     "Spinning disk, sCMOS camera, up to 100 fps, low phototoxicity for long timelapse."),
+    ("ins-lightsheet", "fac-imaging", "Light Sheet LS7", 68.00, "maintenance",
+     "light microscopy", "2.20",
+     ["light sheet microscopy", "whole-mount imaging", "cleared tissue imaging"],
+     ["cleared tissue", "embryos", "organoids"],
+     "Dual-side light sheet for cleared and whole-mount specimens, up to 1 cm samples."),
+    ("ins-em-titan", "fac-imaging", "Cryo-EM Titan", 145.00, "available",
+     "electron microscopy", "2.24",
+     ["cryo-EM", "single particle analysis", "cryo-electron tomography", "structural biology"],
+     ["vitrified grids", "protein complexes", "virus particles"],
+     "300 kV cryo-TEM, direct electron detector, single-particle and tomography workflows."),
+    ("ins-novaseq", "fac-genomics", "NovaSeq X", 120.00, "available",
+     "sequencing", "4.02",
+     ["whole genome sequencing", "RNA-seq", "exome sequencing", "high-output sequencing"],
+     ["genomic DNA", "total RNA", "libraries"],
+     "High-output short-read sequencer, up to 3 Tb per run, 2x150 bp."),
+    ("ins-miseq", "fac-genomics", "MiSeq M3", 38.00, "available",
+     "sequencing", "4.04",
+     ["amplicon sequencing", "16S sequencing", "small genome sequencing", "targeted sequencing"],
+     ["amplicons", "bacterial DNA", "libraries"],
+     "Benchtop short-read sequencer, up to 15 Gb, 2x300 bp, ideal for amplicons."),
+    ("ins-nanopore", "fac-genomics", "Nanopore PromethION", 74.00, "available",
+     "sequencing", "4.06",
+     ["long-read sequencing", "nanopore sequencing", "de novo assembly", "methylation calling"],
+     ["high molecular weight DNA", "native DNA", "RNA"],
+     "Long-read nanopore platform, reads over 100 kb, native base modification calling."),
+    ("ins-bioanalyzer", "fac-genomics", "Bioanalyzer B4", 22.00, "available",
+     "quality control", "4.11",
+     ["nucleic acid QC", "library quantification", "RNA integrity"],
+     ["total RNA", "libraries", "genomic DNA"],
+     "Capillary electrophoresis for sizing and RIN scoring before sequencing."),
+    ("ins-orbitrap", "fac-massspec", "Orbitrap Exploris", 96.00, "available",
+     "mass spectrometry", "B.01",
+     ["proteomics", "LC-MS/MS",
+      "post-translational modification analysis", "label-free quantification"],
+     ["tryptic digests", "protein extracts", "plasma"],
+     "High-resolution Orbitrap LC-MS/MS for deep proteome and PTM analysis."),
+    ("ins-qtof", "fac-massspec", "Q-TOF 6546", 61.00, "offline",
+     "mass spectrometry", "B.05",
+     ["metabolomics", "small molecule identification", "accurate mass", "LC-MS"],
+     ["metabolite extracts", "small molecules", "plasma"],
+     "Q-TOF for accurate-mass small molecule and metabolomics workflows."),
+    ("ins-maldi", "fac-massspec", "MALDI-TOF R2", 44.00, "available",
+     "mass spectrometry", "B.09",
+     ["MALDI-TOF", "peptide mass fingerprinting", "microbial identification", "intact mass"],
+     ["peptides", "intact proteins", "microbial isolates"],
+     "MALDI-TOF for rapid intact mass, fingerprinting and organism ID."),
 ]
 
 LABS = [
@@ -292,16 +355,26 @@ def seed() -> None:
             )
 
         conn.execute(
-            text("INSERT INTO infinity.facilities (id, name, code) VALUES (:id, :name, :code)"),
-            [{"id": i, "name": n, "code": c} for i, n, c in FACILITIES],
+            text("""INSERT INTO infinity.facilities
+                        (id, name, code, campus, building, room, address,
+                         latitude, longitude, contact_email, opening_hours)
+                     VALUES (:id, :name, :code, :campus, :building, :room, :address,
+                             :lat, :lon, :contact, :hours)"""),
+            [{"id": i, "name": n, "code": c, "campus": ca, "building": b, "room": rm,
+              "address": ad, "lat": la, "lon": lo, "contact": ct, "hours": hr}
+             for i, n, c, ca, b, rm, ad, la, lo, ct, hr in FACILITIES],
         )
         conn.execute(
             text(
-                """INSERT INTO infinity.instruments (id, facility_id, name, hourly_rate, status)
-                   VALUES (:id, :fac, :name, :rate, :status)"""
+                """INSERT INTO infinity.instruments
+                       (id, facility_id, name, hourly_rate, status,
+                        modality, techniques, sample_types, specification, room)
+                   VALUES (:id, :fac, :name, :rate, :status,
+                           :mod, :tech, :samples, :spec, :room)"""
             ),
-            [{"id": i, "fac": f, "name": n, "rate": r, "status": s}
-             for i, f, n, r, s in INSTRUMENTS],
+            [{"id": i, "fac": f, "name": n, "rate": r, "status": st,
+              "mod": mo, "room": ro, "tech": te, "samples": sa, "spec": sp}
+             for i, f, n, r, st, mo, ro, te, sa, sp in INSTRUMENTS],
         )
         conn.execute(
             text("INSERT INTO infinity.account_codes (code, lab_id) VALUES (:code, :lab)"),
@@ -484,7 +557,7 @@ def seed() -> None:
         # --- invoices: 3 periods x 8 account codes, lines summing to totals ---
         # Confocal C2 is excluded from random lines so the March story is unambiguous:
         # every Confocal C2 line in the dataset is placed explicitly below.
-        billable = [(i, n, r) for i, _f, n, r, _s in INSTRUMENTS if i != "ins-confocal-c2"]
+        billable = [(i, n, r) for i, _f, n, r, *_rest in INSTRUMENTS if i != "ins-confocal-c2"]
         invoices, lines = [], []
         line_n = 0
         for period in PERIODS:

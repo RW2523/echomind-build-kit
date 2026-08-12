@@ -18,6 +18,7 @@ from typing import Any
 
 from dateutil import parser as date_parser
 
+from server.agent import catalog, progress
 from server.agent.llm import chat, chat_json
 from server.agent.responses import AgentResponse
 from server.auth import Ctx
@@ -51,7 +52,9 @@ get_user_profile(user_id?)                   role, lab, training, account codes
 get_facility_catalog(facility_id?)           facilities, instruments, rates, templates
 check_availability(instrument_id, date_from, date_to)   free slots
 get_project_overview(project_id)             one project: members, spend, allocation
-get_instrument_health(instrument_id)         instrument status"""
+get_instrument_health(instrument_id)         instrument status
+find_facilities(technique?, near_latitude?, near_longitude?, campus?)  cores and where they are
+recommend_instrument(goal, sample_type?)     which instrument suits a stated goal"""
 
 PLANNER_SYSTEM = """You plan how to answer a question about the Infinity X platform using
 real records. You never answer from your own knowledge.
@@ -493,6 +496,48 @@ def _mentions_unsupported_lab(
     return bool(named - allowed)
 
 
+# An internal identifier: ins-novaseq, u-alice, lab-a, fac-genomics, prj-neuro-atlas.
+_INTERNAL_ID_RE = re.compile(r"\b(?:ins|u|lab|fac|prj|sr|bk|sm|inv|act)-[a-z0-9][\w-]*", re.I)
+
+
+def _names_for_ids(rows: list[dict]) -> dict[str, str]:
+    """id -> human name, taken from the rows themselves.
+
+    A row that carries `instrument_id` also carries `instrument`; `facility_id` comes with
+    `facility`. The pairing is the row's own, so substituting one for the other quotes the
+    data rather than looking anything up — golden rule 1 survives intact.
+    """
+    names: dict[str, str] = {}
+    for row in rows:
+        for key, value in row.items():
+            if not (isinstance(value, str) and _INTERNAL_ID_RE.fullmatch(value.strip())):
+                continue
+            base = key[:-3] if key.endswith("_id") else key
+            for candidate in (base, f"{base}_name", "name", "title"):
+                label = row.get(candidate)
+                if isinstance(label, str) and label.strip() and label != value:
+                    names[value.strip().lower()] = label.strip()
+                    break
+    return names
+
+
+def prefer_names_over_ids(text: str, rows: list[dict]) -> str:
+    """Say "NovaSeq X", not "ins-novaseq".
+
+    Asked which instrument suited a goal, the reply came back "the three instruments
+    available are ins-novaseq, ins-bioanalyzer and ins-nanopore" — the platform's internal
+    keys read out to a scientist. The id is in the rows, so the number check is happy and
+    nothing else was going to catch it. Only ids the rows themselves name are replaced; an
+    id with no name beside it is left alone rather than guessed at.
+    """
+    names = _names_for_ids(rows)
+    if not names:
+        return text
+    return _INTERNAL_ID_RE.sub(
+        lambda m: names.get(m.group(0).lower(), m.group(0)), text
+    )
+
+
 def _render_scalars(scalars: dict[str, Any]) -> str:
     """Result facts for the model, with booleans as clauses rather than 'key: yes'.
 
@@ -720,6 +765,7 @@ def answer_from_rows(
     draft = humanise_field_names(
         draft, set(scalars) | {key for row in rows for key in row}
     )
+    draft = prefer_names_over_ids(draft, rows)
 
     offenders = verify_numbers(draft, rows, question, scalars)
     if offenders:
@@ -998,14 +1044,42 @@ def _availability_disambiguation(question: str, plan: dict) -> AgentResponse | N
     )
 
 
+def _gate_redirect(
+    result: catalog.RelevanceResult, executed_sql: str | None = None, **fields: Any
+) -> AgentResponse:
+    """The relevance gate's refusal, in the same envelope every other refusal uses.
+
+    The query still travels with it when there was one: "nothing matched" is a claim
+    about the records, and the reader is entitled to see what was actually asked of them.
+    """
+    return AgentResponse(
+        response_type="redirect",
+        route="data",
+        text=catalog.redirect_text(result),
+        executed_sql=executed_sql,
+        meta={"data_gate": result.to_dict(), **fields},
+    )
+
+
 def answer(question: str, ctx: Ctx, history: str = "") -> AgentResponse:
+    # Cheapest check first, as the knowledge gate does: a question no catalogued source
+    # covers, or one whose sources sit above this caller, is refused before the planner
+    # is asked to spend a round-trip on it. The gate fails open on anything it cannot
+    # judge, so the guards below still do the real enforcing.
+    relevance = catalog.pre(question, ctx, history)
+    if not relevance.passed:
+        log.info("data relevance gate refused (%s) for %r", relevance.reason, question[:80])
+        return _gate_redirect(relevance)
+
     plan = _normalise_plan(_plan(question, ctx, history), question)
     log.info("data plan: %s", plan)
+    progress.emit(f"chose a lookup: {plan.get('tool') or 'read-only SQL'}")
 
     if (clar := _availability_disambiguation(question, plan)) is not None:
         return clar
 
     executed_sql: str | None = None
+    card: dict[str, Any] | None = None
     try:
         _assert_may_read_lab(question, ctx)
         _assert_may_read_named_person(question, ctx)
@@ -1014,7 +1088,12 @@ def answer(question: str, ctx: Ctx, history: str = "") -> AgentResponse:
             rows, columns, executed_sql = _run_sql(plan.get("sql", ""), ctx, question)
             scalars: dict[str, Any] = {}
         else:
-            rows, columns, scalars = _run_tool(plan, ctx)
+            rows, columns, scalars, card = _run_tool(plan, ctx)
+        # Judged on what came back, before the normalisation below flattens an empty
+        # aggregate into no rows at all — a SUM over nothing and a lookup that matched
+        # nothing are the same finding, but only one of them still looks like a figure.
+        progress.emit(f"read {len(rows)} row(s) you are entitled to see")
+        outcome = catalog.post(rows, scalars)
         # An empty aggregate (SUM over no rows = NULL) is no records, not a "None" to
         # print; and a sixteen-digit NUMERIC tail is a storage artifact, not precision.
         # Normalise once, here, so the evidence table, the model's context and the prose
@@ -1058,6 +1137,13 @@ def answer(question: str, ctx: Ctx, history: str = "") -> AgentResponse:
             meta={"error": {"code": "internal_error"}},
         )
 
+    # Nothing came back at all — no rows and no facts. That is a finding, and its honest
+    # form is to say so and say what to check, not to hand an empty table to a model and
+    # let it write a paragraph about it.
+    if not outcome.passed:
+        log.info("data result gate: %s for %r", outcome.reason, question[:80])
+        return _gate_redirect(outcome, executed_sql, plan=plan, result_facts=scalars)
+
     text, model_written = answer_from_rows(question, rows, columns, scalars)
 
     # A prompt-injection can make the model attach a false lab label to the caller's own
@@ -1077,6 +1163,7 @@ def answer(question: str, ctx: Ctx, history: str = "") -> AgentResponse:
         columns=columns,
         executed_sql=executed_sql,
         route="data",
+        card=card,
         meta={"model_written": model_written, "plan": plan, "result_facts": scalars},
     )
 
@@ -1113,7 +1200,10 @@ def _run_sql(sql: str, ctx: Ctx, question: str) -> tuple[list[dict], list[str], 
     return result["rows"], result["columns"], result["executed_sql"]
 
 
-def _run_tool(plan: dict, ctx: Ctx) -> tuple[list[dict], list[str], dict[str, Any]]:
+def _run_tool(
+    plan: dict, ctx: Ctx
+) -> tuple[list[dict], list[str], dict[str, Any], dict[str, Any] | None]:
+    """Rows, columns, result-facts — and the card the tool built from those same rows."""
     name = plan.get("tool") or "get_my_bookings"
     arguments = plan.get("arguments") or {}
     if not isinstance(arguments, dict):
@@ -1137,7 +1227,9 @@ def _run_tool(plan: dict, ctx: Ctx) -> tuple[list[dict], list[str], dict[str, An
             raise
         log.info("dropping %s that %s does not take, and retrying", surplus, name)
         result = tools_mod.call(ctx, name, kept)
-    return _rows_from_tool_result(result, name)
+    rows, columns, scalars = _rows_from_tool_result(result, name)
+    card = result.get("card") if isinstance(result.get("card"), dict) else None
+    return rows, columns, scalars, card
 
 
 def _rows_from_tool_result(
@@ -1164,6 +1256,7 @@ def _rows_from_tool_result(
         return rows, columns, _readable_values(result, skip="free_slots")
 
     for key in ("bookings", "rows", "requests", "lines", "free_slots", "history",
+                "facilities", "matches",
                 "instruments", "members"):
         value = result.get(key)
         if isinstance(value, list) and value and isinstance(value[0], dict):
@@ -1190,7 +1283,11 @@ def _readable_values(result: dict, skip: str = "") -> dict[str, Any]:
     """
     out: dict[str, Any] = {}
     for key, value in result.items():
-        if key in (skip, "totals"):
+        # "card" is a rendering of these same rows, not another fact about them. Left in,
+        # the flattener turned a facilities lookup into a single row whose COLUMNS were
+        # card_kind | card_title | card_footer — the card's own schema put in front of the
+        # reader while the facilities it described never appeared.
+        if key in (skip, "totals", "card"):
             continue
         if value is None or isinstance(value, (str, int, float)):
             out[key] = value

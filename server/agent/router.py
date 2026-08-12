@@ -37,12 +37,17 @@ Routes:
                 state, instrument availability, project spend, and their own profile —
                 account codes, training records, role, lab membership. Anything phrased
                 as "my/our", "how much", "how many", "when", "what is the status".
+                ALSO the facility directory: where a core is, its campus, building, room,
+                address, opening hours, how far away it is, and what an instrument can do
+                — its techniques, modality and sample types. Those are recorded fields on
+                the facility and instrument, so "which core does cryo-EM", "where is the
+                nearest one", and "what should I use for live-cell imaging" are all data.
 - "action"      the user wants to CHANGE something or produce a document: book an
                 instrument, submit a service request, onboard a new user, generate a
                 report. Requests to do, create, book, submit, register, or generate.
 - "knowledge"   the user asks how something works, what a policy or procedure says, or
                 what they should do: SOPs, training requirements, cancellation rules,
-                billing policy, which instrument to choose.
+                billing policy, how to prepare a sample.
 - "smalltalk"   greetings, thanks, "who are you", "what can you do".
 - "out_of_scope" anything unrelated to the facility: general science trivia, other
                 software, world knowledge, personal questions, coding help.
@@ -65,10 +70,14 @@ Worked examples:
 - "What does it cost to cancel late?"               -> knowledge (a policy)
 - "How much was lab A charged in March?"            -> data (a record)
 - "How are account codes assigned?"                 -> knowledge (a policy)
-- "Where do I park at the imaging core?"             -> knowledge (facility premises)
-- "What are the opening hours?"                      -> knowledge (facility premises)
+- "Where do I park at the imaging core?"            -> knowledge (nothing records parking)
 - "What account codes can I charge to?"             -> data (mine, on my profile)
 - "Who is in my project?"                           -> data (a record)
+- "Where is the nearest core that does cryo-EM?"    -> data (facility location)
+- "Which instrument should I use for RNA-seq?"      -> data (instrument capability)
+- "I want to image live cells, what can I use?"     -> data (instrument capability)
+- "What are the imaging core's opening hours?"      -> data (a facility record)
+- "How do I prepare a sample for cryo-EM?"          -> knowledge (a procedure)
 
 - "What does my uploaded protocol say about X?"     -> knowledge (a document)
 - "What is the marker in my note?"                  -> knowledge (a document)
@@ -78,12 +87,15 @@ Other rules:
   invoices, usage, requests, samples, training. "My note", "my protocol", "my uploaded
   document" are knowledge: the answer is inside a document, and documents are knowledge
   even when the document belongs to the asker.
-- Anything about the facility itself — its premises, access, hours, parking, safety,
-  who to contact — is "knowledge", whether or not a document covers it. "out_of_scope" is
-  for subjects the facility has nothing to do with. Getting this wrong costs more than it
-  looks: an uncovered facility question becomes an honest redirect that records a gap for
-  someone to write up, while "out of scope" tells the user they asked the wrong assistant
-  and records nothing.
+- A question about the facility itself splits on whether the platform RECORDS the answer.
+  Recorded fields — where a core is, its campus, building, room, address, opening hours,
+  contact, and what each instrument can do — are "data". Everything else about the
+  premises — parking, what to wear, how to get in, safety practice — is "knowledge", even
+  when no document covers it. It is never "out_of_scope": that is for subjects the
+  facility has nothing to do with. Getting this wrong costs more than it looks — an
+  uncovered facility question becomes an honest redirect that records a gap for someone to
+  write up, while "out of scope" tells the user they asked the wrong assistant and records
+  nothing.
 - Wanting something to happen is "action", even if phrased as a question
   ("can you book me the confocal on Friday?").
 - Classify only the final message. Earlier turns are context for resolving pronouns:

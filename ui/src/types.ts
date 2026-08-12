@@ -26,6 +26,50 @@ export interface PendingAction {
   message?: string;
 }
 
+/** The six shapes the UI knows how to lay out. Anything else falls back to the table. */
+export type CardKind =
+  | "invoice"
+  | "facilities"
+  | "instruments"
+  | "booking"
+  | "document"
+  | "usage";
+
+export type BadgeTone = "ok" | "warn" | "info" | "muted";
+
+export interface CardField {
+  label: string;
+  value: string;
+  emphasis: boolean;
+}
+
+export interface CardBadge {
+  text: string;
+  tone: BadgeTone;
+}
+
+export interface CardItem {
+  title: string;
+  subtitle: string | null;
+  meta: string[];
+  badges: CardBadge[];
+  value: string | null;
+}
+
+/**
+ * A card is data, not prose: every string in it was produced by a tool. The renderer
+ * therefore only ever positions and styles these strings — it never parses a value to
+ * reformat it, because a figure the browser rewrote is a figure no tool stands behind.
+ */
+export interface Card {
+  kind: CardKind;
+  title: string;
+  subtitle: string | null;
+  fields: CardField[];
+  items: CardItem[];
+  footer: string | null;
+}
+
 export interface AgentResponse {
   response_type: ResponseType;
   text: string;
@@ -39,6 +83,8 @@ export interface AgentResponse {
   route: string | null;
   meta: Record<string, unknown>;
   thread_id?: string;
+  /** Optional structured rendering of the same facts the rows carry. */
+  card?: unknown;
 }
 
 export interface DemoUser {
@@ -56,7 +102,8 @@ export interface Turn {
   response?: AgentResponse;
   streaming?: boolean;
   streamedText?: string;
-  status?: string;
+  /** Every verification stage the server has announced, oldest first. */
+  stages?: string[];
   error?: string;
   /** Set once the user approves or declines the turn's pending action. */
   decision?: { status: string; text?: string; actionId: string };

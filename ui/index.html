@@ -3,7 +3,27 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
+    <meta
+      name="description"
+      content="EchoMind — a verified assistant for the Infinity X core-facility platform."
+    />
     <title>EchoMind — Infinity X</title>
+    <script>
+      // Applied before the first paint, and before React mounts. Reading the stored
+      // choice from inside the app instead would paint one white frame at every load on
+      // a dark machine, which is the frame a reader remembers.
+      (function () {
+        try {
+          var choice = localStorage.getItem("echomind.theme");
+          if (choice === "light" || choice === "dark") {
+            document.documentElement.setAttribute("data-theme", choice);
+          }
+        } catch (e) {
+          /* Private-mode storage throws. The system preference is a fine fallback. */
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

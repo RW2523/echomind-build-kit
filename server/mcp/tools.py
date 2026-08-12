@@ -1,4 +1,4 @@
-"""The 15 tools.
+"""The 17 tools.
 
 Every handler takes a verified `Ctx` and enforces its tier BEFORE running any query
 (spec 02). These functions are the single implementation: the MCP server exposes them
@@ -6,7 +6,7 @@ over the wire and the LangGraph agent calls them in-process, so there is exactly
 enforcement path and one thing to test.
 
 Tier matrix — spec 05:
-    T0  any authenticated user            2, 3, 10(status)
+    T0  any authenticated user            2, 3, 10(status), 16, 17
     T1  caller's own data                 1(self), 4, 5(user), 6(mine), 7, 8(own codes),
                                           12, 13, 14, 15(user templates)
     T2  pi, within their lab_ids          1, 5, 6, 7, 8, 9 + run_readonly_sql (rewritten)
@@ -23,6 +23,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, time, timedelta
 from decimal import Decimal
+from math import asin, cos, radians, sin, sqrt
 from typing import Any
 
 from sqlalchemy import text
@@ -43,7 +44,11 @@ log = logging.getLogger("echomind.tools")
 # Facility opening hours used to derive free slots (tool 3).
 OPEN_HOUR, CLOSE_HOUR = 8, 20
 
-DOCUMENT_TEMPLATES = ("usage_report", "onboarding_packet", "monthly_summary")
+DOCUMENT_TEMPLATES = (
+    "usage_report", "onboarding_packet", "monthly_summary",
+    # Feature documents: the printable form of what the chat path already answers.
+    "invoice_statement", "facility_directory", "capability_report",
+)
 # monthly_summary aggregates every lab's spend and the whole estate's downtime, so it is
 # an admin template (spec 05: "generate_document admin templates" is T3).
 ADMIN_ONLY_TEMPLATES = frozenset({"monthly_summary"})
@@ -980,6 +985,494 @@ def generate_document(ctx: Ctx, template: str,
     return actions_mod.create_pending(ctx, "generate_document", payload, preview)
 
 
+# --- discovery: shared machinery for tools 16 and 17 -------------------------------
+
+EARTH_RADIUS_KM = 6371.0
+
+# Words that carry no capability signal. "I want to do cryo-EM" and "cryo-EM" must score
+# the same instrument identically, so the framing a person puts around their goal is
+# removed before anything is compared.
+_GOAL_STOPWORDS = frozenset({
+    "a", "an", "the", "and", "or", "of", "for", "to", "on", "in", "at", "with", "from",
+    "my", "our", "me", "we", "i", "it", "is", "are", "be", "do", "does", "did", "want",
+    "wants", "need", "needs", "would", "like", "looking", "look", "use", "using", "run",
+    "get", "some", "any", "best", "which", "what", "where", "how", "can", "could",
+    "should", "please", "help", "instrument", "machine", "kit", "book", "booking",
+})
+
+_NON_WORD_RE = re.compile(r"[^a-z0-9]+")
+
+# Points per piece of evidence. An instrument whose recorded technique is literally what
+# the caller asked for is the answer; everything else is corroboration, so the exact
+# match has to outweigh any amount of incidental word overlap.
+_TECHNIQUE_EXACT_POINTS = 10
+_TOKEN_POINTS = {"techniques": 3, "modality": 2, "sample types": 2, "specification": 1}
+
+
+def _normalise(value: str | None) -> str:
+    """Free text as lowercase words separated by single spaces.
+
+    'Cryo-EM', 'cryo EM' and 'cryo-em' are one request spelled three ways, and a search
+    that distinguishes them answers "nothing here does that" about a machine that does.
+    """
+    return _NON_WORD_RE.sub(" ", str(value or "").lower()).strip()
+
+
+def _singular(word: str) -> str:
+    """Fold a trailing plural 's'.
+
+    'live cells' (what a user types) and 'live-cell imaging' (what the catalogue records)
+    are the same capability, and matching them as different strings loses the instrument
+    that does exactly what was asked. Both sides pass through here, so this only has to be
+    consistent — not linguistically correct.
+    """
+    if len(word) > 3 and word.endswith("s") and not word.endswith("ss"):
+        return word[:-1]
+    return word
+
+
+def _tokens(value: str | None) -> set[str]:
+    """The meaningful words in a phrase, singularised, for overlap scoring."""
+    return {
+        _singular(word)
+        for word in _normalise(value).split()
+        if len(word) > 1 and word not in _GOAL_STOPWORDS
+    }
+
+
+def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Great-circle distance in kilometres between two points in decimal degrees.
+
+    Exact to within metres at campus range, which is the only range this platform has.
+    Written out rather than imported: it is six lines of arithmetic, and the alternative
+    is carrying a geospatial dependency for three sites whose coordinates are known.
+    """
+    phi1, phi2 = radians(lat1), radians(lat2)
+    d_phi = radians(lat2 - lat1)
+    d_lambda = radians(lon2 - lon1)
+    a = sin(d_phi / 2) ** 2 + cos(phi1) * cos(phi2) * sin(d_lambda / 2) ** 2
+    return 2 * EARTH_RADIUS_KM * asin(sqrt(a))
+
+
+def _coordinate(value: Any, name: str, limit: float) -> float:
+    """A coordinate the caller supplied, or a typed refusal — never a silent 0.0."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as exc:
+        raise invalid_params(
+            f"{name} must be a number in decimal degrees.",
+            "For example 51.5243 and -0.1339.",
+        ) from exc
+    if not -limit <= number <= limit:
+        raise invalid_params(f"{name} must be between -{limit:g} and {limit:g} degrees.")
+    return number
+
+
+# The card contract knows four tones; only 'available' means bookable, so anything else is
+# a warning. Defaulting an unrecognised status to a neutral tone is how a machine nobody
+# may touch would come to look bookable on screen.
+def _status_tone(status: str | None) -> str:
+    return "ok" if str(status or "").lower() == "available" else "warn"
+
+
+def _card_field(label: str, value: Any, emphasis: bool = False) -> dict[str, Any]:
+    return {"label": label, "value": str(value), "emphasis": bool(emphasis)}
+
+
+def _instrument_row(row) -> dict[str, Any]:
+    """One instrument as the discovery tools report it, values exactly as stored."""
+    return {
+        "id": row["id"],
+        "name": row["name"],
+        "hourly_rate": float(row["hourly_rate"]),
+        "status": row["status"],
+        # Stated positively so a caller is never left to infer bookability from a status
+        # string it may not recognise — the same contract check_availability publishes.
+        "bookable": row["status"] == "available",
+        "modality": row["modality"],
+        "techniques": list(row["techniques"] or []),
+        "sample_types": list(row["sample_types"] or []),
+        "specification": row["specification"],
+        "room": row["room"],
+    }
+
+
+def _matches_technique(row, technique: str) -> bool:
+    """True when this instrument's techniques or modality contain `technique` as text.
+
+    Matched in Python rather than with ILIKE on purpose: the needle is free text a user
+    typed, and a '%' or '_' in it would quietly become a wildcard — "100_bp" would match
+    everything and the caller would never know the question they asked was not the
+    question that ran.
+    """
+    probe = _normalise(technique)
+    if not probe:
+        # A search term with nothing searchable in it ('%', '---') matches nothing. The
+        # tempting alternative — treating it as no filter — is the same wildcard bug by
+        # another route: a typo comes back as the entire directory under the heading
+        # "facilities that do %".
+        return False
+    haystacks = [_normalise(t) for t in (row["techniques"] or [])]
+    haystacks.append(_normalise(row["modality"]))
+    return any(probe in hay for hay in haystacks if hay)
+
+
+# --- 16. find_facilities (T0) ------------------------------------------------------
+
+
+def _facilities_card(
+    facilities: list[dict[str, Any]], technique: str | None, campus: str | None,
+    located: bool,
+) -> dict[str, Any]:
+    """The facilities card. Every value here is copied from the rows above it."""
+    fields = []
+    if technique:
+        fields.append(_card_field("Technique", technique))
+    if campus:
+        fields.append(_card_field("Campus", campus))
+    fields.append(_card_field("Facilities", len(facilities), emphasis=True))
+    fields.append(
+        _card_field("Instruments", sum(len(f["instruments"]) for f in facilities))
+    )
+    if located and facilities and facilities[0].get("distance_km") is not None:
+        nearest = facilities[0]
+        fields.append(
+            _card_field("Nearest", f"{nearest['name']} — {nearest['distance_km']} km", True)
+        )
+
+    items = []
+    for f in facilities:
+        count = len(f["instruments"])
+        # `value` is the figure the UI sets apart, so on a "where is the nearest core"
+        # answer it has to be the distance — that is the whole question. The instrument
+        # count is context and belongs with the rest of the detail in meta. Without a
+        # distance (no origin given) the count takes the slot back rather than leaving a
+        # conspicuous gap.
+        meta = [f"{count} instrument" + ("" if count == 1 else "s")]
+        meta += [str(v) for v in (f["room"], f["address"], f["opening_hours"],
+                                  f["contact_email"]) if v]
+        distance = f.get("distance_km")
+        items.append({
+            "title": f["name"],
+            "subtitle": " · ".join(str(v) for v in (f["campus"], f["building"]) if v) or None,
+            "meta": meta,
+            "badges": [
+                {"text": f"{i['name']} · {i['status']}", "tone": _status_tone(i["status"])}
+                for i in f["instruments"]
+            ],
+            "value": f"{distance} km" if distance is not None else meta[0],
+        })
+
+    return {
+        "kind": "facilities",
+        "title": f"Facilities that do {technique}" if technique else "Facility directory",
+        "subtitle": "Nearest first" if located else None,
+        "fields": fields,
+        "items": items,
+        # An empty card must say why it is empty. Without this the UI renders a blank
+        # panel, which a reader completes for themselves — usually as "the system is
+        # broken" and sometimes as "there is nothing anywhere".
+        "footer": (
+            f"No instrument on record lists '{technique}'." if technique and not items
+            else None
+        ),
+    }
+
+
+def find_facilities(ctx: Ctx, technique: str | None = None,
+                    near_latitude: float | None = None,
+                    near_longitude: float | None = None,
+                    campus: str | None = None) -> dict[str, Any]:
+    """Facilities that can do `technique`, each carrying the instruments that can do it.
+
+    Guarantees:
+      * A facility is returned only if at least one of its instruments matches, so an
+        empty list means "nothing on record does that" and never "here is everything".
+        Falling back to the full directory would read as "these can do it", which is a
+        fabricated capability claim wearing the clothes of a search result.
+      * With a location, every facility carries `distance_km` (haversine, 2dp) and the
+        list runs nearest first. A facility with no coordinates on file gets None and
+        sorts last rather than being dropped or given a made-up distance.
+      * `matched` is the number of facilities returned; `matched_instruments` the number
+        of instruments behind them.
+
+    T0: a facility directory is public information. There is no per-caller filter here —
+    but ctx is still required, so there is no anonymous access either.
+    """
+    if (near_latitude is None) != (near_longitude is None):
+        raise invalid_params(
+            "A location needs both a latitude and a longitude.",
+            "Give both, e.g. near_latitude 51.5243 and near_longitude -0.1339.",
+        )
+    # A blank technique is the absence of a filter, not a filter that matches nothing:
+    # planners spell "no technique given" as both None and "". Everything downstream then
+    # has one thing to test.
+    technique = str(technique).strip() if str(technique or "").strip() else None
+    campus = str(campus).strip() if str(campus or "").strip() else None
+
+    origin: tuple[float, float] | None = None
+    if near_latitude is not None:
+        origin = (
+            _coordinate(near_latitude, "near_latitude", 90.0),
+            _coordinate(near_longitude, "near_longitude", 180.0),
+        )
+
+    with session_scope() as s:
+        facility_rows = s.execute(
+            text(
+                """SELECT id, name, code, campus, building, room, address,
+                          latitude, longitude, contact_email, opening_hours
+                   FROM infinity.facilities ORDER BY name"""
+            )
+        ).mappings().all()
+        instrument_rows = s.execute(
+            text(
+                """SELECT id, facility_id, name, hourly_rate, status, modality,
+                          techniques, sample_types, specification, room
+                   FROM infinity.instruments ORDER BY name"""
+            )
+        ).mappings().all()
+
+    by_facility: dict[str, list[dict[str, Any]]] = {}
+    for row in instrument_rows:
+        if technique and not _matches_technique(row, technique):
+            continue
+        by_facility.setdefault(row["facility_id"], []).append(_instrument_row(row))
+
+    wanted_campus = _normalise(campus)
+    facilities: list[dict[str, Any]] = []
+    for f in facility_rows:
+        if wanted_campus and wanted_campus not in _normalise(f["campus"]):
+            continue
+        instruments = by_facility.get(f["id"], [])
+        if technique and not instruments:
+            continue
+        entry: dict[str, Any] = {
+            "id": f["id"],
+            "name": f["name"],
+            "code": f["code"],
+            "campus": f["campus"],
+            "building": f["building"],
+            "room": f["room"],
+            "address": f["address"],
+            "contact_email": f["contact_email"],
+            "opening_hours": f["opening_hours"],
+            "latitude": float(f["latitude"]) if f["latitude"] is not None else None,
+            "longitude": float(f["longitude"]) if f["longitude"] is not None else None,
+            "instruments": instruments,
+        }
+        if origin:
+            entry["distance_km"] = (
+                None if entry["latitude"] is None or entry["longitude"] is None
+                else round(_haversine_km(*origin, entry["latitude"], entry["longitude"]), 2)
+            )
+        facilities.append(entry)
+
+    if origin:
+        # None sorts last: "we do not know where this is" is not "this is zero km away".
+        facilities.sort(
+            key=lambda f: (f["distance_km"] is None, f["distance_km"] or 0.0, f["name"])
+        )
+
+    return {
+        "technique": technique,
+        "campus": campus,
+        "origin": ({"latitude": origin[0], "longitude": origin[1]} if origin else None),
+        "matched": len(facilities),
+        "matched_instruments": sum(len(f["instruments"]) for f in facilities),
+        "facilities": facilities,
+        "card": _facilities_card(facilities, technique, campus, located=bool(origin)),
+    }
+
+
+# --- 17. recommend_instrument (T0) -------------------------------------------------
+
+
+def _score_instrument(row, goal_text: str, goal_tokens: set[str]) -> tuple[int, list[str]]:
+    """Score one instrument against a goal, and say what earned every point.
+
+    Deterministic by construction — no model is consulted. A ranking that answers "which
+    instrument?" has to be the same ranking tomorrow: this repo has been burned three
+    times by prompt tweaks that regressed a passing case, and a recommendation that moves
+    when a sentence is reworded cannot be tested, explained or defended to a scientist
+    who is about to spend £145 an hour on the result.
+
+    Returns (score, why_matched) where why_matched names the evidence in the caller's own
+    words, so a recommendation is never a number with nothing behind it.
+    """
+    score = 0
+    why: list[str] = []
+
+    # An exact technique match is the answer, not a hint: it means the catalogue records
+    # this machine as doing the literal thing that was asked for.
+    exact_tokens: set[str] = set()
+    for technique in row["techniques"] or []:
+        normalised = _normalise(technique)
+        if normalised and normalised in goal_text:
+            score += _TECHNIQUE_EXACT_POINTS
+            why.append(f"exact technique match: {technique}")
+            exact_tokens |= _tokens(technique)
+
+    for label, values in (
+        ("techniques", list(row["techniques"] or [])),
+        ("modality", [row["modality"]]),
+        ("sample types", list(row["sample_types"] or [])),
+        ("specification", [row["specification"]]),
+    ):
+        field_tokens: set[str] = set()
+        for value in values:
+            field_tokens |= _tokens(value)
+        # Tokens already paid for by an exact match are not counted twice; the evidence
+        # line would otherwise repeat back the words of the match above it.
+        hits = sorted((field_tokens & goal_tokens) - exact_tokens)
+        if hits:
+            score += _TOKEN_POINTS[label] * len(hits)
+            why.append(f"{label} match: {', '.join(hits)}")
+
+    return score, why
+
+
+def _accepts_sample(row, sample_type: str) -> bool:
+    """True when this instrument's recorded sample types cover `sample_type`."""
+    probe = _normalise(sample_type)
+    if not probe:
+        return True
+    return any(
+        probe in stored or stored in probe
+        for stored in (_normalise(v) for v in (row["sample_types"] or []))
+        if stored
+    )
+
+
+def _instruments_card(matches: list[dict[str, Any]], goal: str,
+                      sample_type: str | None) -> dict[str, Any]:
+    """The instruments card. Every value here is copied from the ranked rows."""
+    fields = [_card_field("Goal", goal)]
+    if sample_type:
+        fields.append(_card_field("Sample type", sample_type))
+    fields.append(_card_field("Matches", len(matches), emphasis=True))
+    if matches:
+        fields.append(_card_field("Best match", matches[0]["instrument"], emphasis=True))
+
+    items = []
+    for m in matches:
+        meta = [f"${m['hourly_rate']:.2f}/h"]
+        meta += [str(v) for v in (m["campus"], m["building"], m["room"]) if v]
+        meta += m["why_matched"]
+        badges = [{"text": m["status"], "tone": _status_tone(m["status"])}]
+        if m["modality"]:
+            badges.append({"text": m["modality"], "tone": "info"})
+        items.append({
+            "title": m["instrument"],
+            "subtitle": m["facility"],
+            "meta": meta,
+            "badges": badges,
+            # The score is published rather than hidden: a ranking a reader cannot audit
+            # is indistinguishable from a guess, which is the one thing this must not be.
+            "value": f"score {m['score']}",
+        })
+
+    return {
+        "kind": "instruments",
+        "title": "Recommended instruments",
+        "subtitle": goal,
+        "fields": fields,
+        "items": items,
+        "footer": (
+            "Nothing on record matches that goal." if not matches
+            else "Ranked by recorded capability, not by availability — check each status."
+        ),
+    }
+
+
+def recommend_instrument(ctx: Ctx, goal: str,
+                         sample_type: str | None = None) -> dict[str, Any]:
+    """Instruments that can do what `goal` describes, best first, with the evidence.
+
+    Guarantees:
+      * Ranking is deterministic token overlap against the recorded techniques, modality,
+        sample types and specification. No model is asked to rank anything.
+      * Every match carries `why_matched` — the tokens and techniques that earned it its
+        place — so the caller can see the reasoning rather than trust it.
+      * An instrument that is not 'available' is still returned, carrying its status and
+        `bookable: false`. Hiding it answers a different question ("what can I book right
+        now?") than the one asked ("which instrument does this?") and leaves a scientist
+        believing the capability does not exist here at all.
+      * Nothing that scores zero is returned. An empty list is the honest answer to a goal
+        this facility cannot serve.
+
+    T0: this is the public capability catalogue, the same data as get_facility_catalog.
+    """
+    if not str(goal or "").strip():
+        raise invalid_params(
+            "Say what you want to do.",
+            "For example 'cryo-EM of a protein complex' or 'image live cells'.",
+        )
+
+    goal_text = _normalise(goal)
+    goal_tokens = _tokens(goal)
+
+    with session_scope() as s:
+        rows = s.execute(
+            text(
+                """SELECT i.id, i.name, i.hourly_rate, i.status, i.modality, i.techniques,
+                          i.sample_types, i.specification, i.room,
+                          f.id AS facility_id, f.name AS facility, f.campus, f.building,
+                          f.contact_email, f.opening_hours
+                   FROM infinity.instruments i
+                   JOIN infinity.facilities f ON f.id = i.facility_id
+                   ORDER BY i.name"""
+            )
+        ).mappings().all()
+
+    matches: list[dict[str, Any]] = []
+    excluded = 0
+    for row in rows:
+        score, why = _score_instrument(row, goal_text, goal_tokens)
+        if score <= 0:
+            continue
+        # A sample type the instrument does not take is a different answer to a different
+        # question, so it narrows the list rather than reordering it. The count of what it
+        # removed is reported, because a filter that silently empties a result is a filter
+        # nobody can argue with.
+        if sample_type and not _accepts_sample(row, sample_type):
+            excluded += 1
+            continue
+        matches.append({
+            "instrument_id": row["id"],
+            "instrument": row["name"],
+            "facility_id": row["facility_id"],
+            "facility": row["facility"],
+            "campus": row["campus"],
+            "building": row["building"],
+            "room": row["room"],
+            "hourly_rate": float(row["hourly_rate"]),
+            "status": row["status"],
+            "bookable": row["status"] == "available",
+            "modality": row["modality"],
+            "techniques": list(row["techniques"] or []),
+            "sample_types": list(row["sample_types"] or []),
+            "specification": row["specification"],
+            "contact_email": row["contact_email"],
+            "score": score,
+            "why_matched": why,
+        })
+
+    # Equal evidence, so the tie-break is what the caller can act on: something they may
+    # book today outranks something equally suitable that is in pieces on a bench. Name
+    # last, so the order never depends on the order rows came back.
+    matches.sort(key=lambda m: (-m["score"], not m["bookable"], m["instrument"]))
+
+    return {
+        "goal": goal,
+        "sample_type": sample_type,
+        "matched": len(matches),
+        "excluded_by_sample_type": excluded,
+        "matches": matches,
+        "card": _instruments_card(matches, goal, sample_type),
+    }
+
+
 # --- registry ----------------------------------------------------------------------
 
 
@@ -1048,6 +1541,16 @@ TOOLS: dict[str, ToolSpec] = {
                  "Propose generating a document (pending approval).",
                  {"template": "usage_report | onboarding_packet | monthly_summary",
                   "params": "Template parameters."}),
+        ToolSpec(16, "find_facilities", find_facilities, "T0", False,
+                 "Facilities that do a technique, with distance when a location is given.",
+                 {"technique": "Capability to look for, e.g. cryo-EM.",
+                  "near_latitude": "Optional latitude in decimal degrees.",
+                  "near_longitude": "Optional longitude in decimal degrees.",
+                  "campus": "Optional campus filter."}),
+        ToolSpec(17, "recommend_instrument", recommend_instrument, "T0", False,
+                 "Rank instruments against a described goal, with the matching evidence.",
+                 {"goal": "What the caller wants to do, in their own words.",
+                  "sample_type": "Optional sample type the instrument must accept."}),
     ]
 }
 
@@ -1107,6 +1610,12 @@ _SPOKEN_ARGUMENTS = {
     "format": "a format",
     "sql": "a query",
     "id": "an id",
+    "technique": "a technique",
+    "near_latitude": "a latitude",
+    "near_longitude": "a longitude",
+    "campus": "a campus",
+    "goal": "what you want to do",
+    "sample_type": "a sample type",
 }
 
 

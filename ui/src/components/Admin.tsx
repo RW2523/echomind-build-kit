@@ -55,7 +55,7 @@ export function Admin() {
         <div className="cards">
           <div className="card">
             <div className="label">Model</div>
-            <div className="value" style={{ fontSize: 15 }}>{String(summary?.model ?? "—")}</div>
+            <div className="value value--text">{String(summary?.model ?? "—")}</div>
             <div className="sub">reranker {String(summary?.reranker ?? "—")}</div>
           </div>
           <div className="card">
@@ -65,14 +65,14 @@ export function Admin() {
           </div>
           <div className="card">
             <div className="label">Escalation</div>
-            <div className="value" style={{ fontSize: 15 }}>
+            <div className="value value--text">
               {summary?.escalation_enabled ? "enabled" : "disabled"}
             </div>
             <div className="sub">no cloud calls in the core path</div>
           </div>
           <div className="card">
             <div className="label">Traces</div>
-            <div className="value" style={{ fontSize: 15 }}>{traces?.sink ?? "—"}</div>
+            <div className="value value--text">{traces?.sink ?? "—"}</div>
             <div className="sub">
               {traces?.langfuse_url ? (
                 <a href={traces.langfuse_url} target="_blank" rel="noreferrer">
@@ -110,7 +110,7 @@ export function Admin() {
             </div>
           </div>
         ) : (
-          <p style={{ color: "#5b6470", fontSize: 13 }}>No eval run yet — run <code>make eval</code>.</p>
+          <p className="admin-note">No eval run yet — run <code>make eval</code>.</p>
         )}
 
         <div className="section-title">Audit trail</div>
@@ -141,7 +141,7 @@ export function Admin() {
             <tbody>
               {(audit?.actions ?? []).map((a) => (
                 <tr key={String(a.id)}>
-                  <td style={{ fontFamily: "var(--mono)", fontSize: 11.5 }}>{String(a.id)}</td>
+                  <td className="mono-cell">{String(a.id)}</td>
                   <td>{String(a.user_id)}</td>
                   <td>{String(a.tool)}</td>
                   <td><span className={`pill ${String(a.status)}`}>{String(a.status)}</span></td>
@@ -151,7 +151,7 @@ export function Admin() {
                 </tr>
               ))}
               {!audit?.actions.length && (
-                <tr><td colSpan={7} style={{ color: "#8b94a0" }}>No actions recorded.</td></tr>
+                <tr><td colSpan={7} className="muted-cell">No actions recorded.</td></tr>
               )}
             </tbody>
           </table>
@@ -170,7 +170,7 @@ export function Admin() {
                   <td><span className={`pill ${String(e.event)}`}>{String(e.event)}</span></td>
                   <td>{String(e.actor_id)}</td>
                   <td>{String(e.tool ?? "—")}</td>
-                  <td style={{ fontFamily: "var(--mono)", fontSize: 11.5 }}>{String(e.action_id ?? "—")}</td>
+                  <td className="mono-cell">{String(e.action_id ?? "—")}</td>
                 </tr>
               ))}
             </tbody>

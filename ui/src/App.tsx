@@ -12,33 +12,72 @@ import {
 import { Admin } from "./components/Admin";
 import { ApprovalCard } from "./components/ApprovalCard";
 import { Reply } from "./components/Reply";
+import { StageTrail } from "./components/StageTrail";
+import { useTheme, type ThemeChoice } from "./theme";
 import type { AgentResponse, DemoUser, Turn, UploadRecord } from "./types";
 
 const LAST_USER_KEY = "echomind.lastUser";
 const threadKey = (handle: string) => `echomind.thread.${handle}`;
 
-const SUGGESTIONS: Record<string, string[]> = {
+interface Suggestion {
+  text: string;
+  /** What the question demonstrates. Written by the UI, never sourced from an answer. */
+  note: string;
+}
+
+const SUGGESTIONS: Record<string, Suggestion[]> = {
   alice: [
-    "How long must the confocal lasers warm up?",
-    "Show me my bookings",
-    "What am I charged if I cancel 12 hours ahead?",
+    { text: "Where is the nearest core that can do cryo-EM?", note: "Facilities · with distance" },
+    { text: "I want to image live cells — what should I use?", note: "Instruments · by technique" },
+    { text: "What is on my March invoice?", note: "Invoice · your charges only" },
+    { text: "How long must the confocal lasers warm up?", note: "Policy · with the passage" },
   ],
   bob: [
-    "What format do sample barcodes use?",
-    "Show me alice's bookings",
-    "How many bookings do I have?",
+    { text: "Where is the nearest core that can do cryo-EM?", note: "Facilities · with distance" },
+    { text: "I want to image live cells — what should I use?", note: "Instruments · by technique" },
+    { text: "What is on my March invoice?", note: "Invoice · your charges only" },
+    { text: "Show me alice's bookings", note: "Permissions · refused, not answered" },
   ],
   asha: [
-    "Why was lab A charged $412 in March?",
-    "Show me lab A's usage this month",
-    "Which instrument should I use for live-cell imaging?",
+    { text: "Where is the nearest core that can do cryo-EM?", note: "Facilities · with distance" },
+    { text: "I want to image live cells — what should I use?", note: "Instruments · by technique" },
+    { text: "Why was lab A charged $412 in March?", note: "Usage · traced to the bookings" },
+    { text: "Show me lab A's usage this month", note: "Usage · your labs only" },
   ],
   cora: [
-    "Which instrument had the most downtime in March 2026?",
-    "When are invoices issued?",
-    "Generate the monthly summary for 2026-03",
+    { text: "Where is the nearest core that can do cryo-EM?", note: "Facilities · with distance" },
+    {
+      text: "Which instrument had the most downtime in March 2026?",
+      note: "Usage · across all cores",
+    },
+    { text: "Generate the monthly summary for 2026-03", note: "Document · waits for approval" },
+    { text: "What is on my March invoice?", note: "Invoice · your charges only" },
   ],
 };
+
+const THEME_LABELS: { value: ThemeChoice; label: string }[] = [
+  { value: "system", label: "Auto" },
+  { value: "light", label: "Light" },
+  { value: "dark", label: "Dark" },
+];
+
+function ThemeToggle() {
+  const [choice, setChoice] = useTheme();
+  return (
+    <div className="theme-toggle" role="group" aria-label="Colour theme">
+      {THEME_LABELS.map((option) => (
+        <button
+          key={option.value}
+          className={choice === option.value ? "is-on" : ""}
+          aria-pressed={choice === option.value}
+          onClick={() => setChoice(option.value)}
+        >
+          {option.label}
+        </button>
+      ))}
+    </div>
+  );
+}
 
 export default function App() {
   const [users, setUsers] = useState<DemoUser[]>([]);
@@ -122,17 +161,28 @@ export default function App() {
     const id = `${Date.now()}`;
     setDraft("");
     setSending(true);
-    setTurns((prev) => [...prev, { id, question: message, streaming: true, streamedText: "" }]);
+    setTurns((prev) => [
+      ...prev,
+      { id, question: message, streaming: true, streamedText: "", stages: [] },
+    ]);
 
     const patch = (fn: (turn: Turn) => Turn) =>
       setTurns((prev) => prev.map((t) => (t.id === id ? fn(t) : t)));
 
     await streamChat(message, threadId, {
-      onStatus: (stage) => patch((t) => ({ ...t, status: stage })),
+      // The trail keeps every stage rather than replacing one with the next: the point of
+      // showing the work is that the reader can see the access check happened, and a
+      // stage that flashes past for 400ms was never seen.
+      onStatus: (stage) =>
+        patch((t) => {
+          const stages = t.stages ?? [];
+          if (stages[stages.length - 1] === stage) return t;
+          return { ...t, stages: [...stages, stage] };
+        }),
       onToken: (text) => patch((t) => ({ ...t, streamedText: (t.streamedText ?? "") + text })),
       onFinal: (response: AgentResponse) => {
         if (response.thread_id) setThreadId(response.thread_id);
-        patch((t) => ({ ...t, response, streaming: false, status: undefined }));
+        patch((t) => ({ ...t, response, streaming: false, stages: undefined }));
       },
       onError: (msg) => patch((t) => ({ ...t, streaming: false, error: msg })),
     });
@@ -150,39 +200,45 @@ export default function App() {
   }
 
   const isAdmin = current?.role === "admin";
+  const suggestions = SUGGESTIONS[current?.handle ?? ""] ?? SUGGESTIONS.alice;
 
   return (
     <div className="app">
       <aside className="rail">
         <div className="brand">
-          <h1>EchoMind</h1>
-          <span>Infinity X</span>
+          <span className="brand-mark" aria-hidden="true" />
+          <span className="brand-name">
+            <strong>EchoMind</strong>
+            <span>Infinity X</span>
+          </span>
         </div>
 
-        <div>
+        <div className="rail-section">
           <h2>Sign in as</h2>
           {users.map((u) => (
             <button
               key={u.handle}
               className={`user-btn ${current?.handle === u.handle ? "active" : ""}`}
+              aria-pressed={current?.handle === u.handle}
               onClick={() => void switchUser(u.handle)}
             >
               <span className="who">
                 <strong>{u.name}</strong>
-                <span className="role">{u.role}</span>
+                <span className={`role role--${u.role}`}>{u.role}</span>
               </span>
               <span className="blurb">{u.blurb}</span>
             </button>
           ))}
         </div>
 
-        <div>
+        <div className="rail-section">
           <h2>Your documents</h2>
           <div className="uploads-list">
             {uploads.map((u) => (
               <div className="upload-row" key={u.id}>
-                <span title={u.title}>{u.title.slice(0, 22)}</span>
+                <span title={u.title}>{u.title}</span>
                 <button
+                  aria-label={`Delete ${u.title}`}
                   title="Delete"
                   onClick={async () => {
                     await deleteUpload(u.id);
@@ -193,11 +249,7 @@ export default function App() {
                 </button>
               </div>
             ))}
-            {!uploads.length && (
-              <div style={{ fontSize: 12, color: "#8b94a0", padding: "0 8px" }}>
-                Nothing uploaded yet.
-              </div>
-            )}
+            {!uploads.length && <div className="uploads-empty">Nothing uploaded yet.</div>}
           </div>
           <input
             ref={fileRef}
@@ -218,7 +270,10 @@ export default function App() {
 
         <div className="rail-actions">
           {isAdmin && (
-            <button className="link-btn" onClick={() => setView(view === "admin" ? "chat" : "admin")}>
+            <button
+              className="link-btn"
+              onClick={() => setView(view === "admin" ? "chat" : "admin")}
+            >
               {view === "admin" ? "← Back to chat" : "Admin"}
             </button>
           )}
@@ -239,15 +294,19 @@ export default function App() {
           <div className="ctx">
             {current ? (
               <>
-                Signed in as <strong>{current.name}</strong> · {current.role}
-                {current.lab_ids.length > 0 && <> · {current.lab_ids.join(", ")}</>}
+                <span className="ctx-name">{current.name}</span>
+                <span className={`role role--${current.role}`}>{current.role}</span>
+                {current.lab_ids.length > 0 && (
+                  <span className="ctx-labs">{current.lab_ids.join(" · ")}</span>
+                )}
               </>
             ) : (
               "Loading…"
             )}
           </div>
-          <div className="ctx" style={{ fontSize: 12 }}>
-            {threadId ? `thread ${threadId}` : "new thread"}
+          <div className="topbar-right">
+            <span className="thread-id">{threadId ? threadId : "new thread"}</span>
+            <ThemeToggle />
           </div>
         </div>
 
@@ -267,9 +326,10 @@ export default function App() {
                       verified, you'll be told so rather than guessed at.
                     </p>
                     <div className="suggestions">
-                      {(SUGGESTIONS[current?.handle ?? "alice"] ?? []).map((s) => (
-                        <button key={s} onClick={() => void send(s)}>
-                          {s}
+                      {suggestions.map((s) => (
+                        <button key={s.text} onClick={() => void send(s.text)}>
+                          <span className="suggestion-text">{s.text}</span>
+                          <span className="suggestion-note">{s.note}</span>
                         </button>
                       ))}
                     </div>
@@ -281,11 +341,11 @@ export default function App() {
                     <div className="bubble-user">{turn.question}</div>
 
                     {turn.streaming && (
-                      <div className="reply">
+                      <div className="reply reply--working">
                         {turn.streamedText ? (
-                          <p>{turn.streamedText}</p>
+                          <p className="reply-text is-streaming">{turn.streamedText}</p>
                         ) : (
-                          <div className="status-line">{turn.status ?? "thinking…"}</div>
+                          <StageTrail stages={turn.stages ?? []} />
                         )}
                       </div>
                     )}
@@ -294,7 +354,7 @@ export default function App() {
 
                     {turn.response && (
                       <>
-                        <Reply response={turn.response} />
+                        <Reply response={turn.response} onSend={(text) => void send(text)} />
                         {turn.response.pending_action && (
                           <ApprovalCard
                             action={turn.response.pending_action}
@@ -322,7 +382,8 @@ export default function App() {
               <div className="composer-inner">
                 <textarea
                   value={draft}
-                  placeholder="Ask about bookings, billing, samples, policies…"
+                  aria-label="Ask a question"
+                  placeholder="Ask about facilities, instruments, bookings, billing, policies…"
                   onChange={(e) => setDraft(e.target.value)}
                   onKeyDown={(e) => {
                     if (e.key === "Enter" && !e.shiftKey) {
@@ -331,8 +392,12 @@ export default function App() {
                     }
                   }}
                 />
-                <button className="primary" disabled={sending || !draft.trim()} onClick={() => void send(draft)}>
-                  Send
+                <button
+                  className="btn btn--send"
+                  disabled={sending || !draft.trim()}
+                  onClick={() => void send(draft)}
+                >
+                  {sending ? "Working…" : "Send"}
                 </button>
               </div>
               <div className="hint">

@@ -64,6 +64,10 @@ class AgentResponse:
     gate: dict[str, Any] | None = None
     faithfulness: dict[str, Any] | None = None
     route: str | None = None
+    # Structured result the UI renders as a card instead of a raw table. Built by the tool
+    # that fetched the data, from that data — a card is evidence in a readable shape, not
+    # prose, so every value in it is traceable to the same rows the answer came from.
+    card: dict[str, Any] | None = None
     meta: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -78,6 +82,7 @@ class AgentResponse:
             "gate": self.gate,
             "faithfulness": self.faithfulness,
             "route": self.route,
+            "card": self.card,
             "meta": self.meta,
         }
 
