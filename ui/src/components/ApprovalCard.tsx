@@ -151,8 +151,11 @@ export function ApprovalCard({ action, decision, earlier, onDecided }: Props) {
             <button
               type="button"
               className="source-btn"
-              disabled={loadingSource}
+              // Not `disabled`: see Library.tsx — disabling a focused button blurs it, and
+              // the preview then has nothing to hand focus back to when it closes.
+              aria-busy={loadingSource}
               onClick={async () => {
+                if (loadingSource) return;
                 if (result?.records?.length) {
                   setSourceOpen(true);
                   return;

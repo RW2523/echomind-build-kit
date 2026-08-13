@@ -320,3 +320,76 @@ def _rerank(query: str, chunks: list[RetrievedChunk]) -> list[RetrievedChunk]:
         chunk.rerank_score = by_index.get(position)
         out.append(chunk)
     return out
+
+
+# ---------------------------------------------------------------------------------
+# Browsing the shelf.
+# ---------------------------------------------------------------------------------
+#
+# Reading rather than searching, but the same corpus and the same permission predicate,
+# so it lives beside the retriever. tests/test_rag_isolation.py enforces that: every
+# statement touching echomind.chunks is in this file, which is the only way to be sure
+# one of them cannot quietly grow a different idea of who may see what.
+
+_LIBRARY_LIST_SQL = """
+SELECT d.id, d.title, d.version, d.visibility, d.lab_id, d.owner_user_id,
+       d.source_path, d.updated_at,
+       COUNT(c.id) AS chunks,
+       SUM(length(c.text)) AS characters
+FROM echomind.knowledge_docs d
+JOIN echomind.chunks c ON c.doc_id = d.id
+WHERE {permitted}
+GROUP BY d.id, d.title, d.version, d.visibility, d.lab_id, d.owner_user_id,
+         d.source_path, d.updated_at
+ORDER BY d.title
+"""
+
+_LIBRARY_READ_SQL = """
+SELECT c.ord, c.text, c.breadcrumb
+FROM echomind.chunks c
+WHERE c.doc_id = :doc_id AND {permitted}
+ORDER BY c.ord
+"""
+
+_LIBRARY_META_SQL = """
+SELECT d.id, d.title, d.version, d.visibility, d.lab_id, d.source_path, d.updated_at
+FROM echomind.knowledge_docs d
+WHERE d.id = :doc_id
+"""
+
+
+def list_documents(ctx: Ctx) -> list[dict[str, Any]]:
+    """Every document this caller could be answered from, one row each.
+
+    Filtered by `permission_predicate` — the same clause `retrieve()` runs — rather than
+    a second copy of the rule. A listing more permissive than retrieval would be a
+    directory of things the reader may not have, naming the title and owner of every one.
+    """
+    permitted, params = permission_predicate(ctx)
+    with session_scope() as s:
+        rows = s.execute(
+            text(_LIBRARY_LIST_SQL.format(permitted=permitted)), params
+        ).mappings().all()
+    return [dict(row) for row in rows]
+
+
+def read_document(ctx: Ctx, doc_id: str) -> dict[str, Any] | None:
+    """One document, reassembled from the chunks this caller may read.
+
+    Reassembled rather than read from `source_path`: the file on disk is what was
+    ingested, the chunks are what answers are actually drawn from, and the two can drift.
+    Returns None when the caller may not read it — the same answer as "no such document",
+    because which of the two it is must not be learnable.
+    """
+    permitted, params = permission_predicate(ctx)
+    with session_scope() as s:
+        chunks = s.execute(
+            text(_LIBRARY_READ_SQL.format(permitted=permitted)),
+            {**params, "doc_id": doc_id},
+        ).mappings().all()
+        if not chunks:
+            return None
+        meta = s.execute(text(_LIBRARY_META_SQL), {"doc_id": doc_id}).mappings().first()
+    if meta is None:
+        return None
+    return {**dict(meta), "sections": [dict(c) for c in chunks]}

@@ -1543,3 +1543,66 @@ tr:last-child td { border-bottom: none; }
 .approval-outcome .approval-download,
 .approval-outcome .source-btn { margin-top: 10px; margin-right: 8px; vertical-align: middle; }
 .approval-download:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* --- Resources: the shelf, readable before you ask anything of it ---------------- */
+
+.library {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: var(--s5) var(--s4) var(--s6);
+  overflow-y: auto;
+}
+.library-head {
+  display: flex; align-items: flex-end; justify-content: space-between;
+  gap: var(--s4); flex-wrap: wrap; margin-bottom: var(--s5);
+}
+.library-head h2 { margin: 0 0 4px; font-size: var(--t-lg); }
+.library-sub { margin: 0; color: var(--ink-soft); font-size: var(--t-sm); max-width: 52ch; }
+.library-search {
+  font: inherit; font-size: var(--t-sm);
+  padding: 8px 12px; min-width: 220px;
+  border: 1px solid var(--line); border-radius: 8px;
+  background: var(--surface); color: var(--ink);
+}
+.library-search:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+.library-shelf { margin-bottom: var(--s5); }
+.library-shelf h3 {
+  display: flex; align-items: center; gap: 8px;
+  margin: 0 0 var(--s2); font-size: var(--t-sm);
+  text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-soft);
+}
+.library-count {
+  font-size: var(--t-xs); font-weight: 600; letter-spacing: 0;
+  padding: 1px 7px; border-radius: 999px;
+  background: var(--muted-soft); color: var(--ink-soft);
+}
+.library-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+
+/* One row per document, the whole row clickable — a title you can read and a preview
+   you can open are the same gesture. */
+.library-item {
+  width: 100%; font: inherit; text-align: left; cursor: pointer;
+  display: flex; align-items: baseline; justify-content: space-between;
+  gap: var(--s3); flex-wrap: wrap;
+  padding: 10px 14px; border-radius: 10px;
+  border: 1px solid var(--line); background: var(--surface); color: var(--ink);
+}
+.library-item:hover:not(:disabled) { border-color: var(--accent); background: var(--muted-soft); }
+.library-item:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.library-item:disabled { opacity: 0.6; cursor: default; }
+.library-title { font-size: var(--t-sm); font-weight: 550; }
+.library-meta {
+  display: flex; align-items: center; gap: 10px;
+  font-size: var(--t-xs); color: var(--ink-soft); white-space: nowrap;
+}
+.library-scope { padding: 1px 8px; border-radius: 999px; background: var(--muted-soft); }
+.library-scope.scope--lab { background: var(--accent-soft, var(--muted-soft)); color: var(--accent); }
+.library-scope.scope--private { background: var(--ok-soft); color: var(--ok); }
+.library-empty { color: var(--ink-soft); font-size: var(--t-sm); }
+
+/* The preview body: chunks in index order, each under the heading path it sits at. */
+.doc-section + .doc-section { margin-top: var(--s4); padding-top: var(--s4); border-top: 1px solid var(--line); }
+.doc-text { margin: 6px 0 0; white-space: pre-wrap; font-size: var(--t-sm); line-height: 1.55; }
+/* Busy rather than disabled — the element keeps focus so the preview can hand it back. */
+.library-item[aria-busy="true"], .source-btn[aria-busy="true"] { opacity: 0.62; cursor: progress; }

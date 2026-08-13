@@ -10,6 +10,7 @@ import {
   upload,
 } from "./api";
 import { Admin } from "./components/Admin";
+import { Library } from "./components/Library";
 import { ApprovalCard } from "./components/ApprovalCard";
 import {
   AssistantMark,
@@ -171,7 +172,7 @@ export default function App() {
   const [threadId, setThreadId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
-  const [view, setView] = useState<"chat" | "admin">("chat");
+  const [view, setView] = useState<"chat" | "admin" | "library">("chat");
   const [uploads, setUploads] = useState<UploadRecord[]>([]);
   const [uploadNote, setUploadNote] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -467,6 +468,18 @@ export default function App() {
         </div>
 
         <div className="rail-actions">
+          {/* Not gated on role: the point of the shelf is that anyone can see what the
+              assistant reads, and the list is already filtered to what they may read. */}
+          <button
+            className="link-btn subtle"
+            onClick={() => {
+              setView(view === "library" ? "chat" : "library");
+              dismissDrawer();
+            }}
+            tabIndex={railOpen ? 0 : -1}
+          >
+            {view === "library" ? "← Back to chat" : "Resources"}
+          </button>
           {isAdmin && (
             <button
               className="link-btn subtle"
@@ -538,6 +551,8 @@ export default function App() {
 
         {view === "admin" ? (
           <Admin />
+        ) : view === "library" ? (
+          <Library />
         ) : (
           <div className="transcript" ref={scrollRef} onScroll={onTranscriptScroll}>
             <div className="thread">

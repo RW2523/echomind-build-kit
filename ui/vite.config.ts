@@ -13,6 +13,8 @@ export default defineConfig({
     // need no CORS preflight and cookies/headers behave as they would in production.
     proxy: {
       "/chat": "http://localhost:8080",
+      "/library": "http://localhost:8080",
+      "/me": "http://localhost:8080",
       "/tools": "http://localhost:8080",
       "/actions": "http://localhost:8080",
       "/uploads": "http://localhost:8080",

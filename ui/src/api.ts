@@ -24,6 +24,17 @@ async function json<T>(response: Response): Promise<T> {
         : `${response.status} ${response.statusText}`;
     throw new Error(message);
   }
+  // A 200 of text/html is the dev server's SPA fallback answering a path its proxy does
+  // not forward. Left to JSON.parse it surfaces as `Unexpected token '<'`, which sends
+  // the reader looking at the API for a fault that is in vite.config.ts.
+  const kind = response.headers.get("content-type") ?? "";
+  if (!kind.includes("json")) {
+    const path = new URL(response.url, location.origin).pathname;
+    throw new Error(
+      `${path} returned ${kind || "no content type"} instead of JSON — the dev server is ` +
+        `probably not proxying ${path.split("/")[1] ?? path} to the API.`,
+    );
+  }
   return response.json() as Promise<T>;
 }
 
@@ -240,4 +251,36 @@ export async function downloadDocument(actionId: string): Promise<void> {
   link.remove();
   // Revoked on the next tick: Safari has not finished reading the blob synchronously.
   setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+
+/** A document on the shelf — the same shelf the retriever reads. */
+export type LibraryDoc = {
+  doc_id: string;
+  title: string;
+  version: string | null;
+  visibility: "public" | "lab" | "private";
+  scope: string;
+  chunks: number;
+  characters: number;
+  source_path: string | null;
+  updated_at: string | null;
+};
+
+export type LibraryDocDetail = Omit<LibraryDoc, "chunks" | "characters"> & {
+  sections: { ord: number; breadcrumb: string | null; text: string }[];
+};
+
+export async function libraryList(): Promise<{
+  documents: LibraryDoc[];
+  total: number;
+  chunks: number;
+}> {
+  const r = await fetch("/library", { headers: headers() });
+  return json(r);
+}
+
+export async function libraryDocument(docId: string): Promise<LibraryDocDetail> {
+  const r = await fetch(`/library/${encodeURIComponent(docId)}`, { headers: headers() });
+  return json(r);
 }

@@ -702,3 +702,16 @@ diminishing returns.
   router override forced any short punctuation-free message back to the asking branch, so
   "what is the cancellation policy" after "which period?" never reached the knowledge
   branch. Question openers are excluded as well as question marks.
+- 2026-08-13 | The corpus is browsable, not only citable | Every answer named its sources,
+  so the shelf was visible one citation at a time and nowhere as a whole — a reader who
+  wanted to know what the assistant had been given had to guess questions until documents
+  surfaced. /library lists it and /library/{id} previews it, both filtered by
+  retrieval.permission_predicate rather than a second copy of the rule: a listing more
+  permissive than retrieval is a directory of things the reader may not have, which is
+  worse than no listing. A test pins the two lists to each other per user. The SQL itself
+  lives in server/rag/retrieval.py, not in the API module: test_rag_isolation enforces that
+  every statement touching echomind.chunks is in that one file, which is the only way to be
+  sure two of them cannot grow different ideas of who may see what.
+- 2026-08-13 | The preview shows indexed chunks, not the file on disk | source_path is what
+  was ingested; the chunks are what answers are actually drawn from. Serving the file would
+  let the two drift silently, and the preview exists so a reader can check the difference.
