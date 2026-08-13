@@ -109,5 +109,8 @@ clean:
 	rm -rf $(VENV) .pytest_cache .ruff_cache
 	find . -name __pycache__ -type d -prune -exec rm -rf {} +
 
+retrieval-eval:  ## measure retrieval on its own — recall@k, before an answer can hide it
+	$(PY) -m scripts.retrieval_eval
+
 scenarios:  ## drive the assistant through realistic situations; writes scenario_reports/
 	$(PY) -m scripts.scenarios

@@ -126,6 +126,26 @@ _ARTEFACT_NOUN = (
 DOCUMENT_REQUEST_RE = re.compile(
     rf"(?=.*(?:{_DELIVERY_VERB}))(?=.*(?:{_ARTEFACT_NOUN}))", re.IGNORECASE | re.DOTALL
 )
+
+# A question about the asker's own record is a lookup, not a policy question.
+#
+# "Am I trained on the confocal?" routed to knowledge on its own and to data once the
+# conversation had context — a turn balanced on the boundary, which is another way of
+# saying it answers differently depending on nothing the user did. The knowledge branch
+# would answer it from the training *policy*, which describes what training requires and
+# cannot say whether this person has it.
+#
+# Narrow on purpose: first person, and a noun naming something the platform holds about
+# them. "What is the training policy" has no first person and stays where it belongs.
+_SELF_RECORD_RE = re.compile(
+    r"\b(?:am|are|do|does|have|has|can|was|were)\s+i\b.*"
+    r"\b(?:trained|training|certifi\w*|approved|authoris\w*|authoriz\w*|booked|"
+    r"bookings?|registered|enrolled|charged|billed|allowed|invoices?|usage|"
+    r"samples?)\b"
+    r"|\bmy\s+(?:training|certification|bookings?|usage|invoices?|charges|samples?|"
+    r"requests?|account codes?|profile|record)\b",
+    re.IGNORECASE,
+)
 SMALLTALK_RE = re.compile(
     r"^\s*(hi|hey|hello|yo|thanks|thank you|cheers|good morning|good afternoon|"
     r"who are you|what can you do|help)\b[\s!.?]*$",
@@ -139,6 +159,8 @@ def route(message: str, history: str = "") -> tuple[str, str]:
         return "smalltalk", "greeting pattern"
     if DOCUMENT_REQUEST_RE.search(message):
         return "action", "asks for a document by name"
+    if _SELF_RECORD_RE.search(message):
+        return "data", "asks about the caller's own record"
 
     verdict = chat_json(
         [

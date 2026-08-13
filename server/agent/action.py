@@ -10,6 +10,7 @@ from __future__ import annotations
 import calendar
 import logging
 import re
+import textwrap
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
@@ -26,22 +27,50 @@ from server.mcp.errors import ToolError
 
 log = logging.getLogger("echomind.action")
 
-WRITE_TOOLS = """create_onboarding_request(name, email, lab_id, pi_ack, account_code?)
-    Propose onboarding a new user. pi_ack must be true.
-create_service_request(template_id, fields)
-    Propose a service request. fields must satisfy the template's required fields.
-request_booking(instrument_id, starts_at, ends_at, account_code)
-    Propose an instrument booking. ISO-8601 UTC timestamps, max 12 hours.
-cancel_booking(booking_id, reason?)
-    Propose cancelling a booking the caller may act on. The charge the rules give is
-    worked out and shown on the card; never state or guess a charge yourself.
-reschedule_booking(booking_id, starts_at, ends_at)
-    Propose moving a booking to a new slot. ISO-8601 UTC timestamps, max 12 hours.
-generate_document(template, params)
-    template is one of usage_report, onboarding_packet, monthly_summary,
-    invoice_statement (params: account_code, period), facility_directory
-    (params: technique?, campus?), capability_report (params: goal),
-    booking_confirmation (params: booking_id), usage_summary (params: month?)."""
+# Constraints the planner needs that a ToolSpec has no field for. Guidance only — which
+# tools exist, and what they take, is read from the registry below.
+_PLANNER_NOTES = {
+    "create_onboarding_request": "Propose onboarding a new user. pi_ack must be true. "
+                                 "account_code is optional.",
+    "create_service_request": "Propose a service request. fields must satisfy the "
+                              "template's required fields.",
+    "request_booking": "Propose an instrument booking. ISO-8601 UTC timestamps, "
+                       "max 12 hours.",
+    "cancel_booking": "Propose cancelling a booking the caller may act on. reason is "
+                      "optional. The charge the rules give is worked out and shown on "
+                      "the card; never state or guess a charge yourself.",
+    "reschedule_booking": "Propose moving a booking to a new slot. ISO-8601 UTC "
+                          "timestamps, max 12 hours.",
+    "generate_document": "template is one of usage_report, onboarding_packet, "
+                         "monthly_summary, invoice_statement (params: account_code, "
+                         "period), facility_directory (params: technique?, campus?), "
+                         "capability_report (params: goal), booking_confirmation "
+                         "(params: booking_id), usage_summary (params: month?).",
+}
+
+
+def _write_tool_menu() -> str:
+    """The menu the planner is shown, built from the registry rather than retyped.
+
+    This was a hand-written string, and cancel_booking and reschedule_booking were
+    registered, tiered, tested and callable while being absent from it — so the planner
+    could not propose them and "cancel booking bk-0133" produced a new booking instead.
+    Registering a tool is not the same as offering it, and nothing connected the two.
+
+    Now a write tool cannot be unreachable: it appears the moment it is registered, with
+    its real parameter list. _PLANNER_NOTES only adds guidance; a tool with no note still
+    appears, described by its own ToolSpec.
+    """
+    lines: list[str] = []
+    for name in tools_mod.WRITE_TOOLS:
+        spec = tools_mod.TOOLS[name]
+        lines.append(f"{name}({', '.join(spec.params)})")
+        note = _PLANNER_NOTES.get(name) or spec.description
+        lines.append(textwrap.indent(textwrap.fill(note, width=84), "    "))
+    return "\n".join(lines)
+
+
+WRITE_TOOLS = _write_tool_menu()
 
 SYSTEM = """You turn a user's request into exactly one write-tool call for the Infinity X
 platform. You never execute anything: the call you describe becomes a pending action that

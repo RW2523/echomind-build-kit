@@ -1,0 +1,20 @@
+{"question": "how long before a booking can I cancel without being charged?", "must_contain": "24 hours", "topic": "cancellation"}
+{"question": "what is charged if I cancel within 24 hours?", "must_contain": ["50%", "50 per cent", "half"], "topic": "cancellation"}
+{"question": "what counts as a no-show and what does it cost?", "must_contain": "No-show", "topic": "cancellation"}
+{"question": "how long can a single booking be?", "must_contain": ["12 hours", "twelve hours"], "topic": "booking limits"}
+{"question": "how far ahead can I book an instrument?", "must_contain": ["60 days", "sixty days"], "topic": "booking limits"}
+{"question": "how many hours per instrument per week can one user hold at peak?", "must_contain": "16", "topic": "fair share"}
+{"question": "what are the peak hours for fair-share limits?", "must_contain": "09:00", "topic": "fair share"}
+{"question": "how long do I have to review an invoice before it commits?", "must_contain": ["fourteen days", "14 days"], "topic": "invoice review"}
+{"question": "how is staff time on a service request charged?", "must_contain": "rate", "topic": "recharge"}
+{"question": "how long is data kept on the instrument PCs?", "must_contain": ["30 days", "thirty days"], "topic": "data retention"}
+{"question": "how long is Biosafety Level 2 certification valid for?", "must_contain": ["24 months", "twenty-four months", "two years"], "topic": "training"}
+{"question": "what happens to my bookings if an instrument goes out of service?", "must_contain": "out of service", "topic": "instrument status"}
+{"question": "who can book on behalf of someone else?", "must_contain": "behalf", "topic": "delegation"}
+{"question": "what do I do if an instrument fails during my session?", "must_contain": "fails", "topic": "incidents"}
+{"question": "how should the facility be acknowledged in a publication?", "must_contain": "acknowledge", "topic": "publications"}
+{"question": "what is the chain of custody for a submitted sample?", "must_contain": "custody", "topic": "samples"}
+{"question": "what training do I need before using an instrument unsupervised?", "must_contain": "training", "topic": "training"}
+{"question": "how do I get an account on the platform?", "must_contain": "account", "topic": "access"}
+{"question": "what happens when three no-shows occur in ninety days?", "must_contain": ["ninety days", "90 days"], "topic": "no-shows"}
+{"question": "where does acquisition data land after a session?", "must_contain": "data", "topic": "data handling"}

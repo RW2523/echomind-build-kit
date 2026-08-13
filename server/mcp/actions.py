@@ -252,17 +252,28 @@ def _execute(action: dict) -> dict[str, Any]:
     if isinstance(payload, str):
         payload = json.loads(payload)
 
-    handler = {
+    handler = executors().get(tool)
+    if handler is None:
+        raise invalid_params(f"No execution mapping for tool {tool!r}.")
+    return handler(action, payload)
+
+
+def executors() -> dict[str, Any]:
+    """What actually happens once a human approves, one entry per write tool.
+
+    Exposed rather than inlined so a test can hold it against the registry. It is the
+    fourth hand-maintained list describing the same tool surface, and the other three
+    each shipped a divergence in this codebase — a write tool missing from here works
+    perfectly until someone approves it, and then fails at the only moment that matters.
+    """
+    return {
         "create_onboarding_request": _exec_onboarding,
         "create_service_request": _exec_service_request,
         "request_booking": _exec_booking,
         "cancel_booking": _exec_cancel_booking,
         "reschedule_booking": _exec_reschedule_booking,
         "generate_document": _exec_document,
-    }.get(tool)
-    if handler is None:
-        raise invalid_params(f"No execution mapping for tool {tool!r}.")
-    return handler(action, payload)
+    }
 
 
 def _exec_onboarding(action: dict, payload: dict) -> dict[str, Any]:

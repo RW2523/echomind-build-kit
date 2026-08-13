@@ -832,3 +832,31 @@ diminishing returns.
   there; nothing checked it. Whether "30" appears in a sentence is not a matter of opinion.
   Precision held at 0.992 under the stricter grader, so the chunking gain is real rather
   than an artefact of a lenient judge.
+- 2026-08-13 | The planner's write menu is derived from the registry | It was a hand-typed
+  string, and cancel_booking and reschedule_booking were registered, tiered, tested and
+  callable while absent from it — so the planner could not propose them and "cancel booking
+  bk-0133" produced a new booking. Registering a tool is not offering it, and nothing
+  connected the two. _PLANNER_NOTES now carries only the constraints a ToolSpec has no
+  field for; a tool with no note still appears, described by its own spec.
+- 2026-08-13 | The executor map is exposed so a test can hold it against the registry | It
+  was inline in a function: the fourth hand-maintained list describing the same tool
+  surface, and a write tool missing from it works perfectly until someone approves it.
+- 2026-08-13 | tests/test_registry_consistency.py | The retrieval path has no drift bugs
+  because test_rag_isolation makes the permission predicate impossible to duplicate. This
+  is the same idea for the tool surface: registry, planner menu, catalogue and executors
+  cannot disagree. Verified by adding an unwired write tool — two tests failed, and the
+  menu test passed because derivation had already made it reachable.
+- 2026-08-13 | Retrieval is measured on its own | Every other number here is end-to-end, so
+  a retrieval fault only shows when it changes a final answer: precision judges what was
+  retrieved, never what was missed, and read 0.933 while a policy document was
+  unretrievable. make retrieval-eval reports recall@k, MRR and whether each fact clears the
+  confidence floor. Its first run flagged a miss that was the label's fault, not the
+  system's — the corpus writes "fourteen days" and the expectation said "14 days" — so
+  expectations accept alternate spellings. A false alarm in a new instrument is how people
+  stop trusting metrics.
+- 2026-08-13 | A question about the asker's own record is a lookup | "Am I trained on the
+  confocal?" routed to knowledge alone and to data with conversation context — a turn that
+  answers differently depending on nothing the user did, and one the knowledge branch
+  cannot answer at all, because the training policy says what training requires and not
+  whether this person has it. First person plus a noun the platform holds about them now
+  routes deterministically. "What is the training policy?" has no first person and stays.
