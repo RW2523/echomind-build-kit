@@ -40,6 +40,8 @@ from reportlab.platypus import (
 )
 
 FORMATS = ("md", "docx", "pdf")
+# Kept beside FORMATS so the executor and the tool cannot disagree about it.
+DEFAULT_FORMAT = "pdf"
 EXTENSION = {"md": ".md", "docx": ".docx", "pdf": ".pdf"}
 
 _HEADING_RE = re.compile(r"^(#{1,4})\s+(.*)$")
@@ -743,3 +745,283 @@ def build_usage_summary(user_or_lab: object, period: object, rows: list[dict],
         "charged, so a persistent gap is worth raising with the core."
     )
     return "\n".join(out) + "\n"
+
+
+# ---------------------------------------------------------------------------------
+# The invoice, laid out as an invoice.
+# ---------------------------------------------------------------------------------
+#
+# Every other document in here is prose with a table in it, and rendering those from
+# Markdown is exactly right. An invoice is not prose. It is a form people have read a
+# thousand times, and one that arrives looking like a memo gets read as a draft — the
+# layout is part of whether the figures are believed.
+#
+# So this one bypasses the Markdown path and is composed directly. What it may print is
+# unchanged: the same values `build_invoice_statement` was handed, the same refusal to
+# show a total nobody supplied, the same visible label on anything derived. A prettier
+# document that is loose with its numbers would be worse than the plain one.
+
+BRAND = "Infinity X"
+BRAND_TAGLINE = "Core Facility Platform"
+
+_BRAND_INK = colors.HexColor("#0B1F3B")
+_BRAND_ACCENT = colors.HexColor("#1F6FEB")
+_BRAND_MUTED = colors.HexColor("#5B6B7F")
+_BRAND_RULE = colors.HexColor("#DCE3EC")
+_BRAND_BAND = colors.HexColor("#F4F7FB")
+
+
+def _invoice_styles() -> dict[str, ParagraphStyle]:
+    base = getSampleStyleSheet()["BodyText"]
+    def style(name: str, **kw) -> ParagraphStyle:
+        return ParagraphStyle(name, parent=base, **kw)
+
+    return {
+        "wordmark": style("wordmark", fontName="Helvetica-Bold", fontSize=21,
+                          leading=23, textColor=_BRAND_INK),
+        "tagline": style("tagline", fontName="Helvetica", fontSize=8.5, leading=11,
+                         textColor=_BRAND_MUTED),
+        "doctype": style("doctype", fontName="Helvetica-Bold", fontSize=21, leading=23,
+                         textColor=_BRAND_ACCENT, alignment=2),
+        "docmeta": style("docmeta", fontName="Helvetica", fontSize=8.5, leading=12,
+                         textColor=_BRAND_MUTED, alignment=2),
+        "label": style("label", fontName="Helvetica-Bold", fontSize=7.5, leading=11,
+                       textColor=_BRAND_MUTED),
+        "field": style("field", fontName="Helvetica", fontSize=9.5, leading=13,
+                       textColor=_BRAND_INK),
+        "th": style("th", fontName="Helvetica-Bold", fontSize=8.5, leading=11,
+                    textColor=colors.white),
+        "thr": style("thr", fontName="Helvetica-Bold", fontSize=8.5, leading=11,
+                     textColor=colors.white, alignment=2),
+        "td": style("td", fontName="Helvetica", fontSize=9, leading=12,
+                    textColor=_BRAND_INK),
+        "tdr": style("tdr", fontName="Helvetica", fontSize=9, leading=12,
+                     textColor=_BRAND_INK, alignment=2),
+        "totalLabel": style("totalLabel", fontName="Helvetica-Bold", fontSize=10,
+                            leading=13, textColor=_BRAND_INK, alignment=2),
+        "totalValue": style("totalValue", fontName="Helvetica-Bold", fontSize=13,
+                            leading=16, textColor=_BRAND_INK, alignment=2),
+        "note": style("note", fontName="Helvetica", fontSize=8.5, leading=12,
+                      textColor=_BRAND_MUTED),
+        "warn": style("warn", fontName="Helvetica-Bold", fontSize=8.5, leading=12,
+                      textColor=colors.HexColor("#9A3412")),
+        "terms": style("terms", fontName="Helvetica", fontSize=8.5, leading=12.5,
+                       textColor=_BRAND_INK),
+        "sectionHead": style("sectionHead", fontName="Helvetica-Bold", fontSize=9.5,
+                             leading=13, textColor=_BRAND_INK),
+    }
+
+
+def _field_block(styles: dict, heading: str, pairs: list[tuple[str, str]]) -> Table:
+    """A titled block of label/value pairs — the "billed to" and "details" panels."""
+    rows: list[list[object]] = [[Paragraph(heading.upper(), styles["label"])]]
+    rows += [
+        [Paragraph(f'<font color="#5B6B7F">{_escape(label)}</font>  '
+                   f'{_escape(value)}', styles["field"])]
+        for label, value in pairs
+    ]
+    block = Table(rows, colWidths=[80 * mm])
+    block.setStyle(TableStyle([
+        ("LEFTPADDING", (0, 0), (-1, -1), 0),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+        ("TOPPADDING", (0, 0), (-1, -1), 1.5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 1.5),
+        ("BOTTOMPADDING", (0, 0), (0, 0), 4),
+    ]))
+    return block
+
+
+def _invoice_furniture(canvas, doc) -> None:
+    """The rule under the letterhead and the footer, drawn on every page."""
+    canvas.saveState()
+    width, _ = A4
+    canvas.setStrokeColor(_BRAND_RULE)
+    canvas.setLineWidth(0.6)
+    canvas.line(20 * mm, 16 * mm, width - 20 * mm, 16 * mm)
+    canvas.setFont("Helvetica", 7.5)
+    canvas.setFillColor(_BRAND_MUTED)
+    canvas.drawString(20 * mm, 11 * mm,
+                      f"{BRAND} · {BRAND_TAGLINE} · prepared from platform records")
+    canvas.drawRightString(width - 20 * mm, 11 * mm, f"Page {canvas.getPageNumber()}")
+    canvas.restoreState()
+
+
+def invoice_pdf(account_code: str, period: str, lines: list[dict],
+                total: object = None, lab: object = None,
+                prepared: object = None) -> bytes:
+    """Render the statement as something that reads like an invoice.
+
+    Same guarantee as `build_invoice_statement`, which is the point: the total is the
+    one supplied, the sum of the lines is derived separately and says so, a disagreement
+    between them is printed rather than reconciled, and no lines means no charges rather
+    than a confident zero.
+    """
+    rows = list(lines or [])
+    derived = _sum(row.get("amount") for row in rows) if rows else None
+    styles = _invoice_styles()
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buffer, pagesize=A4, title=f"Invoice statement — {account_code} {period}",
+        author=BRAND, subject=f"Charges for {account_code}, {period}",
+        leftMargin=20 * mm, rightMargin=20 * mm, topMargin=18 * mm, bottomMargin=24 * mm,
+    )
+    content_width = A4[0] - 40 * mm
+    story: list[object] = []
+
+    # --- letterhead ---
+    letterhead = Table(
+        [[
+            [Paragraph(BRAND, styles["wordmark"]),
+             Paragraph(BRAND_TAGLINE, styles["tagline"])],
+            [Paragraph("INVOICE", styles["doctype"]),
+             Paragraph(f"Statement reference {_escape(_text(account_code))} · "
+                       f"{_escape(_text(period))}", styles["docmeta"])],
+        ]],
+        colWidths=[content_width * 0.5, content_width * 0.5],
+    )
+    letterhead.setStyle(TableStyle([
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 0),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+        ("TOPPADDING", (0, 0), (-1, -1), 0),
+        ("LINEBELOW", (0, 0), (-1, -1), 1.4, _BRAND_ACCENT),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+    ]))
+    story += [letterhead, Spacer(1, 12)]
+
+    # --- who and what ---
+    details = [("Period", _text(period)), ("Charge lines", str(len(rows)))]
+    if prepared is not None:
+        details.append(("Prepared", _text(prepared)))
+    panels = Table(
+        [[
+            _field_block(styles, "Billed to",
+                         [("Account", _text(account_code)), ("Lab", _plain_subject(lab))]),
+            _field_block(styles, "Statement details", details),
+        ]],
+        colWidths=[content_width * 0.5, content_width * 0.5],
+    )
+    panels.setStyle(TableStyle([
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("LEFTPADDING", (0, 0), (0, 0), 0),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+        ("BACKGROUND", (0, 0), (-1, -1), _BRAND_BAND),
+        ("LEFTPADDING", (0, 0), (-1, -1), 10),
+        ("TOPPADDING", (0, 0), (-1, -1), 10),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 10),
+    ]))
+    story += [panels, Spacer(1, 16)]
+
+    # --- charges ---
+    # Some billing views carry hours per line and some do not. A column of em-dashes
+    # reads as data that went missing rather than a column that was never populated, so
+    # it only appears when at least one line actually has hours on it.
+    with_hours = any(_line_hours(row) is not None for row in rows)
+
+    head = [Paragraph("Instrument", styles["th"]), Paragraph("Description", styles["th"])]
+    if with_hours:
+        head.append(Paragraph("Hours", styles["thr"]))
+    head.append(Paragraph("Amount", styles["thr"]))
+
+    body_rows: list[list[object]] = [head]
+    for row in rows:
+        cells = [
+            Paragraph(_escape(_cell(row.get("instrument"))), styles["td"]),
+            Paragraph(_escape(_cell(row.get("description"))), styles["td"]),
+        ]
+        if with_hours:
+            cells.append(Paragraph(_escape(_cell(_line_hours(row))), styles["tdr"]))
+        cells.append(Paragraph(_escape(_cell(_money(row.get("amount")))), styles["tdr"]))
+        body_rows.append(cells)
+    if not rows:
+        body_rows.append(
+            [Paragraph("<i>No charges in this period</i>", styles["td"])]
+            + [Paragraph("", styles["td"]) for _ in range(len(head) - 1)]
+        )
+
+    widths = (
+        [content_width * 0.26, content_width * 0.44, content_width * 0.13,
+         content_width * 0.17]
+        if with_hours
+        else [content_width * 0.30, content_width * 0.51, content_width * 0.19]
+    )
+    charges = Table(body_rows, repeatRows=1, colWidths=widths)
+    charge_style = [
+        ("BACKGROUND", (0, 0), (-1, 0), _BRAND_INK),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 8),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+        ("TOPPADDING", (0, 0), (-1, -1), 6),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+        ("LINEBELOW", (0, 1), (-1, -1), 0.4, _BRAND_RULE),
+    ]
+    # Banding, so the eye keeps its place across a wide row — the reason ledgers have
+    # always been ruled.
+    charge_style += [
+        ("BACKGROUND", (0, i), (-1, i), _BRAND_BAND)
+        for i in range(2, len(body_rows), 2)
+    ]
+    charges.setStyle(TableStyle(charge_style))
+    story += [charges, Spacer(1, 10)]
+
+    # --- what is owed, and how sure we are of it ---
+    if total is not None:
+        total_text, caveat = _money(total), None
+        if derived is not None and derived != _decimal(total):
+            caveat = (
+                f"The lines above sum to {_derived_money(derived)}, which is derived from "
+                "them and does not match the invoice total. Query this with the core "
+                "before the review period ends."
+            )
+    elif derived is not None:
+        total_text = _derived_money(derived)
+        caveat = ("Derived by adding the lines above, because no invoice total was "
+                  "supplied with this statement.")
+    else:
+        total_text, caveat = _MISSING, None
+
+    totals = Table(
+        [[Paragraph(f"Total for {_escape(_text(period))}", styles["totalLabel"]),
+          Paragraph(_escape(total_text), styles["totalValue"])]],
+        colWidths=[content_width * 0.62, content_width * 0.38],
+    )
+    totals.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), _BRAND_BAND),
+        ("LINEABOVE", (0, 0), (-1, 0), 1.2, _BRAND_ACCENT),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 10),
+        ("TOPPADDING", (0, 0), (-1, -1), 9),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 9),
+    ]))
+    story.append(totals)
+    if caveat:
+        story += [Spacer(1, 6), Paragraph(_escape(caveat),
+                                          styles["warn" if total is not None else "note"])]
+
+    # --- terms ---
+    story += [
+        Spacer(1, 18),
+        Paragraph("Review and payment", styles["sectionHead"]),
+        Spacer(1, 4),
+        Paragraph(
+            f"This statement covers account code {_escape(_text(account_code))} for the "
+            "period above, and nothing else.", styles["terms"]),
+        Spacer(1, 3),
+        Paragraph(
+            f"The review period is {INVOICE_REVIEW_DAYS} days from the date the invoice "
+            "was issued. After it ends the invoice commits whether or not it was "
+            "reviewed, so queries have to be raised with the core inside that window.",
+            styles["terms"]),
+        Spacer(1, 3),
+        Paragraph(
+            "Every figure above is reproduced from the platform's billing records. "
+            "Nothing on this page was estimated.", styles["note"]),
+    ]
+
+    doc.build(story, onFirstPage=_invoice_furniture, onLaterPages=_invoice_furniture)
+    return buffer.getvalue()
+
+
+def _plain_subject(value: object) -> str:
+    """`_subject` for a laid-out page: same naming, without the Markdown backticks."""
+    return _subject(value).replace("`", "")

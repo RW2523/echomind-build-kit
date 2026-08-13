@@ -644,3 +644,61 @@ diminishing returns.
   carries instrument_id and instrument; both labels humanise to the same word, so the
   evidence table printed "instrument | instrument" — two columns, one heading, the raw key
   next to the readable one it duplicates. The name is what a reader can act on.
+- 2026-08-13 | The download button fetches the file instead of linking to it | The
+  confirmation rendered `<a href="/actions/{id}/document" download>`, and an anchor cannot
+  carry an Authorization header. Every download was therefore rejected and the button
+  looked broken to the one person it was built for. The bytes now come through fetch with
+  the bearer token, become a blob, and are handed to a click we make ourselves.
+- 2026-08-13 | A dated document may not be rendered for a date only the model knows | Asked
+  bare for "my invoice", the planner supplied the current month with complete confidence
+  and the user got a finished, official-looking PDF for a window they never chose. The
+  period is now taken from the conversation or asked for; whatever the planner put in
+  params is ignored. An invoice is only a fact about the period on it.
+- 2026-08-13 | Month names are converted, not refused | "the March invoice" reached the
+  renderer as period="March", which no query can use — it either errors or matches nothing
+  and produces an empty statement that still looks like an invoice. A bare month means the
+  most recent one that has already happened: asked in August for March, nobody means next
+  March.
+- 2026-08-13 | The reply to a clarification returns to the branch that asked it | "March
+  2026" on its own reads as a billing lookup, so the router sent it to data and the user
+  who answered our own question got a number back instead of the document they asked for.
+  History now records which branch spoke, and an answer to a clarify goes back to it.
+- 2026-08-13 | A generated document carries the rows it was built from | A statement of
+  charges is only as trustworthy as the ledger behind it. The rows travel on the action
+  result and are one click away under Source — including after a reload, when the card is
+  rebuilt from the thread and the approving tab's memory is gone. Decimal is stringified
+  rather than floated: rounding a charge would be a quiet lie in a document about money.
+- 2026-08-13 | The invoice is composed as a form, not rendered from Markdown | Every other
+  document here is prose with a table in it. An invoice is a shape people have read a
+  thousand times, and one arriving as a memo reads as a draft — the layout is part of
+  whether the figures are believed. What it may print is unchanged: the supplied total,
+  the derived sum labelled as derived, both shown when they disagree, and no confident
+  $0.00 for a total nobody gave us.
+- 2026-08-13 | A month word only counts as a date when it is used as one | The first
+  version of the period guard matched `(jan|feb|mar|…)[a-z]*`, so every English word
+  beginning with a month prefix was a month: "Maybe as a PDF" rendered a May invoice,
+  "send Mark the invoice" a fully populated March one, "why was my booking declined" a
+  December one. An adversarial review reproduced all of them end to end. Month names are
+  now exact, and a bare month is only read as a date when a year sits beside it, a
+  date-shaped preposition precedes it, it qualifies the document ("the March invoice"), or
+  it is the whole reply. "may I have my invoice" is not a request for May.
+- 2026-08-13 | The clarifying question carries no worked example | It read "For example
+  March 2026, or 2026-03", and that text went into the history verbatim — so on the next
+  turn the guard found those dates while looking for the period the user had named, and
+  "yes please" rendered March. A guard whose own question satisfies it is not a guard. Our
+  own clarifications are also filtered out of the grounding text, so both halves fail safe.
+- 2026-08-13 | Grounding reads the conversation newest-first, not as one blob | Searching
+  message-plus-history as a flat string let the first match win, so an older turn beat the
+  month just typed ("now give me the July invoice" rendered March) and "convert it to a
+  pdf" picked the earliest invoice in the thread rather than the one on screen. A year
+  anywhere in the transcript also paired with any month — "installed in 2019" made a 2019
+  invoice. The current message is asked first, then earlier turns most-recent-first, and a
+  year must sit beside its month.
+- 2026-08-13 | The period guard only speaks when the planner produced no call | It matched
+  the usage_summary subject in "book me the cryo-EM next week for my usage" and replied
+  "which month?", abandoning a booking we had understood. A complete plan for another tool
+  is not a document request that forgot its date.
+- 2026-08-13 | A question is not only a sentence with a question mark | The clarify-reply
+  router override forced any short punctuation-free message back to the asking branch, so
+  "what is the cancellation policy" after "which period?" never reached the knowledge
+  branch. Question openers are excluded as well as question marks.

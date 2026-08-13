@@ -469,6 +469,359 @@ def _unique(items: list[str]) -> list[str]:
     return list(dict.fromkeys(items))
 
 
+# "as a pdf", "in word", "give me a PDF of it". The tool has always accepted a format and
+# the planner reliably dropped it: a user asked to "convert into a pdf" and approved a card
+# that said "as MD", because the card was accurate about what it was about to do.
+_FORMAT_WORDS = (
+    ("pdf", re.compile(r"\bpdfs?\b", re.I)),
+    ("docx", re.compile(r"\b(docx|word document|word doc|word file|as word|in word)\b", re.I)),
+    ("md", re.compile(r"\b(markdown|\.md)\b", re.I)),
+)
+
+# What the conversation was just about, and the document that reports it. Ordered: the
+# first match in the most recent text wins, so a thread that moved from usage to invoices
+# converts the invoice.
+_DOCUMENT_SUBJECTS = (
+    ("invoice_statement", re.compile(r"\binvoice|billing|charged|statement\b", re.I)),
+    ("usage_summary", re.compile(r"\busage|scheduled hours|tracked hours\b", re.I)),
+    ("booking_confirmation", re.compile(r"\bbooking|booked|reservation\b", re.I)),
+    ("capability_report", re.compile(r"\brecommend|which instrument|suited|capability\b", re.I)),
+    ("facility_directory", re.compile(r"\bfacilit|core|campus|nearest\b", re.I)),
+)
+_CONVERT_RE = re.compile(
+    r"\b(convert|export|download|save|turn (?:it|this|that) into|as a|give me)\b.{0,40}"
+    r"\b(pdf|docx|word|markdown|document|file|copy)\b|\b(pdf|docx) (?:of|for) (?:it|this|that)\b",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def stated_format(message: str) -> str | None:
+    """The file format the user actually named, if they named one."""
+    for fmt, pattern in _FORMAT_WORDS:
+        if pattern.search(message):
+            return fmt
+    return None
+
+
+def apply_stated_format(plan: dict[str, Any], message: str) -> dict[str, Any]:
+    """Give the document the format the user asked for.
+
+    The word was in their message and the tool has always taken it; only the planner had
+    to remember to pass it along, and it did not. Deterministic, so "pdf" means pdf.
+    """
+    if plan.get("tool") != "generate_document":
+        return plan
+    arguments = plan.get("arguments") if isinstance(plan.get("arguments"), dict) else {}
+    fmt = stated_format(message)
+    if not fmt:
+        return plan
+    return {**plan, "arguments": {**arguments, "format": fmt}}
+
+
+def carry_forward_document_subject(
+    plan: dict[str, Any], message: str, history: str
+) -> dict[str, Any]:
+    """"Convert it to a pdf" means the thing we were just talking about.
+
+    Shown an invoice and asked to convert it, the planner answered "What document would
+    you like to convert into a PDF?" — the user had to name again what was already on
+    screen. It does not fail by picking the wrong template; it fails by having no template
+    at all and asking, which is why the guard has to run when the plan is an ASK as much as
+    when it is a half-filled call. The knowledge branch resolves pronouns across turns;
+    this is the same courtesy for documents.
+
+    Only fires on an explicit convert/export phrasing, and only when the conversation
+    actually names a subject — so "generate a document" with nothing behind it still asks.
+    """
+    if not _CONVERT_RE.search(message):
+        return plan
+    tool = plan.get("tool")
+    if tool not in (None, "generate_document"):
+        return plan
+    arguments = plan.get("arguments") if isinstance(plan.get("arguments"), dict) else {}
+    if arguments.get("template"):
+        return plan
+
+    haystack = f"{message}\n{history or ''}"
+    for template, pattern in _DOCUMENT_SUBJECTS:
+        if not (pattern.search(message) or pattern.search(history or "")):
+            continue
+        params = dict(arguments.get("params") or {})
+        params.update(_document_params_from(template, haystack))
+        if _MISSING_FOR.get(template, ()) and not all(
+            params.get(k) for k in _MISSING_FOR[template]
+        ):
+            # The conversation named the subject but not enough of it to render. Let the
+            # planner's own question stand rather than proposing a card that would fail.
+            return plan
+        log.info("resolving %r to %s from the conversation", message[:40], template)
+        return {
+            "tool": "generate_document",
+            "arguments": {
+                "template": template,
+                "params": params,
+                "format": arguments.get("format") or stated_format(message)
+                or tools_mod.DEFAULT_DOCUMENT_FORMAT,
+            },
+        }
+    return plan
+
+
+# Documents whose whole meaning is the window they cover, and the parameter that carries
+# it. Rendering one for a period nobody named produces a plausible, wrong, signed-looking
+# artefact — the exact failure this system exists to prevent — so it asks instead.
+#
+# The question carries no worked example on purpose. It used to read "For example March
+# 2026, or 2026-03", which went into the history verbatim — and the next turn found those
+# dates while looking for the period the *user* had named. Whatever they replied, the
+# guard grounded the invoice in its own suggestion and rendered March. A guard whose own
+# question satisfies it is not a guard.
+_PERIOD_REQUIRED = {
+    "invoice_statement": (
+        "period",
+        "Which period should the invoice cover? Tell me the month and the year.",
+    ),
+    "usage_summary": (
+        "month",
+        "Which month should the usage summary cover? Tell me the month and the year.",
+    ),
+    "monthly_summary": (
+        "month",
+        "Which month should the summary cover? Tell me the month and the year.",
+    ),
+}
+
+# Month names and their standard abbreviations, and nothing else. This was written as
+# `(jan|feb|mar|…)[a-z]*`, which matches every English word that merely begins with one:
+# "maybe" was a May invoice, "Mark" a March invoice, "declined" a December invoice. The
+# guard built to stop invented periods was the thing inventing them.
+_MONTH_NAMES = (
+    r"jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?"
+    r"|aug(?:ust)?|sept(?:ember)?|sep|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?"
+)
+_MONTH_NUMBER = {
+    "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
+    "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12,
+}
+
+# A month word only counts as a date when it is being used as one. "may I have my invoice"
+# is not a request for May. Each of these pins the word to a year, to a date-shaped
+# preposition, or to a reply that is nothing but the month.
+_MONTH_YEAR_RE = re.compile(rf"\b({_MONTH_NAMES})\.?,?\s+(20\d{{2}})\b", re.I)
+_YEAR_MONTH_RE = re.compile(rf"\b(20\d{{2}})[,\s]+({_MONTH_NAMES})\b", re.I)
+_MONTH_IN_DATE_SLOT_RE = re.compile(
+    rf"\b(?:for|in|of|from|during|since|covering|period)\s+(?:the\s+)?({_MONTH_NAMES})\b",
+    re.I,
+)
+_MONTH_AS_ADJECTIVE_RE = re.compile(
+    rf"\b(?:the\s+)?({_MONTH_NAMES})\s+(?:invoice|statement|summary|usage|charges|bill)\b",
+    re.I,
+)
+_MONTH_ONLY_RE = re.compile(
+    rf"^\W*({_MONTH_NAMES})\.?\W*(?:please|thanks|thank you)?\W*$", re.I
+)
+_RELATIVE_MONTH = (
+    (("this month", "current month"), 0),
+    (("last month", "previous month", "past month"), -1),
+)
+
+
+def _month_number(word: str) -> int:
+    return _MONTH_NUMBER[word.lower()[:3]]
+
+
+def _shift_month(today: date, months: int) -> str:
+    year, month = _add_months(today.year, today.month, months)
+    return f"{year:04d}-{month:02d}"
+
+
+def _normalise_period(value: Any, today: date) -> str | None:
+    """Turn a period the user actually named into the YYYY-MM the tools take.
+
+    "the March invoice" reached the renderer as period="March", which no query can use —
+    it either errors or matches nothing and produces an empty statement that still looks
+    like an invoice. People say months by name, so the name is converted here.
+
+    What it will not do is read a month out of a sentence that was not about time. The
+    year has to sit beside the month, too: scanning the whole transcript for any `20\\d\\d`
+    turned "the Cryo-EM was installed in 2019" into an invoice for March 2019.
+
+    A bare month with no year means the most recent one that has already happened: asked
+    in August for "the March invoice", nobody means the March that has not arrived yet.
+    """
+    if value in (None, ""):
+        return None
+    text_ = str(value).strip()
+    exact = _PERIOD_RE.search(text_)
+    if exact:
+        return exact.group(0)
+
+    low = text_.lower()
+    for phrases, offset in _RELATIVE_MONTH:
+        if any(phrase in low for phrase in phrases):
+            return _shift_month(today, offset)
+
+    # A year stated next to the month is the user's own; anything further away is not.
+    paired = _MONTH_YEAR_RE.search(low)
+    if paired:
+        return f"{int(paired.group(2)):04d}-{_month_number(paired.group(1)):02d}"
+    paired = _YEAR_MONTH_RE.search(low)
+    if paired:
+        return f"{int(paired.group(1)):04d}-{_month_number(paired.group(2)):02d}"
+
+    for pattern in (_MONTH_IN_DATE_SLOT_RE, _MONTH_AS_ADJECTIVE_RE, _MONTH_ONLY_RE):
+        found = pattern.search(low)
+        if not found:
+            continue
+        month = _month_number(found.group(1))
+        year = today.year if month <= today.month else today.year - 1
+        return f"{year:04d}-{month:02d}"
+    return None
+
+
+def require_document_period(
+    plan: dict[str, Any], message: str, history: str
+) -> dict[str, Any]:
+    """Never render a dated document for a date the user did not give.
+
+    Asked bare for "my invoice", the planner filled in a period on its own — usually the
+    current month — and the user got a finished PDF for a window they never chose. It
+    reads as an answer, not a guess, which is what makes it dangerous: an invoice is only
+    a fact about the period on it.
+
+    So the period must be traceable to something the conversation actually says, and it
+    is converted into the form the tools take. When nothing refers to a time at all, this
+    returns a question instead of a call.
+    """
+    today = datetime.now(UTC).date()
+
+    if plan.get("tool") == "generate_document":
+        arguments = (
+            plan.get("arguments") if isinstance(plan.get("arguments"), dict) else {}
+        )
+        template = str(arguments.get("template") or "")
+        required = _PERIOD_REQUIRED.get(template)
+        if required is None:
+            return plan
+        key, question = required
+        params = dict(arguments.get("params") or {})
+        # Deliberately ignores whatever the planner put in params. Asked bare for "my
+        # invoice" it supplies the current month with total confidence, and a period that
+        # came from the model rather than from the user is exactly the invented fact this
+        # guard exists to stop.
+        period = _grounded_period(message, history, today)
+        if period:
+            return {
+                **plan,
+                "arguments": {**arguments, "params": {**params, key: period}},
+            }
+        return _ask_for_period(question, key, plan, template)
+
+    # Only when the planner produced no call at all. A complete booking or service request
+    # is not a document request that forgot its date — asking "which month?" in reply to
+    # "book me the cryo-EM next week for my usage" abandons a request we understood.
+    if plan.get("tool"):
+        return plan
+    for template, pattern in _DOCUMENT_SUBJECTS:
+        if template not in _PERIOD_REQUIRED or not pattern.search(message):
+            continue
+        key, question = _PERIOD_REQUIRED[template]
+        if _grounded_period(message, history, today):
+            return plan
+        return _ask_for_period(question, key, plan, template)
+    return plan
+
+
+def _grounded_period(message: str, history: str, today: date) -> str | None:
+    """The period the conversation names, read in the order it should be believed.
+
+    Three separate bugs lived in scanning one flat blob of message-plus-history:
+
+    * the first match in the blob won, so an older turn beat the month the user had just
+      typed — "now give me the July invoice" rendered March because March was further up;
+    * "convert it to a pdf" picked the earliest invoice in the thread rather than the one
+      on screen, for the same reason;
+    * the guard's own clarifying question counted as evidence.
+
+    So the current message is asked first, then earlier turns from the most recent
+    backwards, and our own clarifications are not evidence of anything.
+    """
+    for segment in _grounding_segments(message, history):
+        period = _normalise_period(segment, today)
+        if period:
+            return period
+    return None
+
+
+# Lines as `graph.format_history` writes them. Coupled to that format on purpose: the
+# alternative is threading structured history through four call sites to reach one guard.
+_HISTORY_LINE_RE = re.compile(r"^\s*(user|assistant)\s*(?:\(([^)]*)\))?:\s*(.*)$")
+
+
+def _grounding_segments(message: str, history: str) -> list[str]:
+    """The message, then earlier turns most-recent-first, minus our own questions."""
+    segments = [message]
+    earlier: list[str] = []
+    for line in (history or "").splitlines():
+        found = _HISTORY_LINE_RE.match(line)
+        if not found:
+            continue
+        speaker, kind, said = found.group(1), found.group(2) or "", found.group(3)
+        if speaker == "assistant" and kind.strip() == "clarify":
+            continue
+        if said.strip():
+            earlier.append(said)
+    segments.extend(reversed(earlier))
+    return segments
+
+
+def _ask_for_period(
+    question: str, key: str, withheld: dict[str, Any], template: str
+) -> dict[str, Any]:
+    log.info("asking for the period before rendering %s", template)
+    return {
+        "tool": None,
+        "ask": question,
+        "missing": key,
+        "why": "the document is defined by its period and the conversation names none",
+        "withheld": withheld,
+    }
+
+
+_ACCOUNT_RE = re.compile(r"\bACC-[A-Z0-9]+\b")
+_PERIOD_RE = re.compile(r"\b(20\d{2})-(0[1-9]|1[0-2])\b")
+_BOOKING_RE = re.compile(r"\bbk-[a-z0-9]+\b", re.I)
+
+# What each document cannot be rendered without. Checked before proposing, so the card a
+# human approves is one that can actually produce a file.
+_MISSING_FOR = {
+    "invoice_statement": ("account_code", "period"),
+    "booking_confirmation": ("booking_id",),
+}
+
+
+def _document_params_from(template: str, text_: str) -> dict[str, Any]:
+    """Recover a document's parameters from what the conversation already showed.
+
+    Every value comes from the transcript — the invoice the user was just shown carries
+    its own account code and period — so nothing here invents a parameter.
+    """
+    if template == "invoice_statement":
+        account = _ACCOUNT_RE.search(text_)
+        period = _PERIOD_RE.search(text_)
+        return {
+            **({"account_code": account.group(0)} if account else {}),
+            **({"period": period.group(0)} if period else {}),
+        }
+    if template == "usage_summary":
+        period = _PERIOD_RE.search(text_)
+        return {"month": period.group(0)} if period else {}
+    if template == "booking_confirmation":
+        booking = _BOOKING_RE.search(text_)
+        return {"booking_id": booking.group(0)} if booking else {}
+    return {}
+
+
 def require_supplied_identity(plan: dict[str, Any], source: str) -> dict[str, Any]:
     """An onboarding proposal must name a person the user actually named.
 
@@ -529,8 +882,11 @@ def plan(message: str, ctx: Ctx, history: str = "") -> dict[str, Any]:
     )
     # What the user actually said wins over what the planner inherited or invented.
     chosen = apply_stated_duration(chosen, message)
+    chosen = apply_stated_format(chosen, message)
+    chosen = carry_forward_document_subject(chosen, message, history)
     chosen = apply_relative_date(chosen, message)
     chosen = carry_forward_instrument(chosen, message, history)
+    chosen = require_document_period(chosen, message, history)
     return require_supplied_identity(chosen, f"{message}\n{history}\n{documents}")
 
 
@@ -634,10 +990,14 @@ def confirmation_text(action: dict[str, Any]) -> str:
             "They will need instrument training before they can book."
         )
     if created == "document":
+        # A path on the server is not something the reader can act on; the route that
+        # serves the file is. Size and format stay, because they tell them what they are
+        # about to open.
+        size_kb = max(1, round(result.get("bytes", 0) / 1024))
         return (
-            f"Generated {result['title']} — saved to {result['path']} "
-            f"({result['bytes']} bytes)."
-        )
+            f"{result['title']} is ready — {result.get('format', 'file').upper()}, "
+            f"about {size_kb} kB. Download it here: {result.get('download_url', '')}"
+        ).strip()
     return f"Done. The action completed with status '{status}'."
 
 # Versioned by content hash — see server/agent/prompts.py.

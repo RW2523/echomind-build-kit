@@ -44,6 +44,12 @@ log = logging.getLogger("echomind.tools")
 # Facility opening hours used to derive free slots (tool 3).
 OPEN_HOUR, CLOSE_HOUR = 8, 20
 
+# What a document is for is handing to someone — a finance office, a supervisor, a grant
+# report. Markdown was the default because it was the first format implemented and the
+# easiest to assert on in a test; nobody asked for it. PDF is what a person means when
+# they say "give me the document", so it is what they get unless they say otherwise.
+DEFAULT_DOCUMENT_FORMAT = "pdf"
+
 DOCUMENT_TEMPLATES = (
     "usage_report", "onboarding_packet", "monthly_summary",
     # Feature documents: the printable form of what the chat path already answers.
@@ -951,7 +957,7 @@ def request_booking(ctx: Ctx, instrument_id: str, starts_at: str, ends_at: str,
 
 def generate_document(ctx: Ctx, template: str,
                       params: dict[str, Any] | None = None,
-                      format: str = "md") -> dict[str, Any]:
+                      format: str = DEFAULT_DOCUMENT_FORMAT) -> dict[str, Any]:
     params = params or {}
     fmt = str(format).lower()
     if fmt not in documents.FORMATS:

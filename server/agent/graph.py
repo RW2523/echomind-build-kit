@@ -9,6 +9,7 @@ decides, using the Postgres checkpointer keyed by thread_id (= conversation id).
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any, TypedDict
 
 from langgraph.checkpoint.postgres import PostgresSaver
@@ -66,6 +67,9 @@ def _extend_history(state: AgentState, response: AgentResponse) -> list[dict[str
             "q": state.get("message", ""),
             "a": (response.text or "")[:400],
             "type": response.response_type,
+            # Which branch spoke last. An answer to a question belongs to whoever asked
+            # it, and only the turn itself knows that.
+            "route": response.route or state.get("route", ""),
         }
     )
     return previous[-HISTORY_TURNS:]
@@ -104,8 +108,60 @@ def ctx_from_dict(data: dict[str, Any]) -> Ctx:
 # --- nodes -------------------------------------------------------------------------
 
 
+# Long enough for "the March one please" or "Confocal C2, tomorrow at 9", short enough
+# that a new question does not fit in it.
+_ANSWER_WORDS = 8
+
+_QUESTION_OPENER_RE = re.compile(
+    r"^\s*(what|which|who|whose|when|where|why|how|is|are|was|were|do|does|did|can|"
+    r"could|should|would|will|has|have|am)\b",
+    re.IGNORECASE,
+)
+
+
+def _answering_our_question(state: AgentState) -> str | None:
+    """The branch that just asked something, if this message is the reply to it.
+
+    Asked "Which period should the invoice cover?" and told "March 2026", the router read
+    those two words on their own and classified them as a billing lookup — so the user
+    answered the question and got a number back instead of the document they had asked
+    for. The reply to a clarification is not a new request; it is the rest of the previous
+    one, and it belongs to the branch that is still waiting for it.
+
+    Deliberately narrow: only a clarify, only the immediately preceding turn, and only
+    when the message reads like an answer rather than a fresh request. Someone who is
+    asked which period and instead changes the subject — "actually, what is the confocal
+    warm-up policy?" — has moved on, and dragging that back to the waiting branch would
+    trade one misrouting for another.
+    """
+    history = state.get("history") or []
+    if not history:
+        return None
+    last = history[-1]
+    if last.get("type") != "clarify":
+        return None
+    branch = str(last.get("route") or "")
+    if branch not in router_mod.ROUTES:
+        return None
+
+    message = str(state.get("message") or "").strip()
+    if "?" in message or len(message.split()) > _ANSWER_WORDS:
+        return None
+    # Punctuation is not the test people think it is: "what is the cancellation policy"
+    # is five words, has no question mark, and is plainly not an answer to "which month?".
+    if _QUESTION_OPENER_RE.match(message):
+        return None
+    return branch
+
+
 def node_route(state: AgentState) -> dict[str, Any]:
     with tracer.span("node.route") as span:
+        resumed = _answering_our_question(state)
+        if resumed:
+            why = f"answering the {resumed} branch's own question"
+            log.info("route=%s (%s) for %r", resumed, why, state["message"][:80])
+            span.set(route=resumed, why=why)
+            return {"route": resumed, "route_why": why}
         # Which prompts were in force for this turn. Six weeks later a trace that says
         # "the gate refused this" is only half an answer without them.
         span.set(prompt_versions=prompts.ensure_registered())

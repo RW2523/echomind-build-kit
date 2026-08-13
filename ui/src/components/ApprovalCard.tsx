@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { decideAction } from "../api";
+import { actionRecords, decideAction, downloadDocument, type ActionResult } from "../api";
+import { Preview } from "./Preview";
 import type { PendingAction } from "../types";
 
 interface Props {
@@ -18,16 +19,35 @@ function render(value: unknown): string {
   return String(value);
 }
 
+/** The confirmation ends with the route that serves the generated file, if there is one. */
+function downloadUrlIn(text: string | undefined): string | null {
+  const match = /\/actions\/[a-zA-Z0-9-]+\/document/.exec(text ?? "");
+  return match ? match[0] : null;
+}
+
+/** …and the sentence reads better without the raw path once it is a button. */
+function stripDownloadUrl(text: string): string {
+  return text.replace(/\s*Download it here:\s*\/actions\/[a-zA-Z0-9-]+\/document\.?/, "").trim();
+}
+
 export function ApprovalCard({ action, decision, earlier, onDecided }: Props) {
   const [busy, setBusy] = useState<"approve" | "decline" | null>(null);
+  const [downloading, setDownloading] = useState(false);
+  const [result, setResult] = useState<ActionResult | null>(null);
+  const [sourceOpen, setSourceOpen] = useState(false);
+  const [loadingSource, setLoadingSource] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   async function decide(choice: "approve" | "decline") {
     setBusy(choice);
     setError(null);
     try {
-      const result = await decideAction(action.action_id, choice);
-      onDecided(result.status, result.chat?.text, action.action_id);
+      const outcome = await decideAction(action.action_id, choice);
+      // Kept so the reader can open the rows the document was built from: a statement of
+      // charges is only as trustworthy as the ledger behind it, and that ledger is one
+      // click away rather than something they have to take on faith.
+      setResult(outcome.result ?? null);
+      onDecided(outcome.status, outcome.chat?.text, action.action_id);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not record that decision.");
     } finally {
@@ -103,10 +123,100 @@ export function ApprovalCard({ action, decision, earlier, onDecided }: Props) {
       {locked && (
         <div className={`approval-outcome ${executed ? "is-executed" : "is-declined"}`}>
           <strong>{decision!.status}</strong>
-          {decision!.text ? <span> — {decision!.text}</span> : null}
+          {decision!.text ? <span> — {stripDownloadUrl(decision!.text)}</span> : null}
+          {/* A generated document is only finished when the reader can open it. The
+              confirmation carries the route that serves the file; rendering it as a link
+              is the difference between being told a document exists and having it. */}
+          {executed && downloadUrlIn(decision!.text) ? (
+            <button
+              type="button"
+              className="approval-download"
+              disabled={downloading}
+              onClick={async () => {
+                setDownloading(true);
+                setError(null);
+                try {
+                  await downloadDocument(action.action_id);
+                } catch (e) {
+                  setError(e instanceof Error ? e.message : "Could not download it.");
+                } finally {
+                  setDownloading(false);
+                }
+              }}
+            >
+              {downloading ? "Preparing…" : "Download document"}
+            </button>
+          ) : null}
+          {executed && (result === null || (result.records?.length ?? 0) > 0) ? (
+            <button
+              type="button"
+              className="source-btn"
+              disabled={loadingSource}
+              onClick={async () => {
+                if (result?.records?.length) {
+                  setSourceOpen(true);
+                  return;
+                }
+                setLoadingSource(true);
+                setError(null);
+                const fetched = await actionRecords(action.action_id);
+                setLoadingSource(false);
+                // An empty result is an answer: the button stops offering evidence that
+                // is not there rather than opening an empty table. Saying so matters —
+                // a button that does nothing when clicked reads as broken.
+                setResult(fetched ?? { records: [] });
+                if (fetched?.records?.length) setSourceOpen(true);
+                else setError("The records behind this document are no longer available.");
+              }}
+            >
+              Source
+              {result?.record_count ? (
+                <span className="source-btn-count">
+                  {result.record_count} record{result.record_count === 1 ? "" : "s"}
+                </span>
+              ) : null}
+            </button>
+          ) : null}
+          {error && <div className="approval-error">{error}</div>}
           <div className="approval-id">action {decision!.actionId} · recorded in the audit log</div>
         </div>
       )}
+
+      {sourceOpen && result?.records?.length ? (
+        <Preview
+          title="Records used"
+          subtitle={`${result.record_count} record${
+            result.record_count === 1 ? "" : "s"
+          } from the platform went into this document`}
+          onClose={() => setSourceOpen(false)}
+        >
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  {Object.keys(result.records[0]).map((column) => (
+                    <th key={column}>{column.replace(/_/g, " ")}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {result.records.map((row, i) => (
+                  <tr key={i}>
+                    {Object.keys(result.records![0]).map((column) => (
+                      <td key={column}>{String(row[column] ?? "")}</td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {result.records_truncated ? (
+            <div className="sql">
+              Showing the first {result.records.length} of {result.record_count}.
+            </div>
+          ) : null}
+        </Preview>
+      ) : null}
     </section>
   );
 }

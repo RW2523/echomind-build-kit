@@ -5,8 +5,10 @@ from __future__ import annotations
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import FileResponse
 
 from server.auth import Ctx, require_ctx
+from server.config import REPO_ROOT
 from server.mcp import actions as actions_mod
 from server.mcp.errors import ToolError
 
@@ -35,6 +37,57 @@ def get_action(action_id: str, ctx: Ctx = Depends(require_ctx)) -> dict:
     if action is None or not (ctx.is_admin or action["user_id"] == ctx.user_id):
         raise _http(ToolError("not_found", "No such action.", ""))
     return {"action": action, "audit": actions_mod.audit_trail(ctx, action_id=action_id)}
+
+
+_MEDIA_TYPES = {
+    ".pdf": "application/pdf",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".md": "text/markdown; charset=utf-8",
+}
+
+
+@router.get("/{action_id}/document")
+def download_document(action_id: str, ctx: Ctx = Depends(require_ctx)) -> FileResponse:
+    """Hand back the file an approved generate_document actually produced.
+
+    Until this existed the platform wrote a document to disk and told the user a
+    filesystem path their browser could not reach — a generated document nobody can
+    retrieve is half a feature, and every one produced so far had to be fetched off the
+    box by hand.
+
+    Entitlement is the same rule as everywhere else and for the same reason: a caller who
+    may not see the action cannot learn whether it exists, so the wrong owner and a
+    made-up id give byte-identical answers. The path is taken from the action's own
+    recorded result and re-resolved under the outputs directory, so a stored value that
+    somehow pointed elsewhere cannot serve an arbitrary file.
+    """
+    action = actions_mod.get_action(action_id)
+    if action is None or not (ctx.is_admin or action["user_id"] == ctx.user_id):
+        raise _http(ToolError("not_found", "No such action.", ""))
+
+    result = action.get("result") or {}
+    stored = result.get("path")
+    produced_a_file = (action.get("tool") == "generate_document"
+                       and action.get("status") == "executed" and stored)
+    if not produced_a_file:
+        raise _http(ToolError(
+            "not_found", "That action did not produce a document.",
+            "Only an approved document generation has a file to download.",
+        ))
+
+    outputs = (REPO_ROOT / "files" / "outputs").resolve()
+    path = (REPO_ROOT / stored).resolve()
+    if not path.is_file() or outputs not in path.parents:
+        raise _http(ToolError(
+            "not_found", "The generated file is no longer on disk.",
+            "Ask for the document again and it will be regenerated.",
+        ))
+
+    return FileResponse(
+        path,
+        media_type=_MEDIA_TYPES.get(path.suffix.lower(), "application/octet-stream"),
+        filename=path.name,
+    )
 
 
 def _resume_conversation(action_id: str) -> dict | None:

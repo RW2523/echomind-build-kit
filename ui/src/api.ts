@@ -116,10 +116,21 @@ export async function getThread(threadId: string): Promise<{
   return json(r);
 }
 
+/** What executing a write tool produced. Documents carry the rows they were built from. */
+export type ActionResult = {
+  created?: string;
+  format?: string;
+  filename?: string;
+  records?: Record<string, unknown>[];
+  record_count?: number;
+  records_truncated?: boolean;
+  [key: string]: unknown;
+};
+
 export async function decideAction(
   actionId: string,
   decision: "approve" | "decline",
-): Promise<{ status: string; chat?: AgentResponse }> {
+): Promise<{ status: string; chat?: AgentResponse; result?: ActionResult }> {
   const r = await fetch(`/actions/${actionId}/${decision}`, {
     method: "POST",
     headers: headers(),
@@ -186,4 +197,47 @@ export async function adminEvals(): Promise<{ latest: Record<string, unknown> | 
   }>(r);
   if (!body.latest) return { latest: null };
   return { latest: { ...(body.latest.metrics ?? {}), ran_at: body.latest.ran_at } };
+}
+
+
+/** Fetch a generated document and save it.
+ *
+ * It used to be a plain <a href>, which cannot carry the Authorization header this API
+ * requires — so every download was rejected and the button looked broken. The bytes have
+ * to come through fetch, become a blob, and be handed to a click we make ourselves.
+ */
+/** The rows behind an already-executed action.
+ *
+ * The approval response carries them, but only for the tab that clicked approve. After a
+ * reload the card is rebuilt from the thread and the evidence would be gone — which is
+ * the wrong direction for a record that exists precisely to be checked later.
+ */
+export async function actionRecords(actionId: string): Promise<ActionResult | null> {
+  const r = await fetch(`/actions/${actionId}`, { headers: headers() });
+  if (!r.ok) return null;
+  const body = await r.json();
+  return (body?.action?.result ?? null) as ActionResult | null;
+}
+
+export async function downloadDocument(actionId: string): Promise<void> {
+  const response = await fetch(`/actions/${actionId}/document`, { headers: headers() });
+  if (!response.ok) {
+    throw new Error(
+      response.status === 404
+        ? "That document is no longer available."
+        : "Could not download the document.",
+    );
+  }
+  const disposition = response.headers.get("content-disposition") ?? "";
+  const named = /filename="?([^";]+)"?/.exec(disposition);
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = named ? named[1] : `${actionId}.pdf`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  // Revoked on the next tick: Safari has not finished reading the blob synchronously.
+  setTimeout(() => URL.revokeObjectURL(url), 0);
 }

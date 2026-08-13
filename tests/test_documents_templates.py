@@ -475,7 +475,9 @@ def test_booking_confirmation_renders_from_a_real_booking():
         bid = s.execute(
             text("SELECT id FROM infinity.bookings WHERE user_id='u-alice' LIMIT 1")
         ).scalar_one()
-    title, body = actions._render_booking_confirmation("u-alice", {"booking_id": bid})
+    title, body, records = actions._render_booking_confirmation(
+        "u-alice", {"booking_id": bid}
+    )
     assert bid in title and bid in body
     assert "Facility:" in body and "Where:" in body
 
@@ -501,7 +503,7 @@ def test_a_booking_that_is_not_yours_is_not_found():
 @pytest.mark.tools
 def test_usage_summary_renders_through_the_scoped_tool():
     from server.mcp import actions
-    title, body = actions._render_usage_summary("u-alice", {"month": "2026-03"})
+    title, body, records = actions._render_usage_summary("u-alice", {"month": "2026-03"})
     assert "u-alice" in title
     assert "Scheduled h" in body and "Tracked h" in body
 
@@ -551,3 +553,58 @@ def test_a_document_that_cannot_render_is_refused_before_approval(template, para
     with pytest.raises(ToolError) as exc:
         T.generate_document(ctx, template=template, params=params)
     assert exc.value.code == "invalid_params"
+
+
+# --- the format the user asked for, and a file they can actually fetch -------------
+
+
+@pytest.mark.parametrize(
+    ("message", "expected"),
+    [
+        ("convert into a pdf and give me", "pdf"),
+        ("give me a PDF of it", "pdf"),
+        ("as a word document", "docx"),
+        ("make it a docx", "docx"),
+        ("export it as markdown", "md"),
+        ("generate the invoice statement", None),   # no format named -> the default
+    ],
+)
+def test_the_format_the_user_named_is_the_format_they_get(message, expected):
+    """A user asked to "convert into a pdf" and approved a card that said "as MD",
+    because the card was accurate about what it was about to do. The word was in their
+    message and the tool has always taken it; only the planner had to pass it along."""
+    from server.agent.action import stated_format
+    assert stated_format(message) == expected
+
+
+def test_pdf_is_the_default_when_nobody_says_otherwise():
+    """A document is for handing to someone. Markdown was the default because it was
+    easiest to assert on in a test, which is not a reason."""
+    from server.mcp import documents
+    from server.mcp import tools as T
+    assert T.DEFAULT_DOCUMENT_FORMAT == "pdf" == documents.DEFAULT_FORMAT
+
+
+def test_convert_it_resolves_to_what_the_conversation_just_showed():
+    """"Convert it to a pdf" one turn after an invoice answered "What document would you
+    like to convert?" — the user had to name again what was already on screen."""
+    from server.agent.action import carry_forward_document_subject
+    history = ("assistant (rows_answer): Your March invoice (inv-ACC-A1-2026-03) includes "
+               "7 line items totaling $2689.00.")
+    asked = {"tool": None, "missing": ["template"],
+             "ask": "What document would you like to convert into a PDF?"}
+    out = carry_forward_document_subject(asked, "convert into a pdf and give me", history)
+    assert out["tool"] == "generate_document"
+    assert out["arguments"]["template"] == "invoice_statement"
+    assert out["arguments"]["params"] == {"account_code": "ACC-A1", "period": "2026-03"}
+    assert out["arguments"]["format"] == "pdf"
+
+
+def test_a_conversation_that_names_no_subject_still_asks():
+    """Guessing a document is worse than asking for one."""
+    from server.agent.action import carry_forward_document_subject
+    asked = {"tool": None, "ask": "What document would you like?"}
+    assert carry_forward_document_subject(asked, "convert it to a pdf", "")["tool"] is None
+    # and an invoice named without enough detail to render is left as the ask
+    assert carry_forward_document_subject(
+        asked, "convert the invoice to a pdf", "assistant: your invoice")["tool"] is None

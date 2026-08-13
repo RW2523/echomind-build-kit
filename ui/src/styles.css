@@ -1524,3 +1524,22 @@ tr:last-child td { border-bottom: none; }
   .reply-text.is-streaming::after { opacity: 1; }
   .turn-assistant.is-streaming .turn-mark { border-color: var(--accent-line); }
 }
+
+/* The download the approval produced. Reads as an action, not as prose, because that is
+   what it is — the one thing the reader wants once a document exists. */
+.approval-download {
+  display: inline-flex; align-items: center; gap: 6px; margin-top: 10px;
+  padding: 7px 14px; border-radius: 8px; text-decoration: none;
+  font-size: 13px; font-weight: 600;
+  color: var(--accent-ink, #fff); background: var(--accent);
+  border: 1px solid transparent;
+}
+/* It was an anchor until the anchor turned out not to be able to authenticate. As a
+   button it needs the type's own defaults put back. */
+.approval-download { font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; }
+.approval-download:disabled { opacity: 0.62; cursor: default; filter: none; }
+.approval-download:hover:not(:disabled) { filter: brightness(1.08); }
+/* Download and Source sit together under the outcome line, and wrap on a narrow card. */
+.approval-outcome .approval-download,
+.approval-outcome .source-btn { margin-top: 10px; margin-right: 8px; vertical-align: middle; }
+.approval-download:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

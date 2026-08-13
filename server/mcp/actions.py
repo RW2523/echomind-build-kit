@@ -13,7 +13,9 @@ from __future__ import annotations
 import json
 import logging
 import uuid
-from datetime import UTC, datetime
+from uuid import UUID
+from datetime import UTC, date, datetime, time
+from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import text
@@ -379,13 +381,27 @@ def _exec_document(action: dict, payload: dict) -> dict[str, Any]:
         "booking_confirmation": _render_booking_confirmation,
         "usage_summary": _render_usage_summary,
     }[template]
-    title, body = renderer(user_id, params)
+    rendered = renderer(user_id, params)
+    # Renderers that query return the rows they used as a third element. A document is a
+    # claim about records; being able to see those records is what separates it from a
+    # nicely formatted guess, so they travel with the result rather than being re-derived.
+    title, body = rendered[0], rendered[1]
+    # A renderer may hand back its own PDF layout as a fourth element. An invoice that
+    # arrives looking like a memo reads as a draft, and the layout is part of whether the
+    # figures are believed — so the one document that is a form gets composed as one.
+    layout = rendered[3] if len(rendered) > 3 else None
+    records = [_plain(r) for r in (rendered[2] if len(rendered) > 2 else [])]
+    record_count = len(records)
+    # The action row is an audit record, not a data warehouse. A directory of every core
+    # on campus would bloat every row that carries it, so the evidence list is capped and
+    # says so — the count above stays truthful about how many rows the document used.
+    records = records[:_MAX_RECORDS]
 
     # The templates produce Markdown and always did; what changed is that the artefact a
     # facility admin actually attaches to an email is a .docx or a .pdf, so the same body
     # is rendered into whichever was asked for. Markdown stays the default, because the
     # demo and the tests read it.
-    fmt = str(payload.get("format") or "md").lower()
+    fmt = str(payload.get("format") or documents.DEFAULT_FORMAT).lower()
     if fmt not in documents.FORMATS:
         raise invalid_params(
             f"Unsupported document format {fmt!r}.",
@@ -394,16 +410,26 @@ def _exec_document(action: dict, payload: dict) -> dict[str, Any]:
 
     stamp = _now().strftime("%Y%m%dT%H%M%S")
     path = OUTPUTS_DIR / f"{template}-{stamp}-{action['id']}{documents.EXTENSION[fmt]}"
-    path.write_bytes(documents.render(title, body, fmt))
+    path.write_bytes(
+        layout() if (fmt == "pdf" and layout) else documents.render(title, body, fmt)
+    )
 
     return {
         "created": "document",
+        "records": records,
+        "record_count": record_count,
+        "records_truncated": record_count > len(records),
         "template": template,
         "title": title,
         "format": fmt,
         "path": str(path.relative_to(REPO_ROOT)),
         "absolute_path": str(path),
         "bytes": path.stat().st_size,
+        # The route that serves this file. Carried on the result so the confirmation the
+        # user reads can be a link they can click, rather than a path on a machine they
+        # have no account on.
+        "download_url": f"/actions/{action['id']}/document",
+        "filename": path.name,
     }
 
 
@@ -530,7 +556,31 @@ def _render_monthly_summary(user_id: str, params: dict) -> tuple[str, str]:
         lines.append("| _no maintenance events_ | | | |")
     return f"Monthly summary — {period}", "\n".join(lines) + "\n"
 
-def _render_invoice_statement(user_id: str, params: dict) -> tuple[str, str]:
+_MAX_RECORDS = 50
+
+
+def _plain(value: Any) -> Any:
+    """Money, dates and ids as JSON, without losing what they meant.
+
+    The billing views return Decimal and the booking rows return timestamps; both go into
+    the action's result column, which is JSON. Rounding money to float here would be a
+    quiet lie in a document about money, so Decimal becomes a string and keeps every digit
+    it was given.
+    """
+    if isinstance(value, dict):
+        return {str(k): _plain(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_plain(v) for v in value]
+    if isinstance(value, Decimal):
+        return str(value)
+    if isinstance(value, (datetime, date, time)):
+        return value.isoformat()
+    if isinstance(value, UUID):
+        return str(value)
+    return value
+
+
+def _render_invoice_statement(user_id: str, params: dict) -> tuple:
     """A statement for one account and period, from the ledger the invoice was built from.
 
     The builders in server/mcp/documents.py deliberately do not query — they compose from
@@ -549,14 +599,23 @@ def _render_invoice_statement(user_id: str, params: dict) -> tuple[str, str]:
 
     ctx = _ctx_for(user_id)
     summary = tools_mod.get_billing_summary(ctx, account_code=account_code, period=period)
-    body = documents.build_invoice_statement(
-        account_code=account_code, period=period, lines=summary.get("lines") or [],
+    lines = summary.get("lines") or []
+    fields = dict(
+        account_code=account_code, period=period, lines=lines,
         total=summary.get("total"), lab=summary.get("lab_id"),
     )
-    return f"Invoice statement — {account_code} {period}", body
+    body = documents.build_invoice_statement(**fields)
+    return (
+        f"Invoice statement — {account_code} {period}",
+        body,
+        lines,
+        lambda: documents.invoice_pdf(
+            **fields, prepared=_now().strftime("%d %B %Y")
+        ),
+    )
 
 
-def _render_facility_directory(user_id: str, params: dict) -> tuple[str, str]:
+def _render_facility_directory(user_id: str, params: dict) -> tuple[str, str, list]:
     """Where every core is and what it holds — the printable form of find_facilities."""
     from server.mcp import tools as tools_mod  # deferred: tools imports this module
 
@@ -568,11 +627,12 @@ def _render_facility_directory(user_id: str, params: dict) -> tuple[str, str]:
         near_latitude=params.get("near_latitude"),
         near_longitude=params.get("near_longitude"),
     )
-    body = documents.build_facility_directory(found.get("facilities") or [])
-    return "Facility directory", body
+    facilities = found.get("facilities") or []
+    body = documents.build_facility_directory(facilities)
+    return "Facility directory", body, facilities
 
 
-def _render_capability_report(user_id: str, params: dict) -> tuple[str, str]:
+def _render_capability_report(user_id: str, params: dict) -> tuple[str, str, list]:
     """What can do a stated job, where it is, and why each one qualified."""
     goal = params.get("goal")
     if not goal:
@@ -586,8 +646,9 @@ def _render_capability_report(user_id: str, params: dict) -> tuple[str, str]:
     found = tools_mod.recommend_instrument(
         ctx, goal=goal, sample_type=params.get("sample_type")
     )
-    body = documents.build_capability_report(goal, found.get("matches") or [])
-    return f"Capability report — {goal}", body
+    matches = found.get("matches") or []
+    body = documents.build_capability_report(goal, matches)
+    return f"Capability report — {goal}", body, matches
 
 
 def _ctx_for(user_id: str) -> Ctx:
@@ -611,7 +672,7 @@ def _ctx_for(user_id: str) -> Ctx:
     )
 
 
-def _render_booking_confirmation(user_id: str, params: dict) -> tuple[str, str]:
+def _render_booking_confirmation(user_id: str, params: dict) -> tuple[str, str, list]:
     """The confirmation for one booking, including where the instrument physically is.
 
     Scoped by the caller in SQL rather than fetched and then checked: a booking that is not
@@ -638,11 +699,12 @@ def _render_booking_confirmation(user_id: str, params: dict) -> tuple[str, str]:
         ).mappings().first()
     if row is None:
         raise not_found("booking")
-    body = documents.build_booking_confirmation(dict(row))
-    return f"Booking confirmation — {booking_id}", body
+    record = dict(row)
+    body = documents.build_booking_confirmation(record)
+    return f"Booking confirmation — {booking_id}", body, [record]
 
 
-def _render_usage_summary(user_id: str, params: dict) -> tuple[str, str]:
+def _render_usage_summary(user_id: str, params: dict) -> tuple[str, str, list]:
     """Scheduled versus tracked hours, through the tool that already enforces the scope."""
     from server.mcp import tools as tools_mod  # deferred: tools imports this module
 
@@ -652,7 +714,8 @@ def _render_usage_summary(user_id: str, params: dict) -> tuple[str, str]:
         ctx, scope=scope, id=params.get("id"), month=params.get("month")
     )
     subject = found.get("id") or user_id
+    rows = found.get("rows") or []
     body = documents.build_usage_summary(
-        subject, params.get("month"), found.get("rows") or [], found.get("totals") or {}
+        subject, params.get("month"), rows, found.get("totals") or {}
     )
-    return f"Usage summary — {subject}", body
+    return f"Usage summary — {subject}", body, rows
