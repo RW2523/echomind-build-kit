@@ -977,6 +977,34 @@ def generate_document(ctx: Ctx, template: str,
             raise forbidden()
     elif template == "monthly_summary":
         _check_month(params.get("period"))
+    elif template == "invoice_statement":
+        # Validated here rather than at execution, because everything below this line
+        # happens only after a human has read the card and clicked Approve. An approval
+        # that fails afterwards spends the one action we asked them to take.
+        if not params.get("account_code"):
+            raise invalid_params(
+                "An invoice statement needs an account code.",
+                "For example ACC-A1.",
+            )
+        _check_month(params.get("period"))
+        if not params.get("period"):
+            raise invalid_params(
+                "An invoice statement needs a period.", "For example 2026-03."
+            )
+    elif template == "usage_summary":
+        _check_month(params.get("month"))
+    elif template == "capability_report":
+        if not str(params.get("goal") or "").strip():
+            raise invalid_params(
+                "A capability report needs to know what you want to do.",
+                'For example "cryo-EM of a protein complex".',
+            )
+    elif template == "booking_confirmation":
+        if not str(params.get("booking_id") or "").strip():
+            raise invalid_params(
+                "A booking confirmation needs to know which booking.",
+                "Give the booking id, e.g. bk-0133.",
+            )
 
     payload = {"template": template, "params": params, "format": fmt}
     # The approval card is the last thing a human reads before this happens, so it is
@@ -1027,15 +1055,26 @@ def _normalise(value: str | None) -> str:
 
 
 def _singular(word: str) -> str:
-    """Fold a trailing plural 's'.
+    """Fold a word to a stem both sides can agree on.
 
     'live cells' (what a user types) and 'live-cell imaging' (what the catalogue records)
     are the same capability, and matching them as different strings loses the instrument
     that does exactly what was asked. Both sides pass through here, so this only has to be
     consistent — not linguistically correct.
+
+    The verb form matters as much as the plural: a user says "I want to IMAGE live cells"
+    and every technique in the catalogue is recorded as "...IMAGING". Without folding the
+    -ing the best three instruments in the facility scored zero for the question they exist
+    to answer.
     """
-    if len(word) > 3 and word.endswith("s") and not word.endswith("ss"):
+    if len(word) > 5 and word.endswith("ing"):
+        stem = word[:-3]
+        # "imaging" -> "imag", and "image" -> "imag" below, so the two meet.
+        return stem[:-1] if stem.endswith("e") else stem
+    if len(word) > 4 and word.endswith("e"):
         return word[:-1]
+    if len(word) > 3 and word.endswith("s") and not word.endswith("ss"):
+        return _singular(word[:-1])
     return word
 
 

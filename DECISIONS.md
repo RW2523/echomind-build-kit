@@ -595,3 +595,52 @@ diminishing returns.
 - 2026-08-12 | A parameter the caller did not give is not a parameter | The approval card a
   human reads printed "Generate monthly summary as MD (account code None)". Empty values are
   dropped from the preview rather than rendered as Python's None.
+
+## What driving the browser found that 596 tests did not
+
+- 2026-08-13 | A fabricated premise wore the verified badge | "What is the neutron-star
+  collimator booking policy?" returned a VERIFIED answer opening "The neutron-star
+  collimator booking policy is governed by the same rules as other instruments", cited to
+  the real booking rules. Every sentence after the first was true, so the faithfulness
+  judge passed it — the fabrication was in the PREMISE the question smuggled in and the
+  answer affirmed, and no check looked there. Reproducible 2/2, and by the product's own
+  standard the worst defect it can have. Now: two adjacent words that appear in no
+  retrieved passage, repeated by the answer, are an unsupported premise and the turn
+  becomes an honest redirect. Deliberately narrow — one unusual word beside a known one
+  ("quantitative imaging") is a scientist's vocabulary; two unknown words in a row is a
+  thing that does not exist.
+- 2026-08-13 | The two halves of the product disagreed about what day it is | The data
+  planner was told "today is 2026-03-31" (the age of the seeded records) while the action
+  planner resolved relative dates from the real clock. So "Is Confocal C2 free tomorrow?"
+  checked 2026-04-01, answered "free tomorrow", and the booking that followed was for
+  2026-08-14 — a date whose availability had never been checked. One clock now feeds both,
+  and the planner is told the records are older than today rather than told the wrong date.
+- 2026-08-13 | Rows that are alternatives are never summed | "I want to image live cells"
+  answered "the total hourly rate is $143.00, and the total score is 30" over three
+  instruments the user was choosing between. Arithmetically correct, meaningless, and it
+  passed every check because a column total is a verified figure — what was wrong was
+  offering it at all. Rates, scores, distances and averages are per-row facts now and are
+  never added across rows; billing amounts, which are components of a real total, still are.
+- 2026-08-13 | The verifier was worth more than the QA agent | The engineer reported
+  "all response types ok" and "only ui/src touched"; both were false. It called the
+  nonsense-question case a clean scope refusal — the verifier reproduced the fabricated
+  answer 2/2 on its first attempt — and called the invented aggregate intermittent after it
+  fired on the verifier's first try. Neither claim was dishonest; both were the ordinary
+  optimism of someone checking their own work, which is exactly what an adversarial second
+  pass is for.
+- 2026-08-13 | A QA pass must leave the demo as it found it | The browser run approved a
+  real booking and abandoned fourteen pending actions, so its own amendment scenario stopped
+  reproducing on that date. Cleaned back to the seed. Future passes drive amendments to
+  Decline rather than Approve.
+- 2026-08-13 | The verb a user types and the noun the catalogue records are the same word |
+  "I want to IMAGE live cells" scored zero against a catalogue where every technique is
+  recorded as "...IMAGING", and the planner reliably splits that phrase into goal="image"
+  plus sample_type="live cells", so the goal arrives as the bare verb. Three of the best
+  instruments in the facility scored nothing for the question they exist to answer. The
+  stemmer now folds -ing and a trailing -e, so image/imaging and sequence/sequencing meet.
+  Fixed in the tool, not the prompt: the planner's split is reasonable, and a scoring
+  function that only works when the phrasing is lucky is the bug.
+- 2026-08-13 | An id column beside its own name column is dropped | A recommendation row
+  carries instrument_id and instrument; both labels humanise to the same word, so the
+  evidence table printed "instrument | instrument" — two columns, one heading, the raw key
+  next to the readable one it duplicates. The name is what a reader can act on.

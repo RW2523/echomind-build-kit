@@ -5,6 +5,8 @@ import type { PendingAction } from "../types";
 interface Props {
   action: PendingAction;
   decision?: { status: string; text?: string; actionId: string };
+  /** A later proposal in this conversation is still waiting for a decision too. */
+  earlier?: boolean;
   onDecided: (status: string, text: string | undefined, actionId: string) => void;
 }
 
@@ -16,7 +18,7 @@ function render(value: unknown): string {
   return String(value);
 }
 
-export function ApprovalCard({ action, decision, onDecided }: Props) {
+export function ApprovalCard({ action, decision, earlier, onDecided }: Props) {
   const [busy, setBusy] = useState<"approve" | "decline" | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -37,15 +39,34 @@ export function ApprovalCard({ action, decision, onDecided }: Props) {
   const locked = Boolean(decision);
   const executed = decision?.status === "executed";
 
+  /* An amended proposal ("actually make it 3 hours") arrives as a new action; the one it
+     amends stays pending, and approving it writes the older booking. Nothing here can
+     retire it — that decision belongs to the server, which still holds it as pending —
+     so the card says plainly which proposal it is. It keeps both buttons: an earlier
+     proposal is still the user's to approve or, more usefully, to decline. */
+  const superseded = Boolean(earlier) && !locked;
+
   return (
-    <section className="approval" aria-label="Pending action">
+    <section
+      className={`approval${superseded ? " approval--earlier" : ""}`}
+      aria-label={superseded ? "Earlier pending action" : "Pending action"}
+    >
       <header className="approval-head">
-        <span className="approval-flag">Awaiting your approval</span>
+        <span className="approval-flag">
+          {superseded ? "Earlier proposal · still live" : "Awaiting your approval"}
+        </span>
         <span className="approval-kind">{action.kind ?? action.tool}</span>
         <span className="approval-id">{action.action_id}</span>
       </header>
 
       <p className="approval-preview">{action.payload_preview}</p>
+
+      {superseded && (
+        <p className="approval-earlier-note">
+          There is a newer proposal below, also still waiting. Approving this one does
+          exactly what it says here — check that is what you meant.
+        </p>
+      )}
 
       {entries.length > 0 && (
         <dl className="approval-kv">

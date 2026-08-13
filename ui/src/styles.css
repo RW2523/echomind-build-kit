@@ -735,6 +735,15 @@ button:disabled { cursor: not-allowed; }
 }
 .reply-text + .reply-text { margin-top: var(--s3); }
 
+/* A value the sentence turns on, and an identifier quoted from a record. Weight and
+   face only — no tint, so neither ever reads as a control the way a chip does. */
+.reply-text strong { font-weight: 650; }
+.reply-text code {
+  font-family: var(--mono);
+  font-size: 0.94em;
+  overflow-wrap: anywhere;
+}
+
 /* The three replies that are not ordinary answers get an inset block: a hairline, a
    left rule and a quiet tint. Enough to say "this one is different in kind", not
    enough to say "something went wrong". */
@@ -838,7 +847,10 @@ button:disabled { cursor: not-allowed; }
   border-radius: 4px;
   cursor: pointer;
   vertical-align: 1px;
-  margin: 0 1px;
+  /* Only on the left. The sentence already supplies the space before the marker, and a
+     right margin pushes the full stop that follows it off the end of the clause —
+     "…in the corpus 1 ." */
+  margin: 0 0 0 1px;
 }
 .marker:hover { background: var(--accent); color: var(--accent-ink); }
 
@@ -1180,6 +1192,27 @@ tr:last-child td { border-bottom: none; }
   color: var(--warn);
 }
 .approval-kind { font-size: var(--t-sm); font-weight: 600; color: var(--ink); }
+
+/* An earlier proposal the reader has since amended. It is still live, so it keeps its
+   controls — but it stops wearing the amber of the thing they are being asked to decide
+   now, and it says why. */
+.approval--earlier {
+  border-color: var(--line);
+  border-left-color: var(--line-strong);
+  box-shadow: none;
+}
+.approval--earlier .approval-head {
+  background: var(--surface-2);
+  border-bottom-color: var(--line);
+}
+.approval--earlier .approval-flag { color: var(--ink-faint); }
+.approval-earlier-note {
+  margin: 0;
+  padding: 0 var(--s4) var(--s2);
+  font-size: var(--t-xs);
+  line-height: 1.5;
+  color: var(--ink-soft);
+}
 .approval-id {
   font-family: var(--mono);
   font-size: var(--t-xs);

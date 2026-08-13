@@ -202,6 +202,10 @@ REASON_TEXT = {
     "no_coverage": (
         "I found related material, but it does not actually state the answer."
     ),
+    "unsupported_premise": (
+        "Nothing I can see records the thing you named, so I cannot tell you about it — "
+        "and I would rather say that than describe something that may not exist."
+    ),
     "sources_disagree": (
         "The sources I can see disagree on this point, so I will not pick one for you."
     ),

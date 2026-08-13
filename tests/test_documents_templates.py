@@ -522,3 +522,32 @@ def test_the_facility_catalogue_exposes_location_and_capability():
     titan = next(i for i in out["instruments"] if i["name"] == "Cryo-EM Titan")
     assert "cryo-EM" in titan["techniques"]
     assert titan["modality"] == "electron microscopy" and titan["room"]
+
+
+@pytest.mark.tools
+@pytest.mark.parametrize(
+    ("template", "params"),
+    [
+        ("usage_summary", {"month": "March"}),          # not YYYY-MM
+        ("invoice_statement", {"account_code": "ACC-A1"}),   # no period
+        ("invoice_statement", {"period": "2026-03"}),        # no account code
+        ("capability_report", {}),                       # no goal
+        ("booking_confirmation", {}),                    # no booking id
+    ],
+)
+def test_a_document_that_cannot_render_is_refused_before_approval(template, params):
+    """Everything after the proposal happens only once a human has clicked Approve.
+
+    The planner offered "usage summary (month March)" and the card looked perfectly
+    reasonable; the month was rejected as not-YYYY-MM at execution, i.e. after the one
+    action we asked the reader to take. Parameters are checked when the action is
+    proposed so a card a human approves is a card that can actually be rendered.
+    """
+    from server.auth import Ctx
+    from server.mcp import tools as T
+    from server.mcp.errors import ToolError
+    ctx = Ctx(user_id="u-alice", name="Alice Nguyen", role="user", lab_ids=("lab-a",),
+              facility_ids=(), raw={})
+    with pytest.raises(ToolError) as exc:
+        T.generate_document(ctx, template=template, params=params)
+    assert exc.value.code == "invalid_params"

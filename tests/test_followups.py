@@ -630,11 +630,15 @@ def test_the_pending_booking_question_is_answered_from_state():
 
 
 def test_a_control_character_message_is_cleaned_not_crashed():
+    from pydantic import ValidationError
+
     from server.api.chat import ChatRequest
     assert ChatRequest(message="book" + chr(0) + " confocal").message == "book confocal"
-    with pytest.raises(Exception):  # nothing legible left -> validation error, not a 500
+    # Named rather than blind: a 422 from validation is the whole point, and catching any
+    # Exception would pass just as happily on the 500 this test exists to rule out.
+    with pytest.raises(ValidationError):
         ChatRequest(message=chr(0) + chr(0))
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         ChatRequest(message="hi", thread_id="thr-" + chr(0))
 
 
@@ -692,7 +696,7 @@ def test_a_generic_instrument_word_asks_which(message, asks):
     if asks:
         assert out["tool"] is None and "instrument" in out["ask"].lower()
     else:
-        assert out.get("tool") == "request_booking" or out["tool"] is None and "which" in out.get("ask", "").lower()
+        assert out.get("tool") == "request_booking" or (out["tool"] is None and "which" in out.get("ask", "").lower())
 
 
 def test_the_callers_own_id_column_is_dropped_before_prose():
@@ -764,3 +768,74 @@ def test_an_average_question_reports_the_mean_not_the_sum():
     assert fixed is not None and "1102.90" in fixed and "5514.50" in fixed
     # ...but a correct mean is left alone
     assert _correct_sum_reported_as_average("The average is $1102.90.", q, rows) is None
+
+
+# --- found by driving the browser, 2026-08-13 --------------------------------------
+
+
+def test_a_premise_the_corpus_never_heard_of_is_not_affirmed():
+    """"What is the neutron-star collimator booking policy?" came back as a VERIFIED
+    answer opening "The neutron-star collimator booking policy is governed by the same
+    rules as other instruments" — every later sentence true and cited, the fabrication
+    smuggled in as the question's premise and affirmed."""
+    from server.agent.knowledge import unsupported_premise
+
+    class Chunk:
+        def __init__(self, text): self.text = text
+    chunks = [Chunk(
+        "Cancelling more than 24 hours before the start is free; within 24 hours you are "
+        "charged 50% of the booked time. Confocal lasers warm up for 30 minutes before "
+        "quantitative imaging."
+    )]
+    flagged = unsupported_premise(
+        "What is the neutron-star collimator booking policy?",
+        "The neutron-star collimator booking policy is governed by the same rules.",
+        chunks)
+    # The run extends over every adjacent word the passage does not contain, so the exact
+    # span depends on the passage; what matters is that the invented thing is named.
+    assert flagged is not None and "neutron-star collimator" in flagged
+    # a real question whose words are all in the passage is untouched
+    assert unsupported_premise(
+        "What am I charged if I cancel a booking 12 hours before it starts?",
+        "You are charged 50% of the booked time.", chunks) is None
+    # one unusual word beside a known one is a scientist's vocabulary, not a fabrication
+    assert unsupported_premise(
+        "How long must the confocal lasers warm up before quantitative imaging?",
+        "They warm up for 30 minutes before quantitative imaging.", chunks) is None
+    # named but never repeated in the answer -> the answer did not affirm it
+    assert unsupported_premise(
+        "Does the neutron-star collimator exist?",
+        "I have no record of that instrument.", chunks) is None
+
+
+def test_columns_that_are_alternatives_are_never_summed():
+    """Three instruments a scientist is choosing between are not components of a total.
+    The reply said "the total hourly rate is $143.00" against rates 42/46/55."""
+    from decimal import Decimal
+
+    from server.agent.data import column_totals
+    alternatives = [
+        {"instrument": "Confocal C2", "hourly_rate": 42.0, "score": 10},
+        {"instrument": "Confocal C3", "hourly_rate": 46.0, "score": 10},
+    ]
+    assert column_totals(alternatives) == {}
+    components = [{"instrument": "A", "amount": Decimal("451.00")},
+                  {"instrument": "B", "amount": Decimal("412.00")}]
+    assert column_totals(components) == {"amount": Decimal("863.00")}
+
+
+def test_both_planners_resolve_relative_dates_from_the_same_clock():
+    """The read path pinned "today" to 2026-03-31 while the write path used the real
+    clock, so a user was told a slot was free "tomorrow" and then handed a booking for a
+    different date whose availability had never been checked."""
+    from datetime import UTC, datetime
+
+    from server.agent.data import PLANNER_SYSTEM
+    assert "{today}" in PLANNER_SYSTEM, "the data planner must be told the real date"
+    assert "2026-03-31" not in PLANNER_SYSTEM.split("{today}")[0][-400:], \
+        "no pinned reference date may remain beside it"
+    # and the action planner already resolves against the same clock
+    from server.agent.action import relative_date_target
+    today = datetime.now(UTC).date()
+    kind, value = relative_date_target("book it tomorrow", today)
+    assert kind == "day" and value.toordinal() == today.toordinal() + 1

@@ -49,7 +49,10 @@ interface Suggestion {
  * choose an instrument, see your own money, read the policy behind a charge.
  */
 const BASE_SUGGESTIONS: Suggestion[] = [
-  { text: "Where is the nearest core that can do cryo-EM?", note: "Facilities · with distance" },
+  // No opener carries a location, so no answer to one can carry a distance. The note
+  // said "with distance" and the card that came back never had one — a promise the
+  // product broke in the first thing a new reader clicks.
+  { text: "Where is the nearest core that can do cryo-EM?", note: "Facilities · where and what" },
   { text: "I want to image live cells — what should I use?", note: "Instruments · by technique" },
   { text: "What is on my March invoice?", note: "Invoice · your charges only" },
   {
@@ -191,6 +194,14 @@ export default function App() {
   const stick = useRef(true);
   const turnCount = useRef(0);
 
+  /* Where the rail overlays the conversation, anything chosen inside it has to close it:
+     the drawer sits on top of the transcript and the composer, so a phone that switches
+     identity and leaves the drawer up shows the reader the sidebar they just finished
+     with, over the answer they came for, with no visible way back to typing. */
+  const dismissDrawer = useCallback(() => {
+    if (!window.matchMedia(WIDE).matches) setRailOpen(false);
+  }, []);
+
   const switchUser = useCallback(async (handle: string, restore = false) => {
     const { token, user } = await loginAs(handle);
     setToken(token);
@@ -198,6 +209,7 @@ export default function App() {
     setView("chat");
     setUploadNote(null);
     setError(null);
+    dismissDrawer();
 
     // Switching identity starts a fresh thread (spec 07) — a conversation belongs to
     // the person who had it. A page refresh is different: the checkpointer still holds
@@ -227,7 +239,7 @@ export default function App() {
     } catch {
       setUploads([]);
     }
-  }, []);
+  }, [dismissDrawer]);
 
   useEffect(() => {
     void (async () => {
@@ -351,6 +363,7 @@ export default function App() {
     setThreadId(null);
     setView("chat");
     stick.current = true;
+    dismissDrawer();
   }
 
   const isAdmin = current?.role === "admin";
@@ -457,7 +470,10 @@ export default function App() {
           {isAdmin && (
             <button
               className="link-btn subtle"
-              onClick={() => setView(view === "admin" ? "chat" : "admin")}
+              onClick={() => {
+                setView(view === "admin" ? "chat" : "admin");
+                dismissDrawer();
+              }}
               tabIndex={railOpen ? 0 : -1}
             >
               {view === "admin" ? "← Back to chat" : "Admin console"}
@@ -552,7 +568,7 @@ export default function App() {
                 </div>
               )}
 
-              {turns.map((turn) => (
+              {turns.map((turn, index) => (
                 <article className="turn" key={turn.id}>
                   <div className="turn-user">
                     <div className="user-msg">{turn.question}</div>
@@ -586,6 +602,15 @@ export default function App() {
                             <ApprovalCard
                               action={turn.response.pending_action}
                               decision={turn.decision}
+                              /* "actually make it 3 hours" does not retire the two-hour
+                                 proposal above it: that action is still pending and its
+                                 Approve button still books two hours. Until the server
+                                 supersedes it, the card at least has to stop looking
+                                 like the live one. */
+                              earlier={turns.some(
+                                (later, j) =>
+                                  j > index && later.response?.pending_action && !later.decision,
+                              )}
                               onDecided={(status, text, actionId) =>
                                 setTurns((prev) =>
                                   prev.map((t) =>

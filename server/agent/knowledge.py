@@ -64,6 +64,45 @@ def _pending_booking_answer(question: str, history: str) -> AgentResponse | None
     )
 
 
+_WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9-]{2,}")
+
+
+def unsupported_premise(question: str, answer: str, chunks) -> str | None:
+    """The name of a thing the corpus has never heard of, asserted back as fact.
+
+    "What is the neutron-star collimator booking policy?" came back as a VERIFIED answer
+    opening "The neutron-star collimator booking policy is governed by the same rules as
+    other instruments", cited to the real booking rules. Every sentence after the first
+    was true, so the faithfulness judge passed it — the fabrication was in the PREMISE the
+    question smuggled in and the answer affirmed. That is the product's worst-case defect
+    wearing its best badge.
+
+    Deliberately narrow, because a false refusal is worse than the gap: it takes TWO
+    adjacent words that appear nowhere in any retrieved passage, and it only fires if the
+    answer repeats them. One unusual word ("quantitative") beside a known one ("imaging")
+    is a scientist's vocabulary; two unknown words in a row is a thing that does not exist.
+    """
+    corpus = " ".join(c.text for c in chunks).lower()
+    lowered = answer.lower()
+    runs: list[list[str]] = []
+    run: list[str] = []
+    for raw in _WORD_RE.findall(question):
+        word = raw.lower()
+        known = len(word) < 4 or word in corpus or word.rstrip("s") in corpus
+        if known:
+            if len(run) >= 2:
+                runs.append(run)
+            run = []
+        else:
+            run.append(word)
+    if len(run) >= 2:
+        runs.append(run)
+    for candidate in runs:
+        if all(word in lowered for word in candidate):
+            return " ".join(candidate)
+    return None
+
+
 def _redirect(question: str, gate: GateResult, extra: dict | None = None,
               ctx: Ctx | None = None) -> AgentResponse:
     # Every refusal is a document somebody still has to write, so it is recorded before
@@ -129,6 +168,13 @@ def answer(question: str, ctx: Ctx, k: int = 8, history: str = "") -> AgentRespo
         log.info("repointing %d mis-cited claim(s)", len(verdict.corrections))
         text = gen.apply_citation_corrections(text, verdict.corrections)
         citations = gen.build_citations(chunks, gen.cited_indices(text, len(chunks)))
+
+    if (invented := unsupported_premise(question, text, chunks)) is not None:
+        log.info("answer affirmed an unsupported premise: %r", invented)
+        gate.passed = False
+        gate.reason = "unsupported_premise"
+        return _redirect(question, gate, {"declined_at": "premise", "premise": invented},
+                         ctx=ctx)
 
     if not verdict.passed:
         log.info("faithfulness downgraded answer: %s", verdict.unsupported)

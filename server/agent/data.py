@@ -12,7 +12,7 @@ import contextlib
 import logging
 import re
 from collections.abc import Iterable
-from datetime import date
+from datetime import UTC, date, datetime
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any
 
@@ -94,7 +94,11 @@ Rules:
   NOT interchangeable: get_billing_summary takes an account_code, never a lab id. For the
   caller's OWN spend or invoice ("how much did I spend", "my invoice"), use one of the
   caller's own account codes listed above — never their lab id.
-- Today's reference date in this dataset is 2026-03-31. Periods and months are 'YYYY-MM'.
+- Today is {today} (UTC). Resolve "tomorrow", "next week" and every other relative date
+  against THAT, never against the age of the data. The seeded records mostly cover up to
+  2026-03, so a question about "last month" may legitimately return nothing — say so
+  rather than sliding the date back until rows appear.
+- Periods and months are 'YYYY-MM'.
 - Return the JSON and nothing else."""
 
 SQL_SECTION = """
@@ -198,6 +202,7 @@ def _plan(question: str, ctx: Ctx, history: str = "") -> dict[str, Any]:
     may_sql = ctx.is_admin or ctx.is_pi
     system = PLANNER_SYSTEM.format(
         menu=TOOL_MENU,
+        today=datetime.now(UTC).date().isoformat(),
         sql_section=SQL_SECTION.format(schema=VIEW_SCHEMA) if may_sql else "",
         sql_option=SQL_OPTION if may_sql else "",
         sql_rules=SQL_RULES if may_sql else NO_SQL_RULE,
@@ -265,6 +270,18 @@ def _numbers_in(value: Any) -> set[Decimal]:
     return out
 
 
+# Columns whose rows are ALTERNATIVES, not components. Summing the hourly rates of three
+# instruments a scientist is choosing between produces a number that is arithmetically
+# correct and means nothing — and the reply duly said "the total hourly rate is $143.00".
+# It passed every check because a column total is a verified figure; what was wrong was
+# offering it at all. A rate, a score and a distance are per-row facts; adding them across
+# rows answers no question anyone asked.
+NEVER_SUMMED = frozenset({
+    "hourly_rate", "rate", "score", "distance_km", "latitude", "longitude",
+    "average_charge", "average_used_hours", "utilization_rate_percent",
+})
+
+
 def column_totals(rows: list[dict]) -> dict[str, Decimal]:
     """Sum each purely-numeric column, in Python.
 
@@ -277,6 +294,8 @@ def column_totals(rows: list[dict]) -> dict[str, Decimal]:
         return {}
     totals: dict[str, Decimal] = {}
     for column in rows[0]:
+        if column.lower() in NEVER_SUMMED:
+            continue
         values = []
         for row in rows:
             value = row.get(column)
@@ -396,6 +415,27 @@ def _quantise(value: Any) -> Any:
 
 def _quantise_rows(rows: list[dict]) -> list[dict]:
     return [{k: _quantise(v) for k, v in row.items()} for row in rows]
+
+
+def _drop_paired_ids(
+    rows: list[dict], columns: list[str]
+) -> tuple[list[dict], list[str]]:
+    """Drop an id column when the same row already carries that thing's name.
+
+    A recommendation row holds instrument_id AND instrument, facility_id AND facility.
+    Both id labels humanise to the word the name column already uses, so the evidence
+    table rendered "instrument | instrument" — two columns, one heading, and the raw key
+    sitting next to the readable one it duplicates. The name is what a reader needs; the
+    id adds nothing they can act on.
+    """
+    if not rows:
+        return rows, columns
+    keys = list(rows[0])
+    drop = {k for k in keys if k.endswith("_id") and k[:-3] in keys}
+    if not drop:
+        return rows, columns
+    trimmed = [{k: v for k, v in row.items() if k not in drop} for row in rows]
+    return trimmed, [c for c in (columns or keys) if c not in drop]
 
 
 def _drop_self_identity(
@@ -1102,6 +1142,7 @@ def answer(question: str, ctx: Ctx, history: str = "") -> AgentResponse:
             rows, columns = [], []
         rows = _quantise_rows(rows)
         rows, columns = _drop_self_identity(rows, columns, ctx)
+        rows, columns = _drop_paired_ids(rows, columns)
     except ToolError as exc:
         if exc.code == "forbidden":
             return AgentResponse(

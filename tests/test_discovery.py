@@ -405,3 +405,24 @@ def test_a_goal_argument_is_named_in_a_sentence_when_it_is_missing(ctxs):
         T.call(ctxs["bob"], "recommend_instrument", {})
     assert exc.value.code == "invalid_params"
     assert "_" not in exc.value.message, "schema spelling must not reach the reader"
+
+
+@pytest.mark.tools
+def test_the_verb_a_user_types_matches_the_noun_the_catalogue_records(ctxs):
+    """A user says "I want to IMAGE live cells"; every technique is recorded as
+    "...IMAGING". Without folding the -ing the three best instruments in the facility
+    scored zero for the question they exist to answer — and the planner reliably splits
+    that phrase into goal="image" plus sample_type="live cells", so the goal arrives as
+    the bare verb."""
+    from server.mcp.tools import _singular, recommend_instrument
+    assert _singular("image") == _singular("imaging")
+    assert _singular("sequence") == _singular("sequencing")
+    assert _singular("cells") == _singular("cell")
+
+    out = recommend_instrument(ctxs["alice"], goal="image", sample_type="live cells")
+    names = [m["instrument"] for m in out["matches"]]
+    assert out["matched"] >= 3
+    assert "Confocal C2" in names and "Spinning Disk SD1" in names
+
+    # and the guard against matching everything still holds
+    assert recommend_instrument(ctxs["alice"], goal="quantum banana zeppelin")["matched"] == 0

@@ -33,9 +33,21 @@ export async function demoUsers(): Promise<DemoUser[]> {
   return (await r.json()).users;
 }
 
+/**
+ * Sign in as a demo identity.
+ *
+ * The endpoint returns the handle beside the user rather than inside it, so the `user`
+ * object it sends has no `handle` of its own. Everything the UI keys by identity — the
+ * "signed in as" highlight in the rail, that person's openers, the remembered identity
+ * and their saved thread — reads `user.handle`, so taking the body's `user` at face
+ * value silently keys all of it on `undefined`: nobody looks signed in, everybody gets
+ * the same openers, and a refresh loses both the identity and the conversation. The
+ * handle is folded in here, at the one place that knows both halves of the response.
+ */
 export async function loginAs(handle: string): Promise<{ token: string; user: DemoUser }> {
   const r = await fetch(`/demo/login/${handle}`, { method: "POST" });
-  return json(r);
+  const body = await json<{ token: string; handle?: string; user: DemoUser }>(r);
+  return { token: body.token, user: { ...body.user, handle: body.handle ?? handle } };
 }
 
 /**

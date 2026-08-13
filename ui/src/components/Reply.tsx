@@ -99,6 +99,36 @@ function Preview({
  * carrying the claim. Leaving it as inert text and putting the only affordance in a chip
  * row underneath asks them to remember which number they were suspicious of.
  */
+/**
+ * The two inline marks the generator actually emits: `**bold**` around the value a
+ * question turned on, and `` `code` `` around an identifier.
+ *
+ * Nothing else is treated as markup. A reply is prose composed around tool values, not a
+ * document, and the more of markdown a renderer accepts the more likely it is to eat a
+ * character that belonged to a fact — an asterisk in a footnote, an underscore inside
+ * `ACC_A1`. Only the delimiters are removed; every other character reaches the screen
+ * exactly as the tool produced it. Left as plain text, the marks show up raw, and the
+ * demo's own headline answer reads "**HELIOTROPE-7741**".
+ */
+const INLINE_MARK = /\*\*([^*\n]+)\*\*|`([^`\n]+)`/g;
+
+function inlineMarks(text: string, keyPrefix: string): React.ReactNode[] {
+  const nodes: React.ReactNode[] = [];
+  let cursor = 0;
+  for (const match of text.matchAll(INLINE_MARK)) {
+    const at = match.index ?? 0;
+    if (at > cursor) nodes.push(text.slice(cursor, at));
+    if (match[1] !== undefined) {
+      nodes.push(<strong key={`${keyPrefix}s${at}`}>{match[1]}</strong>);
+    } else {
+      nodes.push(<code key={`${keyPrefix}c${at}`}>{match[2]}</code>);
+    }
+    cursor = at + match[0].length;
+  }
+  if (cursor < text.length) nodes.push(text.slice(cursor));
+  return nodes;
+}
+
 function CitedText({ text, citations, onOpen }: {
   text: string;
   citations: Citation[];
@@ -114,7 +144,7 @@ function CitedText({ text, citations, onOpen }: {
         const citation = match ? byIndex.get(Number(match[1])) : undefined;
         // An index with no citation behind it stays plain text rather than becoming a
         // button that opens nothing.
-        if (!citation) return <span key={i}>{part}</span>;
+        if (!citation) return <span key={i}>{inlineMarks(part, `${i}-`)}</span>;
         return (
           <button
             key={i}

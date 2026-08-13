@@ -10,7 +10,13 @@ const KIND_LABEL: Record<CardKind, string> = {
 };
 
 function Tags({ item }: { item: CardItem }) {
-  if (!item.badges.length && !item.meta.length) return null;
+  /* A facilities card with no distance to show falls back to the instrument count for
+     its headline figure, and that same string is also the first meta entry — so the
+     card printed "1 instrument" twice, side by side. Dropping a chip whose text the
+     headline already carries character-for-character removes a repetition, never a
+     fact: the string is still on screen, once. */
+  const meta = item.meta.filter((entry) => entry !== item.value);
+  if (!item.badges.length && !meta.length) return null;
   return (
     <div className="card-item-tags">
       {item.badges.map((badge, i) => (
@@ -18,7 +24,7 @@ function Tags({ item }: { item: CardItem }) {
           {badge.text}
         </span>
       ))}
-      {item.meta.map((entry, i) => (
+      {meta.map((entry, i) => (
         <span key={`m${i}`} className="meta-chip">
           {entry}
         </span>
