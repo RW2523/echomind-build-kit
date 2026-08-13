@@ -94,10 +94,18 @@ class Source:
 # after-check answers honestly — while the cost of a missing word is a refusal to a user
 # whose question we could have answered.
 SUBJECT_KEYWORDS: dict[str, tuple[str, ...]] = {
+    # Labs were not a subject at all, so "list me all the labs with details" matched
+    # nothing and the gate passed it on with no source in mind — a question the system
+    # could answer precisely, arriving at the planner as though it were about nothing.
+    "labs": (
+        "lab", "labs", "laboratory", "laboratories", "research group", "research groups",
+        "pi", "pis", "principal investigator", "principal investigators", "group leader",
+    ),
     "bookings": (
         "booking", "bookings", "booked", "book", "reservation", "reservations",
         "reserved", "slot", "slots", "session", "sessions", "scheduled", "schedule",
         "calendar", "diary", "availability", "available", "free", "busy", "upcoming",
+        "coming up",
         "cancelled", "canceled", "no-show",
     ),
     "usage": (
@@ -170,6 +178,22 @@ def subjects_in(text: str) -> tuple[str, ...]:
 # "own records" because that is what a plain user gets from it; a PI's wider reach is a
 # property of the PI, not of the tool, and the tool enforces it either way.
 _READ_TOOL_FACTS: dict[str, dict[str, Any]] = {
+    # Described rather than left to the fallback, which derives keywords by splitting the
+    # tool's own name — so "get_booking_policy" contributed the bare word "policy" and
+    # matched "what is the parking permit policy for visiting researchers?", a question
+    # about nothing this system holds.
+    "get_booking_policy": {
+        "subjects": ("bookings",),
+        "scope": "own records",
+        "keywords": ("cancellation policy", "cancellation rules", "notice period",
+                     "what happens if i cancel", "if i cancel", "cancel my booking",
+                     "no-show", "no show", "booking policy", "booking rules",
+                     "reschedule policy", "fair share", "how far ahead"),
+        "fields": {
+            "subject": "cancellation, reschedule, no_show or limits",
+            "booking_id": "a booking to work the rules out against",
+        },
+    },
     "get_user_profile": {
         "subjects": ("training", "billing"),
         "scope": "own records",
@@ -336,6 +360,148 @@ _READ_TOOL_FACTS: dict[str, dict[str, Any]] = {
 VIEW_MIN_ROLE = _min_role(tools_mod.TOOLS["run_readonly_sql"].tier)
 
 _VIEW_FACTS: dict[str, dict[str, Any]] = {
+    # --- the domain spaces (migration 009) -------------------------------------------
+    #
+    # Written with their schema because that is how the planner must write them: the same
+    # view name exists in more than one space, and a bare name would resolve by
+    # search_path rather than by intent. Describing them here is not optional decoration —
+    # the relevance gate only considers catalogued sources, so a view added to the
+    # allow-list and not to this file is a view the planner can never legitimately reach.
+    "reference.v_labs": {
+        "purpose": "Every lab, its PI, and how many members and account codes it has.",
+        "subjects": ("labs", "projects"),
+        "scope": "everything",
+        "keywords": ("list of labs", "which labs", "all labs", "lab directory",
+                     "who is the pi", "lab pi", "labs with details"),
+        "fields": {
+            "lab_id": "the lab's id", "lab_name": "its name",
+            "pi_name": "the principal investigator", "pi_email": "their email",
+            "member_count": "how many people are in it",
+            "account_code_count": "how many account codes it holds",
+        },
+    },
+    "reference.v_facilities": {
+        "purpose": "Where each core facility is, how to reach it, and its size.",
+        "subjects": ("facilities",),
+        "scope": "everything",
+        "keywords": ("facility list", "which campus", "opening hours", "address of"),
+        "fields": {
+            "facility_name": "the core's name", "campus": "which campus",
+            "building": "building", "room": "room", "address": "street address",
+            "contact_email": "who to contact", "opening_hours": "when it is open",
+            "instrument_count": "how many instruments it holds",
+        },
+    },
+    "reference.v_devices": {
+        "purpose": "Every device, where it is, what it does, and what it costs per hour.",
+        "subjects": ("instruments",),
+        "scope": "everything",
+        "keywords": ("cost of", "how much", "hourly rate", "price", "rate for",
+                     "cheapest", "most expensive", "device list", "equipment list"),
+        "fields": {
+            "instrument": "the device's name", "status": "available or out of service",
+            "modality": "what kind of instrument it is",
+            "techniques": "what it can do", "sample_types": "what it accepts",
+            "facility": "which core holds it", "campus": "which campus",
+            "hourly_rate": "charge per hour",
+            "derived_half_day_rate": "hourly_rate x 4, derived here",
+            "derived_day_rate": "hourly_rate x 8, derived here",
+        },
+    },
+    "scheduling.v_bookings": {
+        "purpose": "Every booking, with its duration and whether it is past, current or "
+                   "future right now.",
+        "subjects": ("bookings",),
+        "scope": "own labs",
+        # Deliberately aggregate phrasings only. "upcoming", "coming up" and "my
+        # schedule" belong to get_my_bookings, which a plain user may call; this view is
+        # reached through run_readonly_sql, which is PI-only. Listing those words here
+        # displaced the tool and turned "what have I got coming up?" into not_entitled.
+        "keywords": ("all bookings", "every booking", "bookings across",
+                     "bookings by lab", "bookings for the lab", "everyone's bookings"),
+        "fields": {
+            "booking_id": "the booking's id", "user_name": "who booked it",
+            "lab_id": "their lab", "instrument": "what was booked",
+            "facility": "where it is", "starts_at": "when it begins",
+            "ends_at": "when it ends", "hours": "how long it is",
+            "status": "requested, confirmed, cancelled or completed",
+            "when_relative": "past, current or future relative to now",
+            "account_code": "which code it is charged to",
+        },
+    },
+    "scheduling.v_device_occupancy": {
+        "purpose": "Booked hours per device per day — how busy each device is, and "
+                   "therefore what is free.",
+        "subjects": ("bookings", "instruments"),
+        "scope": "everything",
+        "keywords": ("how busy", "occupancy", "utilisation", "utilization", "free",
+                     "availability of", "booked hours", "busiest"),
+        "fields": {
+            "instrument": "the device", "facility": "where it is", "day": "which day",
+            "bookings": "confirmed and completed bookings that day",
+            "pending_bookings": "requested but not yet approved",
+            "booked_hours": "hours taken that day",
+            "first_start": "earliest start", "last_end": "latest end",
+            "device_status": "available or out of service",
+        },
+    },
+    "activity.v_usage": {
+        "purpose": "Tracked usage records, one row each, with the booking behind them.",
+        "subjects": ("usage",),
+        "scope": "own labs",
+        "keywords": ("actual usage", "tracked hours", "usage records"),
+        "fields": {
+            "user_name": "who used it", "lab_id": "their lab",
+            "instrument": "what was used", "booking_id": "the booking it belongs to",
+            "starts_at": "when use began", "ends_at": "when it ended",
+            "hours": "how long", "month": "YYYY-MM", "source": "how it was recorded",
+        },
+    },
+    "activity.v_downtime": {
+        "purpose": "Maintenance events and the hours of downtime each caused.",
+        "subjects": ("instruments",),
+        "scope": "everything",
+        "keywords": ("downtime", "maintenance", "out of service", "repairs"),
+        "fields": {
+            "instrument": "the device", "facility": "where it is",
+            "kind": "what kind of event", "notes": "what happened",
+            "occurred_at": "when", "downtime_hours": "hours lost", "month": "YYYY-MM",
+        },
+    },
+    "billing.v_charges": {
+        "purpose": "Every charge line, with its account code, lab and period.",
+        "subjects": ("billing",),
+        "scope": "own labs",
+        "keywords": ("charge lines", "what was charged", "invoice lines"),
+        "fields": {
+            "account_code": "which code was charged", "lab_id": "the lab it belongs to",
+            "period": "YYYY-MM", "description": "what the charge is for",
+            "instrument": "which device", "qty": "quantity",
+            "unit_price": "price per unit", "amount": "the charge",
+        },
+    },
+    "policy.statements": {
+        "purpose": "The facility's booking and billing rules as data, each naming the "
+                   "document and clause it came from.",
+        "subjects": ("bookings", "billing", "training"),
+        "scope": "everything",
+        # Not the bare word "policy": it matched "what is the parking permit policy",
+        # which is about nothing this system holds, and a gate that passes an off-topic
+        # question has stopped being a gate.
+        "keywords": ("cancellation policy", "cancellation rules", "notice period",
+                     "what happens if i cancel", "if i cancel", "fair share",
+                     "no-show", "no show", "booking policy", "booking rules",
+                     "reschedule policy", "review period"),
+        "fields": {
+            "domain": "booking or billing", "subject": "cancellation, reschedule, "
+            "no_show, limits or review", "title": "a short name for the rule",
+            "statement": "the rule in the words a person is shown",
+            "threshold_hours": "the window it applies within, where it has one",
+            "charge_percent": "what is charged, where the rule states one",
+            "source_doc_id": "the document it was taken from",
+            "source_clause": "the clause within it", "version": "the document version",
+        },
+    },
     "v_bookings": {
         "purpose": "One row per booking, with who made it and where.",
         "subjects": ("bookings",),
@@ -448,8 +614,9 @@ def _view_source(name: str) -> Source:
 
 # Described views first, in the order the planner is shown them, then anything the
 # allow-list grants that this file has not caught up with.
-_VIEW_NAMES = [name for name in _VIEW_FACTS if name in sql_guard.ALLOWED_VIEWS] + sorted(
-    sql_guard.ALLOWED_VIEWS - set(_VIEW_FACTS)
+_ALL_ALLOWED = sql_guard.ALLOWED_VIEWS | sql_guard.ALLOWED_QUALIFIED
+_VIEW_NAMES = [name for name in _VIEW_FACTS if name in _ALL_ALLOWED] + sorted(
+    _ALL_ALLOWED - set(_VIEW_FACTS)
 )
 
 SOURCES: tuple[Source, ...] = tuple(

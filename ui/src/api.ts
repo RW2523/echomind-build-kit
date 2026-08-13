@@ -284,3 +284,134 @@ export async function libraryDocument(docId: string): Promise<LibraryDocDetail> 
   const r = await fetch(`/library/${encodeURIComponent(docId)}`, { headers: headers() });
   return json(r);
 }
+
+
+/* --- the data & tools console ---------------------------------------------------- */
+
+/** One role's hold on one relation, as Postgres reports it. */
+export type Grant = {
+  role: string;
+  privileges: string[];
+  /** Privileges granted on named columns only — the whole-table view does not carry these. */
+  column_privileges: { privilege: string; columns: string[] }[];
+};
+
+export type Relation = {
+  name: string;
+  kind: "table" | "view";
+  rows: number | null;
+  grants: Grant[];
+  browsable: boolean;
+  /** Why the row viewer will not page it. Null when it will. */
+  not_browsable: string | null;
+};
+
+export type Space = {
+  schema: string;
+  /** COMMENT ON SCHEMA, straight from the database. Null when the schema carries none. */
+  purpose: string | null;
+  relations: Relation[];
+  relation_count: number;
+  row_total: number;
+  readable_by: string[];
+};
+
+export type SpacesResponse = {
+  spaces: Space[];
+  roles_queried: string[];
+  grants_source: string;
+};
+
+export type ToolFacts = {
+  number: number;
+  name: string;
+  write: boolean;
+  tier: string;
+  min_role: string;
+  purpose: string;
+  subjects: string[];
+  /** What the tool returns, field by field, in plain English. */
+  reads: Record<string, string>;
+  scope: string | null;
+  route: "data" | "action";
+  /** How a question reaches it: phrases point at this tool, subject words widen the net. */
+  asked_as: { how: string; phrases: string[]; subject_words: Record<string, string[]> };
+  catalogued: boolean;
+};
+
+export type ViewFacts = {
+  name: string;
+  purpose: string;
+  subjects: string[];
+  min_role: string;
+  scope: string;
+  reads: Record<string, string>;
+};
+
+export type ToolsResponse = {
+  tools: ToolFacts[];
+  total: number;
+  read: number;
+  write: number;
+  subjects: string[];
+  views: ViewFacts[];
+};
+
+export type Stage = {
+  key: string;
+  name: string;
+  where: string;
+  what: string;
+  facts: Record<string, unknown>;
+  refuses: { reason: string; says: string }[];
+};
+
+export type PipelineResponse = {
+  stages: Stage[];
+  refusal_points: string[];
+  write_path: { what: string; tools: string[] };
+};
+
+export type RowsResponse = {
+  schema: string;
+  relation: string;
+  kind: "table" | "view";
+  columns: { name: string; type: string }[];
+  rows: Record<string, unknown>[];
+  total: number;
+  returned: number;
+  limit: number;
+  offset: number;
+  cap: number;
+  cap_note: string;
+  ordered_by: string[];
+};
+
+export async function dataSpaces(): Promise<SpacesResponse> {
+  const r = await fetch("/dataspaces", { headers: headers() });
+  return json(r);
+}
+
+export async function dataTools(): Promise<ToolsResponse> {
+  const r = await fetch("/dataspaces/tools", { headers: headers() });
+  return json(r);
+}
+
+export async function dataPipeline(): Promise<PipelineResponse> {
+  const r = await fetch("/dataspaces/pipeline", { headers: headers() });
+  return json(r);
+}
+
+export async function relationRows(
+  schema: string,
+  relation: string,
+  offset = 0,
+  limit = 50,
+): Promise<RowsResponse> {
+  const query = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+  const r = await fetch(
+    `/dataspaces/rows/${encodeURIComponent(schema)}/${encodeURIComponent(relation)}?${query}`,
+    { headers: headers() },
+  );
+  return json(r);
+}

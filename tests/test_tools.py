@@ -15,18 +15,20 @@ from server.mcp.errors import ToolError
 pytestmark = pytest.mark.tools
 
 
-def test_registry_has_exactly_seventeen_tools():
-    """Fifteen became seventeen: find_facilities (16) and recommend_instrument (17).
+def test_registry_has_exactly_twenty_tools():
+    """Seventeen became twenty: cancel_booking (18), reschedule_booking (19) and
+    get_booking_policy (20).
 
     The count is asserted rather than derived so that a tool cannot be added, renamed or
     dropped without a human deciding it should be — the registry is the whole surface the
     agent and the MCP server expose, and numbering has to stay contiguous because it is
     how the specs and the tier matrix refer to each tool.
     """
-    assert len(T.TOOLS) == 17
-    assert sorted(s.number for s in T.TOOLS.values()) == list(range(1, 18))
-    assert len(T.WRITE_TOOLS) == 4
+    assert len(T.TOOLS) == 20
+    assert sorted(s.number for s in T.TOOLS.values()) == list(range(1, 21))
+    assert len(T.WRITE_TOOLS) == 6
     assert set(T.WRITE_TOOLS) == {
+        "cancel_booking", "reschedule_booking",
         "create_onboarding_request", "create_service_request",
         "request_booking", "generate_document",
     }

@@ -75,9 +75,14 @@ def test_every_tool_on_the_planner_menu_is_catalogued():
 
 
 def test_the_catalogued_views_are_exactly_the_allow_listed_ones():
+    """Both halves of the allow-list. The domain spaces (migration 009) are reachable only
+    when written with their schema, because the same view name exists in more than one —
+    and a view the allow-list grants but this catalogue never describes is one the
+    relevance gate can never legitimately route a question to."""
+    allowed = set(sql_guard.ALLOWED_VIEWS) | set(sql_guard.ALLOWED_QUALIFIED)
     catalogued = {s.name for s in catalog.SOURCES if s.kind == "view"}
-    assert catalogued == set(sql_guard.ALLOWED_VIEWS)
-    assert set(catalog._VIEW_FACTS) <= set(sql_guard.ALLOWED_VIEWS)
+    assert catalogued == allowed
+    assert set(catalog._VIEW_FACTS) <= allowed
     for source in catalog.SOURCES:
         if source.kind == "view":
             assert source.fields, f"{source.name} is allow-listed but its columns are undescribed"
@@ -160,7 +165,9 @@ def test_a_user_is_refused_a_scope_only_a_pi_can_read(ctxs):
     result = catalog.pre("Who is on the Cortical Cell Atlas project?", ctxs["alice"])
     assert result.passed is False
     assert result.reason == "not_entitled"
-    assert result.considered == ("get_project_overview",)
+    # reference.v_labs joined the same refusal when the domain spaces were added: it is
+    # public reference data, but it is reached through run_readonly_sql, which is PI-only.
+    assert result.considered == ("get_project_overview", "reference.v_labs")
 
 
 def test_the_same_project_question_passes_for_the_pi_who_owns_it(ctxs):

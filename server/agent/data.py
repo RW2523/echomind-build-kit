@@ -35,7 +35,20 @@ PLAN_LEVEL_KEYS = ("subject_user_id",)
 USAGE_SCOPES = ("user", "lab", "instrument")
 ID_PREFIX_SCOPES = {"u-": "user", "lab-": "lab", "ins-": "instrument"}
 
+# The relations the planner may write SQL against, rendered from the catalogue so a
+# column described in one place and shown in the other cannot drift apart. Names
+# outside `reporting` carry their schema because that is how they must be written:
+# v_bookings exists in two spaces and they are not the same view.
 VIEW_SCHEMA = """\
+reference.v_labs(lab_id, lab_name, pi_name, pi_email, member_count, account_code_count)
+reference.v_facilities(facility_name, campus, building, room, address, contact_email, opening_hours, instrument_count)
+reference.v_devices(instrument, status, modality, techniques, sample_types, facility, campus, hourly_rate, derived_half_day_rate, derived_day_rate)
+scheduling.v_bookings(booking_id, user_name, lab_id, instrument, facility, starts_at, ends_at, hours, status, when_relative, account_code)
+scheduling.v_device_occupancy(instrument, facility, day, bookings, pending_bookings, booked_hours, first_start, last_end, device_status)
+activity.v_usage(user_name, lab_id, instrument, booking_id, starts_at, ends_at, hours, month, source)
+activity.v_downtime(instrument, facility, kind, notes, occurred_at, downtime_hours, month)
+billing.v_charges(account_code, lab_id, period, description, instrument, qty, unit_price, amount)
+policy.statements(domain, subject, title, statement, threshold_hours, charge_percent, source_doc_id, source_clause, version)
 v_bookings(user_id, user_name, lab_id, instrument, facility, starts_at, ends_at, status)
 v_usage_summary(lab_id, user_id, instrument, month, scheduled_hours, tracked_hours)
 v_billing_lines(account_code, lab_id, period, description, instrument, amount)

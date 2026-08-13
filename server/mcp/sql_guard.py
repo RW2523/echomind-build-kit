@@ -25,14 +25,48 @@ DIALECT = "postgres"
 MAX_ROWS = 200
 
 # The only relations tool 11 may touch.
+#
+# Bare names resolve in `reporting`, which is where echomind_readonly's search_path points
+# and where these four have always lived. They stay bare for compatibility: the eval set,
+# the golden queries and every existing test write `v_bookings`, not `reporting.v_bookings`.
 ALLOWED_VIEWS = frozenset(
     {"v_bookings", "v_usage_summary", "v_billing_lines", "v_instrument_downtime"}
 )
 
+# The domain spaces (migration 009), reachable only when written out in full.
+#
+# Qualification is required rather than tolerated, for two reasons. `v_bookings` exists in
+# both `reporting` and `scheduling` and they are not the same view — a bare name would
+# silently resolve by search_path and the answer would depend on which schema happened to
+# come first. And a query that says `scheduling.v_device_occupancy` shows, in the SQL the
+# reader is given as evidence, which space it reached into. That is the segregation being
+# visible rather than asserted.
+ALLOWED_QUALIFIED = frozenset({
+    "reference.v_labs",
+    "reference.v_facilities",
+    "reference.v_devices",
+    "scheduling.v_bookings",
+    "scheduling.v_device_occupancy",
+    "activity.v_usage",
+    "activity.v_downtime",
+    "billing.v_charges",
+    "policy.statements",
+})
+
+ALLOWED_SCHEMAS = frozenset({"reporting"} | {q.split(".", 1)[0] for q in ALLOWED_QUALIFIED})
+
 # Views carrying a lab dimension. v_instrument_downtime is deliberately absent: it holds
 # no per-lab or per-user data (instrument, facility, month, downtime, repair count), so
 # there is nothing to scope a PI to and no filter to apply.
-LAB_SCOPED_VIEWS = frozenset({"v_bookings", "v_usage_summary", "v_billing_lines"})
+#
+# The same reasoning across the domain spaces: reference.* is the public catalogue of what
+# exists and what it costs, and activity/billing/scheduling carry a lab_id that a PI must
+# be pinned to. policy.statements is the facility's own rules and is public by nature —
+# scoping a rule to a lab would be inventing a distinction the policy does not make.
+LAB_SCOPED_VIEWS = frozenset({
+    "v_bookings", "v_usage_summary", "v_billing_lines",
+    "scheduling.v_bookings", "activity.v_usage", "billing.v_charges",
+})
 
 # Function policy, in two parts.
 #
@@ -111,7 +145,11 @@ def _reject(message: str, hint: str = "") -> None:
 
 
 def _allow_list_hint() -> str:
-    return "Allowed relations: " + ", ".join(sorted(ALLOWED_VIEWS)) + "."
+    return (
+        "Allowed relations: "
+        + ", ".join(sorted(ALLOWED_VIEWS) + sorted(ALLOWED_QUALIFIED))
+        + ". Views outside `reporting` must be written with their schema."
+    )
 
 
 def _check_no_forbidden_nodes(tree: exp.Expression) -> None:
@@ -176,21 +214,28 @@ def _relations(tree: exp.Expression) -> list[str]:
     return [t.name.lower() for t in tree.find_all(exp.Table) if t.name]
 
 
+def relation_name(table: exp.Table) -> str:
+    """How one table node is judged: `schema.view` when qualified, bare otherwise.
+
+    Both forms are compared against their own allow-list. A bare name is never expanded
+    to a schema here — that would let search_path decide which `v_bookings` was meant.
+    """
+    name = table.name.lower()
+    return f"{table.db.lower()}.{name}" if table.db else name
+
+
 def _check_relations(tree: exp.Expression) -> tuple[str, ...]:
-    names = _relations(tree)
-    if not names:
+    tables = [t for t in tree.find_all(exp.Table) if t.name]
+    if not tables:
         _reject("The query does not read any relation.", _allow_list_hint())
-    for name in names:
-        if name not in ALLOWED_VIEWS:
+    for table in tables:
+        if table.db and table.db.lower() not in ALLOWED_SCHEMAS:
+            _reject(f"Schema '{table.db}' is not allow-listed.", _allow_list_hint())
+        name = relation_name(table)
+        permitted = ALLOWED_QUALIFIED if table.db else ALLOWED_VIEWS
+        if name not in permitted:
             _reject(f"Relation '{name}' is not allow-listed.", _allow_list_hint())
-    # A schema qualifier could point the same view name at another schema.
-    for table in tree.find_all(exp.Table):
-        if table.db and table.db.lower() != "reporting":
-            _reject(
-                f"Schema '{table.db}' is not allow-listed.",
-                _allow_list_hint(),
-            )
-    return tuple(sorted(set(names)))
+    return tuple(sorted({relation_name(t) for t in tables}))
 
 
 def _apply_limit(select: exp.Select) -> exp.Select:
@@ -226,15 +271,21 @@ def _restrict_to_labs(
 
     def transform(node: exp.Expression) -> exp.Expression:
         nonlocal applied
-        if isinstance(node, exp.Table) and node.name.lower() in LAB_SCOPED_VIEWS:
+        if isinstance(node, exp.Table) and relation_name(node) in LAB_SCOPED_VIEWS:
             if node.parent and isinstance(node.parent, exp.Subquery) and node.parent.args.get(
                 "_echomind_filtered"
             ):
                 return node
             applied = True
             alias = node.alias_or_name
+            # The QUALIFIED name, not node.name. Rebuilding the subquery from the bare
+            # name dropped the schema, so `scheduling.v_bookings` came back as plain
+            # `v_bookings` and resolved by search_path to the reporting view — a silent
+            # substitution of one dataset for another, inside the very rewrite that exists
+            # to make the answer trustworthy.
             inner = sqlglot.parse_one(
-                f"SELECT * FROM {node.name} WHERE lab_id IN {values}", read=DIALECT
+                f"SELECT * FROM {relation_name(node)} WHERE lab_id IN {values}",
+                read=DIALECT,
             )
             sub = exp.Subquery(this=inner)
             sub.set("alias", exp.TableAlias(this=exp.to_identifier(alias)))

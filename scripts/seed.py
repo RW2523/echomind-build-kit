@@ -236,7 +236,17 @@ STORY_TOTAL = 412.00
 def apply_migrations(conn) -> None:
     for path in sorted(MIGRATIONS.glob("*.sql")):
         print(f"  applying {path.name}")
-        conn.exec_driver_sql(path.read_text())
+        # Through the raw DBAPI cursor, not exec_driver_sql. SQLAlchemy passes an empty
+        # parameter tuple, which makes psycopg parse the statement for placeholders — so a
+        # migration containing a literal % ("charged at 50% of the booked time") fails with
+        # "incomplete placeholder". Migrations are static DDL and never take parameters;
+        # doubling the %% instead would corrupt the text that reaches the database and
+        # break `psql -f` on the same file.
+        cursor = conn.connection.cursor()
+        try:
+            cursor.execute(path.read_text())
+        finally:
+            cursor.close()
 
 
 def setup_checkpointer() -> None:

@@ -715,3 +715,64 @@ diminishing returns.
 - 2026-08-13 | The preview shows indexed chunks, not the file on disk | source_path is what
   was ingested; the chunks are what answers are actually drawn from. Serving the file would
   let the two drift silently, and the preview exists so a reader can check the difference.
+- 2026-08-13 | Data & Tools console reads the database and the registries per request | The
+  product's architecture claims — infinity is never written SQL against, the agent's role
+  holds SELECT on nine views and nothing else, a refusal happens at a named stage — could
+  only be checked by reading source. /dataspaces answers them from Postgres and from
+  server.mcp.tools.TOOLS on every call: purposes from COMMENT ON SCHEMA, real count(*)
+  rather than reltuples (which is -1 on a freshly seeded table), grants from
+  information_schema. Nothing about the database or the tool registry is written in the
+  API module, so the console cannot go quietly stale — which would be worse than no
+  console, because it would still be convincing.
+- 2026-08-13 | Grants are read once per role, not once per request | information_schema
+  .role_table_grants shows a session only the grants whose grantee is a role it belongs to.
+  Asked as echomind_app it returns 78 rows and says nothing at all about echomind_readonly,
+  so a single query would have reported that the agent's read-only role can reach nothing.
+  The app session and the read-only session are each asked about themselves and merged.
+  owner_session is not used: server/db.py reserves it for migrations, and borrowing it to
+  make the panel look complete would be the console breaking the rule it exists to show.
+- 2026-08-13 | Column-level grants are shown beside table grants | role_table_grants does
+  not carry them, so the panel reported SELECT and INSERT on infinity.bookings and silently
+  omitted the UPDATE on three columns that 011 granted. information_schema.column_privileges
+  fills that in, minus the rows a whole-table grant already covers.
+- 2026-08-13 | The row viewer refuses echomind.chunks, visibly | A generic content viewer
+  pointed at the corpus would walk around the permission predicate that keeps one user's
+  private notes private — the property test_library.py states outright. The relation is
+  still listed with its real row count and the reason attached, and the endpoint answers
+  403 rather than 404 because the console has already disclosed that it exists. Its count
+  comes from retrieval.corpus_row_count(), so every statement naming that table is still in
+  the one file the isolation lint stands for.
+- 2026-08-13 | 012 gives infinity, reporting and echomind a schema comment | The console
+  reads each space's purpose from COMMENT ON SCHEMA rather than shipping prose that can
+  drift. Three schemas predated 009 and carried none, so the three most architecturally
+  important spaces displayed "no purpose recorded". Writing the sentence into the migration
+  keeps it where \dn+ and the screen agree.
+- 2026-08-13 | Data is segregated in the access layer, not by moving the vendor's tables |
+  `infinity` is Infinity X's system of record and we do not own its layout; reorganising it
+  would break every tool and teach the wrong lesson. Five domain spaces — reference,
+  scheduling, activity, billing, policy — are granted separately, so a role can be given
+  scheduling without billing. That is the property that makes "segregated" mean more than
+  a naming convention.
+- 2026-08-13 | The rules live as data, beside the prose | policy.statements holds each rule
+  in applicable form (threshold_hours, charge_percent) with the document and clause it came
+  from. A cancellation now computes its charge and quotes the stored sentence; it never
+  paraphrases the paragraph, which is where a confident wrong answer about money comes from.
+- 2026-08-13 | Occupancy counts confirmed AND completed bookings | Written first as
+  `status = 'confirmed'`, it matched 1 of 202 rows: every past session vanished and devices
+  read as free on days they had been in use all afternoon. Telling someone a busy device is
+  available is the worst answer a scheduler can give.
+- 2026-08-13 | The lab-scope rewrite keeps the schema qualifier | It matched bare view names
+  and rebuilt `FROM v_bookings`, so a PI query against scheduling.v_bookings came back
+  resolved to the reporting view — a silent substitution of one dataset for another, inside
+  the rewrite whose whole job is making the answer trustworthy.
+- 2026-08-13 | The app may change a booking, three columns wide | 005 granted INSERT only,
+  reasoning that cancellation belongs to Infinity X. That left a user who could book through
+  the assistant unable to cancel through it. UPDATE is now granted on (status, starts_at,
+  ends_at) and nothing else: a bug cannot move a charge onto another account code, because
+  Postgres refuses rather than trusting the application to be careful. Still no DELETE.
+- 2026-08-13 | Widening the SQL surface cost accuracy before it earned it | Going from 4
+  views to 13 broke two things the first time. scheduling.v_bookings claimed "upcoming" and
+  "coming up", displacing get_my_bookings — and since SQL is PI-only, a plain user asking
+  what they had coming up was refused. And the bare word "policy" (from policy.statements,
+  and from the fallback that splits a tool's own name) matched "parking permit policy",
+  passing an off-topic question. Every new source now keys on phrasing specific to it.

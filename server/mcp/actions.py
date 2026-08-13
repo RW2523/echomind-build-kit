@@ -256,6 +256,8 @@ def _execute(action: dict) -> dict[str, Any]:
         "create_onboarding_request": _exec_onboarding,
         "create_service_request": _exec_service_request,
         "request_booking": _exec_booking,
+        "cancel_booking": _exec_cancel_booking,
+        "reschedule_booking": _exec_reschedule_booking,
         "generate_document": _exec_document,
     }.get(tool)
     if handler is None:
@@ -361,6 +363,112 @@ def _exec_booking(action: dict, payload: dict) -> dict[str, Any]:
         "starts_at": payload["starts_at"],
         "ends_at": payload["ends_at"],
         "status": "requested",
+    }
+
+
+def _exec_cancel_booking(action: dict, payload: dict) -> dict[str, Any]:
+    """Cancel it, recording the charge the user was shown when they approved.
+
+    Re-checked at execution rather than trusted from the payload: an approval can be acted
+    on long after it was proposed, and a booking that was cancelled or completed in the
+    meantime must not be cancelled twice. The scope was already enforced when the action
+    was created, and `user_id` is carried on the action row.
+    """
+    booking_id = payload["booking_id"]
+    with session_scope() as s:
+        row = s.execute(
+            text("SELECT status FROM infinity.bookings WHERE id = :bid"),
+            {"bid": booking_id},
+        ).mappings().first()
+        if row is None:
+            raise not_found("booking")
+        if row["status"] in ("cancelled", "completed"):
+            raise ToolError(
+                "conflict",
+                f"That booking is already {row['status']} — nothing was changed.",
+                "Check the booking before trying again.",
+            )
+        s.execute(
+            text("UPDATE infinity.bookings SET status = 'cancelled' WHERE id = :bid"),
+            {"bid": booking_id},
+        )
+
+    # The policy as it was applied travels into the result, so the audit row answers
+    # "why was I charged for this?" without anyone having to reconstruct the rule.
+    applied = ((payload.get("policy") or {}).get("applied")) or {}
+    return {
+        "cancelled": booking_id,
+        "reason": payload.get("reason"),
+        "charge_percent": (payload.get("policy") or {}).get("charge_percent"),
+        "charged_hours": (payload.get("policy") or {}).get("charged_hours"),
+        "policy_applied": applied.get("id"),
+        "policy_statement": applied.get("statement"),
+        "policy_source": applied.get("source_doc_id"),
+    }
+
+
+def _exec_reschedule_booking(action: dict, payload: dict) -> dict[str, Any]:
+    """Move it — one statement, so the old slot is never released without the new one taken.
+
+    The rules call this a cancellation plus a new booking, but doing it as two writes would
+    leave a window where the user has neither. It stays a single UPDATE inside one
+    transaction; the charge on the released time is recorded from what they approved.
+    """
+    booking_id = payload["booking_id"]
+    with session_scope() as s:
+        row = s.execute(
+            text("""SELECT status, instrument_id, starts_at, ends_at
+                    FROM infinity.bookings WHERE id = :bid"""),
+            {"bid": booking_id},
+        ).mappings().first()
+        if row is None:
+            raise not_found("booking")
+        if row["status"] in ("cancelled", "completed"):
+            raise ToolError(
+                "conflict",
+                f"That booking is already {row['status']} — nothing was changed.",
+                "Book a new session instead.",
+            )
+        clash = s.execute(
+            text(
+                """SELECT id FROM infinity.bookings
+                   WHERE instrument_id = :iid AND id <> :bid
+                     AND status IN ('requested', 'confirmed')
+                     AND starts_at < CAST(:ends AS timestamptz)
+                     AND ends_at   > CAST(:starts AS timestamptz)
+                   LIMIT 1"""
+            ),
+            {"iid": row["instrument_id"], "bid": booking_id,
+             "starts": payload["starts_at"], "ends": payload["ends_at"]},
+        ).first()
+        if clash:
+            raise ToolError(
+                "conflict",
+                "That slot was taken while the request was awaiting approval.",
+                "Pick another slot with check_availability.",
+            )
+        s.execute(
+            text(
+                """UPDATE infinity.bookings
+                   SET starts_at = CAST(:starts AS timestamptz),
+                       ends_at   = CAST(:ends AS timestamptz),
+                       status    = 'requested'
+                   WHERE id = :bid"""
+            ),
+            {"bid": booking_id, "starts": payload["starts_at"], "ends": payload["ends_at"]},
+        )
+        was_from, was_to = row["starts_at"].isoformat(), row["ends_at"].isoformat()
+
+    release = (payload.get("policy") or {}).get("release") or {}
+    applied = release.get("applied") or {}
+    return {
+        "rescheduled": booking_id,
+        "moved_from": {"starts_at": was_from, "ends_at": was_to},
+        "moved_to": {"starts_at": payload["starts_at"], "ends_at": payload["ends_at"]},
+        "status": "requested",
+        "release_charge_percent": release.get("charge_percent"),
+        "policy_applied": applied.get("id"),
+        "policy_statement": applied.get("statement"),
     }
 
 

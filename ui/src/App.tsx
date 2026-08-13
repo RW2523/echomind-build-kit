@@ -10,6 +10,7 @@ import {
   upload,
 } from "./api";
 import { Admin } from "./components/Admin";
+import { DataSpaces } from "./components/DataSpaces";
 import { Library } from "./components/Library";
 import { ApprovalCard } from "./components/ApprovalCard";
 import {
@@ -172,7 +173,7 @@ export default function App() {
   const [threadId, setThreadId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
-  const [view, setView] = useState<"chat" | "admin" | "library">("chat");
+  const [view, setView] = useState<"chat" | "admin" | "library" | "dataspaces">("chat");
   const [uploads, setUploads] = useState<UploadRecord[]>([]);
   const [uploadNote, setUploadNote] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -492,6 +493,21 @@ export default function App() {
               {view === "admin" ? "← Back to chat" : "Admin console"}
             </button>
           )}
+          {/* Gated on role in both places that matter: the button is hidden here and every
+              endpoint behind it answers 404 to anyone who is not an admin. Only the second
+              one is a control. */}
+          {isAdmin && (
+            <button
+              className="link-btn subtle"
+              onClick={() => {
+                setView(view === "dataspaces" ? "chat" : "dataspaces");
+                dismissDrawer();
+              }}
+              tabIndex={railOpen ? 0 : -1}
+            >
+              {view === "dataspaces" ? "← Back to chat" : "Data & tools"}
+            </button>
+          )}
         </div>
       </aside>
 
@@ -551,6 +567,8 @@ export default function App() {
 
         {view === "admin" ? (
           <Admin />
+        ) : view === "dataspaces" ? (
+          <DataSpaces />
         ) : view === "library" ? (
           <Library />
         ) : (

@@ -372,10 +372,11 @@ def test_the_instruments_card_is_built_from_the_ranked_rows(ctxs):
 # --- registry + dispatch ------------------------------------------------------------
 
 
-def test_the_registry_holds_seventeen_contiguous_tools():
-    """Mirrors tests/test_tools.py: 15 became 17 when discovery was added (16, 17)."""
-    assert len(T.TOOLS) == 17
-    assert sorted(spec.number for spec in T.TOOLS.values()) == list(range(1, 18))
+def test_the_registry_holds_twenty_contiguous_tools():
+    """Mirrors tests/test_tools.py: 17 became 20 when booking changes were added
+    (cancel_booking 18, reschedule_booking 19, get_booking_policy 20)."""
+    assert len(T.TOOLS) == 20
+    assert sorted(spec.number for spec in T.TOOLS.values()) == list(range(1, 21))
 
 
 def test_both_discovery_tools_are_registered_as_read_tools():

@@ -373,6 +373,23 @@ def list_documents(ctx: Ctx) -> list[dict[str, Any]]:
     return [dict(row) for row in rows]
 
 
+def corpus_row_count() -> int:
+    """How many chunk rows the corpus holds, for the admin console's per-relation counts.
+
+    A count, not content: the Data & Tools console reports the real size of every relation
+    in every space, and this table cannot be the one row of that table that reads
+    "unknown". It lives here for the same reason the library listing does — the isolation
+    lint in tests/test_rag_isolation.py wants every statement naming this table in one
+    file, and a `count(*)` composed at runtime in an API module would satisfy the grep
+    while breaking the rule the grep stands for.
+
+    Unfiltered on purpose, and safe to be: a total says nothing about whose notes are in
+    it. The console refuses to page the rows themselves precisely because those would.
+    """
+    with session_scope() as s:
+        return int(s.execute(text("SELECT count(*) FROM echomind.chunks")).scalar_one())
+
+
 def read_document(ctx: Ctx, doc_id: str) -> dict[str, Any] | None:
     """One document, reassembled from the chunks this caller may read.
 

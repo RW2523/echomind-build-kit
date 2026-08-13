@@ -1540,6 +1540,185 @@ class ToolSpec:
     params: dict[str, str] = field(default_factory=dict)
 
 
+
+# --- 18. cancel_booking (write) ----------------------------------------------------
+
+
+def _owned_booking(s, ctx: Ctx, booking_id: str) -> dict[str, Any]:
+    """One booking the caller is entitled to act on, or not_found.
+
+    Scoped in SQL rather than fetched and then checked: a booking that is not theirs is
+    not found, which is the same answer whether it exists or not. A PI may act on their
+    lab's bookings, an admin on any — the same ladder the read tools use.
+    """
+    row = s.execute(
+        text(
+            """SELECT b.id, b.user_id, b.instrument_id, b.starts_at, b.ends_at,
+                      b.status, b.account_code, i.name AS instrument,
+                      f.name AS facility, u.lab_id
+               FROM infinity.bookings b
+               JOIN infinity.instruments i ON i.id = b.instrument_id
+               JOIN infinity.facilities  f ON f.id = i.facility_id
+               JOIN infinity.users       u ON u.id = b.user_id
+               WHERE b.id = :bid"""
+        ),
+        {"bid": booking_id},
+    ).mappings().first()
+    if row is None:
+        raise not_found("booking")
+    if ctx.is_admin:
+        return dict(row)
+    if ctx.is_pi and row["lab_id"] in ctx.lab_ids:
+        return dict(row)
+    if row["user_id"] != ctx.user_id:
+        raise not_found("booking")
+    return dict(row)
+
+
+# A booking that is over, or already cancelled, is not something a cancellation acts on.
+# Saying so by name beats letting the write succeed and quietly change nothing.
+_UNCANCELLABLE = {
+    "cancelled": "That booking has already been cancelled.",
+    "completed": "That booking has already happened, so there is nothing to cancel.",
+}
+
+
+def cancel_booking(ctx: Ctx, booking_id: str, reason: str | None = None) -> dict[str, Any]:
+    """Propose cancelling a booking, with the charge the rules give and the rule itself.
+
+    The consequence is computed at propose time, not after approval, because that is the
+    thing the person is being asked to agree to. A card that says only "cancel booking
+    bk-0133" hides the 50% charge until it has already been taken.
+
+    Nothing here decides the charge: `policy.cancellation_outcome` reads the stored rules
+    and returns the one that applies, and its own wording travels onto the card.
+    """
+    from server.mcp import policy as policy_mod
+
+    with session_scope() as s:
+        booking = _owned_booking(s, ctx, booking_id)
+
+    refusal = _UNCANCELLABLE.get(booking["status"])
+    if refusal:
+        raise ToolError("conflict", refusal, "Ask the core facility admin if this is wrong.")
+
+    outcome = policy_mod.cancellation_outcome(booking["starts_at"], booking["ends_at"])
+    payload = {
+        "booking_id": booking_id,
+        "reason": reason,
+        # Stored so the audit row records what the user was shown, not merely what was
+        # done. A charge later disputed is answered by the card they approved.
+        "policy": outcome.to_dict(),
+    }
+    preview = (
+        f"Cancel {booking['instrument']} on {booking['starts_at'].date()} "
+        f"({booking['starts_at'].strftime('%H:%M')}–{booking['ends_at'].strftime('%H:%M')} "
+        f"UTC) — {policy_mod.describe(outcome)}"
+    )
+    return actions_mod.create_pending(ctx, "cancel_booking", payload, preview)
+
+
+# --- 19. reschedule_booking (write) ------------------------------------------------
+
+
+def reschedule_booking(ctx: Ctx, booking_id: str, starts_at: str,
+                       ends_at: str) -> dict[str, Any]:
+    """Propose moving a booking, showing that moving is a cancellation plus a new booking.
+
+    The rules define it that way, so the cancellation charge on the released time applies
+    and has to be on the card. Presenting a move as a neutral edit is how a user agrees to
+    a charge they were never shown.
+    """
+    from server.mcp import policy as policy_mod
+
+    start = _parse_dt(starts_at, "starts_at")
+    end = _parse_dt(ends_at, "ends_at")
+    if end <= start:
+        raise invalid_params("The end of the booking must be after its start.")
+    if (end - start) > timedelta(hours=12):
+        raise invalid_params("A single booking may not exceed 12 hours.")
+
+    with session_scope() as s:
+        booking = _owned_booking(s, ctx, booking_id)
+        if booking["status"] in _UNCANCELLABLE:
+            raise ToolError(
+                "conflict",
+                _UNCANCELLABLE[booking["status"]].replace("cancel", "move"),
+                "Book a new session instead.",
+            )
+        # The new slot must be free of everything except the booking being moved — which
+        # is about to release its own time and must not be treated as blocking itself.
+        clash = s.execute(
+            text(
+                """SELECT id FROM infinity.bookings
+                   WHERE instrument_id = :iid AND id <> :bid
+                     AND status IN ('requested', 'confirmed')
+                     AND starts_at < :end AND ends_at > :start LIMIT 1"""
+            ),
+            {"iid": booking["instrument_id"], "bid": booking_id, "start": start, "end": end},
+        ).first()
+        if clash:
+            raise ToolError(
+                "conflict",
+                "That slot overlaps an existing booking.",
+                "Use check_availability to find a free slot.",
+            )
+
+    outcome = policy_mod.cancellation_outcome(booking["starts_at"], booking["ends_at"])
+    payload = {
+        "booking_id": booking_id,
+        "starts_at": start.isoformat(),
+        "ends_at": end.isoformat(),
+        "policy": {
+            "release": outcome.to_dict(),
+            "reschedule": [s_.to_dict() for s_ in policy_mod.reschedule_statements()],
+        },
+    }
+    preview = (
+        f"Move {booking['instrument']} from {booking['starts_at'].date()} "
+        f"{booking['starts_at'].strftime('%H:%M')} to {start.date()} "
+        f"{start.strftime('%H:%M')}–{end.strftime('%H:%M')} UTC. "
+        f"Moving is treated as a cancellation plus a new booking: "
+        f"{policy_mod.describe(outcome)}"
+    )
+    return actions_mod.create_pending(ctx, "reschedule_booking", payload, preview)
+
+
+# --- 20. get_booking_policy (read) -------------------------------------------------
+
+
+def get_booking_policy(ctx: Ctx, subject: str | None = None,
+                       booking_id: str | None = None) -> dict[str, Any]:
+    """The booking rules as they stand, and — given a booking — what they mean for it.
+
+    Answers "what happens if I cancel?" without proposing anything. Every sentence comes
+    from a stored row that names the document and clause behind it, so the reply can be
+    checked against the policy a reader can open in Resources.
+    """
+    from server.mcp import policy as policy_mod
+
+    rules = policy_mod.statements(domain="booking", subject=subject)
+    result: dict[str, Any] = {
+        "count": len(rules),
+        "subject": subject,
+        "policy": [r.to_dict() for r in rules],
+    }
+    if booking_id:
+        with session_scope() as s:
+            booking = _owned_booking(s, ctx, booking_id)
+        outcome = policy_mod.cancellation_outcome(booking["starts_at"], booking["ends_at"])
+        result["booking"] = {
+            "id": booking["id"],
+            "instrument": booking["instrument"],
+            "starts_at": booking["starts_at"].isoformat(),
+            "ends_at": booking["ends_at"].isoformat(),
+            "status": booking["status"],
+        }
+        result["if_cancelled_now"] = outcome.to_dict()
+        result["summary"] = policy_mod.describe(outcome)
+    return result
+
+
 TOOLS: dict[str, ToolSpec] = {
     t.name: t
     for t in [
@@ -1604,6 +1783,21 @@ TOOLS: dict[str, ToolSpec] = {
                  "Rank instruments against a described goal, with the matching evidence.",
                  {"goal": "What the caller wants to do, in their own words.",
                   "sample_type": "Optional sample type the instrument must accept."}),
+        ToolSpec(18, "cancel_booking", cancel_booking, "T1", True,
+                 "Cancel a booking. The charge the rules give, and the rule itself, are "
+                 "on the approval card before anything is cancelled.",
+                 {"booking_id": "Booking id, e.g. bk-0133.",
+                  "reason": "Optional reason, recorded with the cancellation."}),
+        ToolSpec(19, "reschedule_booking", reschedule_booking, "T1", True,
+                 "Move a booking to a new slot. Treated by the rules as a cancellation "
+                 "plus a new booking, so the release charge is shown too.",
+                 {"booking_id": "Booking id to move.",
+                  "starts_at": "New ISO-8601 start.", "ends_at": "New ISO-8601 end."}),
+        ToolSpec(20, "get_booking_policy", get_booking_policy, "T0", False,
+                 "The booking rules in force — cancellation, reschedule, no-show, limits "
+                 "— and, given a booking, what cancelling it now would cost.",
+                 {"subject": "cancellation | reschedule | no_show | limits.",
+                  "booking_id": "Optional booking to evaluate the rules against."}),
     ]
 }
 

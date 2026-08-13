@@ -231,13 +231,31 @@ def test_app_role_can_do_its_job_but_owns_nothing(db):
             with app_engine.begin() as conn:
                 conn.execute(text(statement))
 
-        # ...but creating is the whole of it. It may not rewrite or remove platform
-        # history, touch a table outside those three, or reshape the database.
+        # Cancelling and moving a booking are part of the job too (migration 011), so the
+        # role may change a booking's status and times — and only those. This used to
+        # assert that no UPDATE was possible anywhere, which was true and left a user who
+        # could book through the assistant unable to cancel through it.
+        with app_engine.begin() as conn:
+            conn.execute(
+                text("UPDATE infinity.bookings SET status = 'cancelled' "
+                     "WHERE id = 'bk-roleprobe'")
+            )
+            conn.execute(
+                text("UPDATE infinity.bookings SET starts_at = '2030-01-02T09:00:00Z', "
+                     "ends_at = '2030-01-02T10:00:00Z' WHERE id = 'bk-roleprobe'")
+            )
+
+        # ...but that is the whole of it. It may not rewrite or remove platform history,
+        # touch a table outside those three, or reshape the database. The column-level
+        # grant is what stops a bug moving a charge onto someone else's account code:
+        # Postgres refuses rather than trusting the application to be careful.
         for statement in (
             "CREATE TABLE public.role_probe (id int)",
             "DROP TABLE infinity.bookings",
             "ALTER TABLE infinity.users ADD COLUMN role_probe int",
-            "UPDATE infinity.bookings SET status = 'cancelled'",
+            "UPDATE infinity.bookings SET account_code = 'ACC-B1'",
+            "UPDATE infinity.bookings SET user_id = 'u-bob'",
+            "UPDATE infinity.bookings SET instrument_id = 'ins-confocal-c3'",
             "DELETE FROM infinity.bookings WHERE id = 'bk-roleprobe'",
             "UPDATE infinity.users SET role = 'admin'",
             "INSERT INTO infinity.invoices (id, account_code, period, total) "
