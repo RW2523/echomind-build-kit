@@ -776,3 +776,15 @@ diminishing returns.
   what they had coming up was refused. And the bare word "policy" (from policy.statements,
   and from the fallback that splits a tool's own name) matched "parking permit policy",
   passing an off-topic question. Every new source now keys on phrasing specific to it.
+- 2026-08-13 | The row viewer refuses the corpus tables, not just the chunk text | The first
+  version blocked echomind.chunks and left echomind.knowledge_docs open — refusing the text
+  of a private note while handing over its title, its owner and its path on disk. /library
+  returns 404 for that same document to an admin as much as to anyone, so a console that
+  listed it had quietly become the way around the rule the rest of the system keeps. The
+  metadata is the disclosure. echomind.user_memory is refused for the same reason.
+- 2026-08-13 | Paging a relation with no primary key orders by every column | Ordering by
+  the first column alone put reporting.v_bookings' 200 rows into 25 groups and left Postgres
+  free to order within each however it liked, so page 2 repeated rows page 1 had shown and
+  dropped others — while the footer said nothing between them was dropped. Not a guaranteed
+  total order (identical rows stay tied), but the strongest a view can offer, and the
+  response names the columns it used so the reader can judge.

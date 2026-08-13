@@ -3,9 +3,9 @@ reaches it.
 
 Every claim the product makes about itself — the vendor's tables are never written SQL
 against, the agent's role holds SELECT on nine views and nothing else, a question is
-refused at a named stage by a named check — is currently something a reader has to take
-on trust or go and read the source for. This module is the alternative: the same claims,
-answered from the database and from the live registries rather than from prose.
+refused at a named stage by a named check — was something a reader had to take on trust
+or go and read the source for. This module answers them instead, from the database and
+from the live registries rather than from prose.
 
 That constraint is what shapes it. Schema purposes come from COMMENT ON SCHEMA, so they
 travel with the migration that changes them. Row counts are real counts. Grants come out
@@ -69,11 +69,6 @@ SPACES: tuple[str, ...] = (
 # fetched at all (see `_UNBROWSABLE`).
 CORPUS_TABLE = ("echomind", "chunks")
 
-# The two roles a request can run as. The owner role is deliberately absent: server/db.py
-# reserves it for migrations and seeding, and borrowing it to make the grants panel look
-# more complete would be this console breaking the rule it exists to display.
-_ROLES_QUERIED = ("echomind_app", "echomind_readonly")
-
 # Relations the row viewer will not page, and the reason a reader is shown instead.
 #
 # An admin console that can read anything is the easy design and the wrong one. The
@@ -87,6 +82,22 @@ _UNBROWSABLE: dict[tuple[str, str], str] = {
         "Not browsable: these rows are documents, some of them private to one user, and "
         "the retrieval filter is what keeps them that way. Read the corpus through "
         "Resources, where the same permission predicate applies."
+    ),
+    # The chunks were refused and their parent table was not, which refused the text of a
+    # private note while handing over its title, its owner and its path on disk. /library
+    # returns 404 for that same document — to an admin as much as anyone — so a console
+    # that lists it has quietly become the way around the rule the rest of the system
+    # keeps. The metadata is the disclosure.
+    ("echomind", "knowledge_docs"): (
+        "Not browsable: one row per document, including documents private to a single "
+        "user. Resources lists exactly the ones you may read, under the same permission "
+        "predicate the retriever uses."
+    ),
+    # Per-user memory: what one person told the assistant about themselves, which nobody
+    # else is entitled to read back.
+    ("echomind", "user_memory"): (
+        "Not browsable: these rows are what individual users told the assistant about "
+        "themselves, and they are readable only by the user they belong to."
     ),
 }
 
@@ -146,12 +157,21 @@ def _privilege_rank(name: str) -> tuple[int, str]:
             name)
 
 
-def _grants() -> dict[tuple[str, str], list[dict[str, Any]]]:
-    """Which role holds which privilege on which relation, asked of each role in turn."""
+def _grants() -> tuple[dict[tuple[str, str], list[dict[str, Any]]], list[str]]:
+    """Which role holds which privilege on which relation, asked of each role in turn.
+
+    Returns the roles that were asked alongside the answer. Reported rather than declared:
+    a deployment that provisioned different role names would otherwise get a panel naming
+    two roles it never spoke to. The owner role is not among them — server/db.py reserves
+    it for migrations, and borrowing it to make this look more complete would be the
+    console breaking the rule it exists to display.
+    """
     whole: dict[tuple[str, str, str], set[str]] = {}
     partial: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
+    asked: list[str] = []
 
     def collect(session) -> None:
+        asked.append(session.execute(text("SELECT current_user")).scalar_one())
         params = {"schemas": list(SPACES)}
         for row in session.execute(text(_GRANTS_SQL), params).mappings():
             key = (row["table_schema"], row["table_name"], row["grantee"])
@@ -182,7 +202,7 @@ def _grants() -> dict[tuple[str, str], list[dict[str, Any]]]:
                 ),
             }
         )
-    return found
+    return found, asked
 
 
 def _row_counts(relations: list[tuple[str, str]]) -> dict[tuple[str, str], int]:
@@ -252,7 +272,7 @@ def spaces(ctx: Ctx = Depends(require_admin)) -> dict:
 
     relations = [(row["table_schema"], row["table_name"]) for row in relation_rows]
     counts = _row_counts(relations)
-    grants = _grants()
+    grants, roles_queried = _grants()
 
     by_schema: dict[str, list[dict[str, Any]]] = {schema: [] for schema in SPACES}
     for row in relation_rows:
@@ -288,7 +308,7 @@ def spaces(ctx: Ctx = Depends(require_admin)) -> dict:
             for schema in SPACES
         ],
         # Which roles were asked, so the grants panel can say whose answer it is showing.
-        "roles_queried": _ROLES_QUERIED,
+        "roles_queried": roles_queried,
         "grants_source": "information_schema.role_table_grants",
     }
 
@@ -653,7 +673,14 @@ def rows(
         # where there is one; the first column otherwise, which is the best a view can
         # offer. Either way the answer says which, so a reader can see how stable the
         # order they are looking at actually is.
-        ordered_by = list(key) or [columns[0]["column_name"]]
+        # Every column when there is no primary key, not just the first. Ordering
+        # reporting.v_bookings by its first column put 200 rows into 25 groups and left
+        # Postgres free to order within each one however it liked, so page 2 repeated
+        # rows page 1 had already shown and dropped others entirely — while the response
+        # said the order was stable. A full column list is not a guaranteed total order
+        # either (two identical rows remain tied), but it is the strongest a view can
+        # offer, and `ordered_by` tells the reader exactly what it got.
+        ordered_by = list(key) or [c["column_name"] for c in columns]
         target = _qualified(schema, relation)
         order = ", ".join(_qualified_column(name) for name in ordered_by)
 

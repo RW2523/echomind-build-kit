@@ -211,10 +211,12 @@ export function DataSpaces() {
           </table>
         </div>
 
-        <div className="section-title">The views behind tool 11</div>
+        <div className="section-title">The relations behind tool 11</div>
         <p className="spaces-note">
           Not tools. These are reachable only through <code>run_readonly_sql</code>, and only
-          when the validator recognises the name written out in full.
+          when the validator recognises the name written out in full. Mostly views;{" "}
+          <code>policy.statements</code> is a real table, which is the point of it — the
+          rules are data a decision can cite, not prose it has to interpret.
         </p>
         <div className="table-wrap">
           <table>
@@ -344,9 +346,15 @@ export function DataSpaces() {
                     thing in `cap_note` for anything reading it without a browser; here
                     the window is spelled out instead, because the reader can see it. */}
                 <span className="rows-note">
-                  Rows {page.offset + 1}–{page.offset + page.returned} of{" "}
-                  {page.total.toLocaleString()} — at most {page.cap} per request, and
-                  nothing between them is dropped.
+                  {page.total === 0 ? (
+                    <>This relation is empty — no rows at all, rather than none shown.</>
+                  ) : (
+                    <>
+                      Rows {page.offset + 1}–{page.offset + page.returned} of{" "}
+                      {page.total.toLocaleString()} — at most {page.cap} per request, and
+                      nothing between them is dropped.
+                    </>
+                  )}
                 </span>
                 <span className="rows-pager">
                   <button
@@ -382,7 +390,9 @@ export function DataSpaces() {
         >
           <p className="doc-text">{openTool.purpose}</p>
 
-          <div className="section-title">What it returns</div>
+          <div className="section-title">
+            {openTool.write ? "What it takes" : "What it returns"}
+          </div>
           <dl className="fact-list">
             {Object.entries(openTool.reads).map(([field, meaning]) => (
               <div className="fact" key={field}>

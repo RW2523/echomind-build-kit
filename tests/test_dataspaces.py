@@ -150,6 +150,9 @@ def test_the_agents_read_only_role_is_shown_on_the_domain_views(client, tokens):
     is asked about itself. This is the assertion that fails if that is ever collapsed."""
     body = _admin(client, tokens, "/dataspaces")
     by_schema = {sp["schema"]: sp for sp in body["spaces"]}
+    # Reported from each session's current_user, not declared, so a deployment with
+    # different role names cannot end up with a panel naming roles it never spoke to.
+    assert body["roles_queried"] == ["echomind_app", "echomind_readonly"]
 
     for schema in ("reference", "scheduling", "activity", "billing", "policy"):
         assert "echomind_readonly" in by_schema[schema]["readable_by"], schema
