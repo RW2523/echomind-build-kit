@@ -12,5 +12,10 @@
     "resolveJsonModule": true,
     "allowImportingTsExtensions": true
   },
-  "include": ["src"]
+  // The tests are compiled beside the code they test. Without this a test could call a
+  // function with arguments of the wrong shape and still pass, which is exactly the kind
+  // of test that goes green while the screen stays broken. node:test and node:assert are
+  // declared in test/node-test.d.ts rather than pulled in with @types/node, which would
+  // put Node's globals into the compile of a browser application.
+  "include": ["src", "test"]
 }

@@ -1,3 +1,4 @@
+import { cellValue } from "../cells";
 import type { Card, CardItem, CardKind } from "../types";
 
 const KIND_LABEL: Record<CardKind, string> = {
@@ -55,12 +56,18 @@ export function ResultCard({ card }: { card: Card }) {
 
       {card.fields.length > 0 && (
         <dl className="card-fields">
-          {card.fields.map((f, i) => (
-            <div key={`f${i}`} className={`card-field${f.emphasis ? " is-emphasis" : ""}`}>
-              <dt>{f.label}</dt>
-              <dd>{f.value}</dd>
-            </div>
-          ))}
+          {card.fields.map((f, i) => {
+            /* A label with an empty value beside it is the worst shape this card can
+               take: it looks like a figure that rendered to nothing, and the reader has
+               no way to tell that apart from a figure of nothing. Absence gets a word. */
+            const value = cellValue(f.value);
+            return (
+              <div key={`f${i}`} className={`card-field${f.emphasis ? " is-emphasis" : ""}`}>
+                <dt>{f.label}</dt>
+                <dd className={value.missing ? "cell-missing" : undefined}>{value.text}</dd>
+              </div>
+            );
+          })}
         </dl>
       )}
 

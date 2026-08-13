@@ -104,6 +104,9 @@ export interface Turn {
   streamedText?: string;
   /** Every verification stage the server has announced, oldest first. */
   stages?: string[];
+  /** The reader ended the turn before its answer arrived. Not an error: nothing failed,
+   *  and the distinction is what stops a deliberate stop from reading as a fault. */
+  stopped?: boolean;
   error?: string;
   /** Set once the user approves or declines the turn's pending action. */
   decision?: { status: string; text?: string; actionId: string };

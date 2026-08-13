@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { actionRecords, decideAction, downloadDocument, type ActionResult } from "../api";
 import { Preview } from "./Preview";
+import { RowsTable } from "./RowsTable";
 import type { PendingAction } from "../types";
 
 interface Props {
@@ -193,26 +194,7 @@ export function ApprovalCard({ action, decision, earlier, onDecided }: Props) {
           } from the platform went into this document`}
           onClose={() => setSourceOpen(false)}
         >
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  {Object.keys(result.records[0]).map((column) => (
-                    <th key={column}>{column.replace(/_/g, " ")}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {result.records.map((row, i) => (
-                  <tr key={i}>
-                    {Object.keys(result.records![0]).map((column) => (
-                      <td key={column}>{String(row[column] ?? "")}</td>
-                    ))}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <RowsTable rows={result.records} label="Records used to build this document" />
           {result.records_truncated ? (
             <div className="sql">
               Showing the first {result.records.length} of {result.record_count}.

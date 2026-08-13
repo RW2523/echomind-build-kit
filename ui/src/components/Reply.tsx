@@ -1,11 +1,15 @@
 import { Preview } from "./Preview";
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { chunkText } from "../api";
 import { asCard } from "../card";
+import { citationCopyText } from "../clipboard";
 import { clarifyOptions } from "../clarify";
 import type { AgentResponse, Citation } from "../types";
-import { CloseIcon, ShieldIcon } from "./icons";
+import { ShieldIcon } from "./icons";
+import { CopyButton } from "./CopyButton";
+import { FollowUps } from "./FollowUps";
 import { ResultCard } from "./ResultCard";
+import { RowsTable } from "./RowsTable";
 
 /**
  * A redirect deliberately carries no badge.
@@ -98,16 +102,25 @@ function CitedText({ text, citations, onOpen }: {
 function Sources({ text, citations }: { text: string; citations: Citation[] }) {
   const [open, setOpen] = useState<Citation | null>(null);
   const [body, setBody] = useState<string>("");
+  const [unavailable, setUnavailable] = useState(false);
   const [loading, setLoading] = useState(false);
 
   async function show(citation: Citation) {
     setOpen(citation);
+    setUnavailable(false);
     setLoading(true);
     try {
       const chunk = await chunkText(citation.chunk_id);
       setBody(chunk.text);
+      setUnavailable(false);
     } catch {
-      setBody("This source is no longer available to you.");
+      // Not into `body`: that string is rendered in <pre class="source-text">, the same
+      // element and styling as a real passage, under the document's own title and
+      // breadcrumb. A reader checking a claim would have been shown the UI's apology in
+      // the position of the quotation, and Copy would have copied it as though it were
+      // the source. An error about the source is not the source.
+      setBody("");
+      setUnavailable(true);
     } finally {
       setLoading(false);
     }
@@ -128,7 +141,25 @@ function Sources({ text, citations }: { text: string; citations: Citation[] }) {
       )}
       {open && (
         <Preview title={open.title} subtitle={open.breadcrumb} onClose={() => setOpen(null)}>
-          <pre className="source-text">{loading ? "Loading source…" : body}</pre>
+          {unavailable ? (
+            <p className="source-missing" role="status">
+              This source is no longer available to you. Nothing is shown here rather than
+              something that is not the passage.
+            </p>
+          ) : (
+            <pre className="source-text">{loading ? "Loading source…" : body}</pre>
+          )}
+          {/* The passage is the thing worth taking away — into a ticket, an email to the
+              core, a note beside a decision — and it travels with the reference that lets
+              whoever receives it find the same clause. */}
+          {!loading && (
+            <div className="preview-tools">
+              <CopyButton
+                value={citationCopyText(open, body)}
+                what={`source ${open.index}`}
+              />
+            </div>
+          )}
         </Preview>
       )}
     </>
@@ -165,32 +196,19 @@ function Evidence({ response }: { response: AgentResponse }) {
           subtitle={`${label} returned from the platform`}
           onClose={() => setOpen(false)}
         >
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  {columns.map((c) => (
-                    <th key={c}>{c.replace(/_/g, " ")}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {shown.map((row, i) => (
-                  <tr key={i}>
-                    {columns.map((c) => (
-                      <td key={c}>{String(row[c] ?? "")}</td>
-                    ))}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <RowsTable columns={columns} rows={shown} label="Rows behind this answer" />
           {count > shown.length && (
             <div className="sql">…and {count - shown.length} more rows</div>
           )}
           {response.executed_sql && (
             <div className="sql-block">
-              <div className="crumb">The query that produced these rows</div>
+              <div className="sql-block-head">
+                <div className="crumb">The query that produced these rows</div>
+                {/* Copyable because the point of showing it is that someone can run it
+                    themselves; a query that has to be retyped from the screen is a query
+                    that gets retyped wrong. */}
+                <CopyButton value={response.executed_sql} what="the query" />
+              </div>
               <div className="sql">{response.executed_sql}</div>
             </div>
           )}
@@ -207,14 +225,22 @@ function Evidence({ response }: { response: AgentResponse }) {
  * message through the normal graph, so nothing here can smuggle a selection past the
  * permission checks that a typed question would have gone through.
  */
-function Options({ text, onSend }: { text: string; onSend: (message: string) => void }) {
+function Options({
+  text,
+  onSend,
+  busy,
+}: {
+  text: string;
+  onSend: (message: string) => void;
+  busy?: boolean;
+}) {
   const options = clarifyOptions(text);
   if (!options.length) return null;
 
   return (
     <div className="options">
       {options.map((option) => (
-        <button key={option} className="option" onClick={() => onSend(option)}>
+        <button key={option} className="option" disabled={busy} onClick={() => onSend(option)}>
           {option}
         </button>
       ))}
@@ -233,9 +259,13 @@ const PANEL: Record<string, string> = {
 export function Reply({
   response,
   onSend,
+  busy,
 }: {
   response: AgentResponse;
   onSend?: (message: string) => void;
+  /** True while a later turn is streaming. Anything here that would start a new turn is
+   *  inert until it finishes, so it is shown as inert rather than quietly ignoring clicks. */
+  busy?: boolean;
 }) {
   const panel = PANEL[response.response_type] ?? "";
   const badge = BADGES[response.response_type] ?? "";
@@ -246,10 +276,13 @@ export function Reply({
       {badge && <div className="badge">{badge}</div>}
       <Sources text={response.text} citations={response.citations} />
       {response.response_type === "clarify" && onSend && (
-        <Options text={response.text} onSend={onSend} />
+        <Options text={response.text} onSend={onSend} busy={busy} />
       )}
       {card && <ResultCard card={card} />}
       <Evidence response={response} />
+      {/* Last, under the evidence: the answer and the way to check it come first, and an
+          offer of what to do next is only useful once both have been read. */}
+      {onSend && <FollowUps response={response} onSend={onSend} busy={busy} />}
     </div>
   );
 }

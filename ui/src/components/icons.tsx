@@ -69,6 +69,18 @@ export const SendIcon = (p: Props) =>
 
 export const CloseIcon = (p: Props) => svg(<path d="M6 6l12 12M18 6 6 18" />, p);
 
+/** A square, not a cross: this stops the turn in flight, it does not dismiss anything. */
+export const StopIcon = (p: Props) => svg(<rect x="7" y="7" width="10" height="10" rx="1.5" />, p);
+
+export const ArrowDownIcon = (p: Props) =>
+  svg(
+    <>
+      <path d="M12 5v14" />
+      <path d="m6 13 6 6 6-6" />
+    </>,
+    p,
+  );
+
 export const TrashIcon = (p: Props) =>
   svg(
     <>

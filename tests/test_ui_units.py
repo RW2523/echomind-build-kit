@@ -7,11 +7,17 @@ test suite nobody runs is the same as not having one — so the UI's unit tests 
 pytest, from the same command that runs everything else.
 
 They are Node's own test runner over the TypeScript sources, with no test framework added
-to ui/package.json — this repo pins its stack, and a chip-derivation function does not
-need a browser, a DOM shim or a runner to be tested. `npm test` runs two things: the pure
-decisions (node strips the types and runs them directly), and a render smoke test that
-puts the real components through react-dom/server and reads the markup, which is the only
-check that can see a component built, imported, and never actually drawn.
+to ui/package.json — this repo pins its stack. `npm test` runs three things:
+
+  test:units   the pure decisions — which chips an answer earns, what an absent value
+               renders as, what a keypress means. Node strips the types and runs them.
+  test:render  the real components through react-dom/server, reading the markup. This is
+               the only check that can see a component built, imported, and never drawn.
+  test:dom     the real App in a jsdom browser, driven by real events over the real
+               api.ts with only `fetch` stubbed. It covers the seam the other two cannot:
+               whether a keypress, a click or a focus hand-off is actually wired to the
+               decision that was unit-tested. Escape-to-stop and the follow-up chips are
+               verified here rather than by hand.
 """
 
 from __future__ import annotations
@@ -59,9 +65,12 @@ def test_the_ui_test_files_are_all_reachable_from_npm_test():
     import json
 
     scripts = json.loads((UI / "package.json").read_text(encoding="utf-8"))["scripts"]
+    # Every script is scanned rather than a named few: a test file added together with a
+    # new runner script it is the only user of would otherwise be checked against a list
+    # that does not mention it, and pass by being invisible to both.
     ran = set()
-    for name in ("test:units", "test:render"):
-        for part in scripts[name].split():
+    for command in scripts.values():
+        for part in command.split():
             if part.startswith("test/"):
                 ran.update(p.name for p in UI.glob(part))
 

@@ -14,18 +14,28 @@ import { DataSpaces } from "./components/DataSpaces";
 import { Library } from "./components/Library";
 import { ApprovalCard } from "./components/ApprovalCard";
 import {
+  ArrowDownIcon,
   AssistantMark,
   CheckIcon,
   CopyIcon,
   PanelIcon,
   PlusIcon,
   SendIcon,
-  SpinnerIcon,
+  StopIcon,
   TrashIcon,
   UploadIcon,
 } from "./components/icons";
 import { Reply } from "./components/Reply";
 import { StageTrail } from "./components/StageTrail";
+import { copyText } from "./clipboard";
+import {
+  composerIntent,
+  recall,
+  shouldStickToBottom,
+  shouldStopStream,
+  type KeyLike,
+} from "./composer";
+import { openersFor } from "./openers";
 import { useTheme, type ThemeChoice } from "./theme";
 import type { AgentResponse, DemoUser, Turn, UploadRecord } from "./types";
 
@@ -39,52 +49,6 @@ const COMPOSER_MAX_PX = 208;
 
 /** Below this the rail cannot sit beside the conversation, so it becomes a drawer. */
 const WIDE = "(min-width: 900px)";
-
-interface Suggestion {
-  text: string;
-  /** What the question demonstrates. Written by the UI, never sourced from an answer. */
-  note: string;
-}
-
-/**
- * The four openers, in the order a first-time reader should meet them: find a place,
- * choose an instrument, see your own money, read the policy behind a charge.
- */
-const BASE_SUGGESTIONS: Suggestion[] = [
-  // No opener carries a location, so no answer to one can carry a distance. The note
-  // said "with distance" and the card that came back never had one — a promise the
-  // product broke in the first thing a new reader clicks.
-  { text: "Where is the nearest core that can do cryo-EM?", note: "Facilities · where and what" },
-  { text: "I want to image live cells — what should I use?", note: "Instruments · by technique" },
-  { text: "What is on my March invoice?", note: "Invoice · your charges only" },
-  {
-    text: "What am I charged if I cancel a booking 12 hours before it starts?",
-    note: "Policy · with the passage",
-  },
-];
-
-/** Each identity keeps one opener that only makes sense as that person — the refusal for
- *  Bob, the lab-wide read for Asha, the approval for Cora. That is the demo's whole point. */
-const SUGGESTIONS: Record<string, Suggestion[]> = {
-  alice: BASE_SUGGESTIONS,
-  bob: [
-    ...BASE_SUGGESTIONS.slice(0, 3),
-    { text: "Show me alice's bookings", note: "Permissions · refused, not answered" },
-  ],
-  asha: [
-    ...BASE_SUGGESTIONS.slice(0, 2),
-    { text: "Why was lab A charged $412 in March?", note: "Usage · traced to the bookings" },
-    { text: "Show me lab A's usage this month", note: "Usage · your labs only" },
-  ],
-  cora: [
-    ...BASE_SUGGESTIONS.slice(0, 2),
-    {
-      text: "Which instrument had the most downtime in March 2026?",
-      note: "Usage · across all cores",
-    },
-    { text: "Generate the monthly summary for 2026-03", note: "Document · waits for approval" },
-  ],
-};
 
 const THEME_LABELS: { value: ThemeChoice; label: string }[] = [
   { value: "system", label: "Auto" },
@@ -111,6 +75,24 @@ function ThemeToggle() {
 }
 
 /**
+ * A keyboard event as the decision functions want it.
+ *
+ * Written out field by field rather than spread: `key`, `shiftKey` and the rest live on
+ * KeyboardEvent's prototype, so `{...event}` copies none of them and every rule would
+ * silently see `undefined` — a bug that looks exactly like "the shortcut does nothing".
+ */
+function keyLike(event: KeyboardEvent): KeyLike {
+  return {
+    key: event.key,
+    shiftKey: event.shiftKey,
+    altKey: event.altKey,
+    ctrlKey: event.ctrlKey,
+    metaKey: event.metaKey,
+    isComposing: event.isComposing,
+  };
+}
+
+/**
  * The hover row under a finished reply.
  *
  * Copy is the only action here on purpose: everything else a reader might want — the
@@ -126,34 +108,11 @@ function TurnActions({ text }: { text: string }) {
     return () => window.clearTimeout(timer);
   }, [copied]);
 
-  async function copy() {
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopied(true);
-    } catch {
-      // Clipboard access is refused outside a secure context. Fall back to a selection
-      // the reader can copy themselves rather than silently doing nothing.
-      const area = document.createElement("textarea");
-      area.value = text;
-      area.setAttribute("readonly", "");
-      area.style.position = "fixed";
-      area.style.opacity = "0";
-      document.body.appendChild(area);
-      area.select();
-      try {
-        setCopied(document.execCommand("copy"));
-      } catch {
-        setCopied(false);
-      }
-      document.body.removeChild(area);
-    }
-  }
-
   return (
     <div className="turn-actions">
       <button
         className="icon-btn icon-btn--sm"
-        onClick={() => void copy()}
+        onClick={() => void copyText(text).then(setCopied)}
         aria-label={copied ? "Reply copied" : "Copy reply"}
         title={copied ? "Copied" : "Copy"}
       >
@@ -186,11 +145,20 @@ export default function App() {
     return localStorage.getItem(RAIL_KEY) !== "closed";
   });
 
+  /** Where the reader is in their own history, or null while writing something new. */
+  const [recallCursor, setRecallCursor] = useState<number | null>(null);
+  /** Mirrors `stick` for rendering only. The ref stays the authority for the scroll
+   *  effect — reading React state there would act on the value from the previous frame. */
+  const [followingTail, setFollowingTail] = useState(true);
+
   const fileRef = useRef<HTMLInputElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const railRef = useRef<HTMLElement>(null);
   const railToggleRef = useRef<HTMLButtonElement>(null);
+  const stopRef = useRef<HTMLButtonElement>(null);
+  /** The turn in flight, so Escape and the Stop button can end it. */
+  const streamRef = useRef<{ id: string; controller: AbortController } | null>(null);
   /** False once the reader scrolls up: a transcript that yanks itself back down while
    *  someone is reading an earlier answer is unusable. */
   const stick = useRef(true);
@@ -204,13 +172,25 @@ export default function App() {
     if (!window.matchMedia(WIDE).matches) setRailOpen(false);
   }, []);
 
+  /** Drops the turn in flight without saying anything about it — for when the transcript
+   *  it belonged to is going away. Stopping is a statement to the reader; this is not. */
+  const abandonStream = useCallback(() => {
+    streamRef.current?.controller.abort();
+    streamRef.current = null;
+  }, []);
+
   const switchUser = useCallback(async (handle: string, restore = false) => {
+    // Whatever is still arriving belongs to the person who asked it, and they are about
+    // to stop being the person on screen.
+    abandonStream();
     const { token, user } = await loginAs(handle);
     setToken(token);
     setCurrent(user);
     setView("chat");
     setUploadNote(null);
     setError(null);
+    setRecallCursor(null);
+    setFollowingTail(true);
     dismissDrawer();
 
     // Switching identity starts a fresh thread (spec 07) — a conversation belongs to
@@ -223,7 +203,29 @@ export default function App() {
         setThreadId(stored);
         setTurns(
           snapshot.message && snapshot.response
-            ? [{ id: "restored", question: snapshot.message, response: snapshot.response }]
+            ? [{
+                id: "restored",
+                question: snapshot.message,
+                response: snapshot.response,
+                // The server says whether the action is still waiting; without this the
+                // restored turn drew a live approval card — "Awaiting your approval",
+                // "Nothing is written until you approve" — over a booking that had
+                // already been made, with buttons that posted to /actions/undefined.
+                // A refresh is the most ordinary thing a person does, and it was turning
+                // a completed write back into a decision they appeared not to have taken.
+                //
+                // The status is deliberately vague: the snapshot records that the action
+                // was decided, not which way, so the card says "decided" rather than
+                // guessing "executed" and claiming something happened that may have been
+                // declined.
+                decision: snapshot.response.pending_action && !snapshot.awaiting_approval
+                  ? {
+                      status: "decided",
+                      text: undefined,
+                      actionId: snapshot.response.pending_action.action_id ?? "",
+                    }
+                  : undefined,
+              }]
             : [],
         );
       } catch {
@@ -241,7 +243,7 @@ export default function App() {
     } catch {
       setUploads([]);
     }
-  }, [dismissDrawer]);
+  }, [dismissDrawer, abandonStream]);
 
   useEffect(() => {
     void (async () => {
@@ -307,21 +309,82 @@ export default function App() {
   }, [draft, sending]);
 
   useEffect(() => {
-    if (!sending && view === "chat") textareaRef.current?.focus();
+    if (sending || view !== "chat") return;
+    // Not while a preview is over the conversation. Opening a source or the evidence
+    // table while a turn streams is an ordinary thing to do, and when the turn finished
+    // this pulled focus out of the dialog and into the composer behind it — so a whole
+    // message could be typed and sent from a field the reader could not see, under a
+    // modal that still said aria-modal="true".
+    if (document.querySelector('[role="dialog"][aria-modal="true"]')) return;
+    textareaRef.current?.focus();
   }, [sending, view]);
 
   function onTranscriptScroll() {
     const el = scrollRef.current;
     if (!el) return;
-    stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 140;
+    const following = shouldStickToBottom(el);
+    stick.current = following;
+    setFollowingTail((was) => (was === following ? was : following));
   }
+
+  function jumpToLatest() {
+    const el = scrollRef.current;
+    if (!el) return;
+    stick.current = true;
+    setFollowingTail(true);
+    el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+  }
+
+  /* Ends the turn in flight. The stream stops at once; the lookup behind it is already
+     running on the server and will finish there, so the turn is marked "stopped" rather
+     than "cancelled" — the difference matters in a product whose whole claim is that it
+     does not say more than it knows. Nothing can have been written: a write only ever
+     happens through the approval card, which this turn never reached. */
+  const stopStreaming = useCallback(() => {
+    const live = streamRef.current;
+    if (!live) return;
+    streamRef.current = null;
+    live.controller.abort();
+    setTurns((prev) =>
+      prev.map((t) =>
+        t.id === live.id ? { ...t, streaming: false, stages: undefined, stopped: true } : t,
+      ),
+    );
+  }, []);
+
+  /* Escape reaches the turn from wherever the reader's focus happens to be — including
+     the composer, which is disabled while a turn runs and so cannot receive the key
+     itself. A preview open over the conversation takes it first; see shouldStopStream. */
+  useEffect(() => {
+    if (!sending) return;
+    const onKey = (e: KeyboardEvent) => {
+      const open = document.querySelector('[role="dialog"]') !== null;
+      if (!shouldStopStream(keyLike(e), { sending, dialogOpen: open })) return;
+      e.preventDefault();
+      stopStreaming();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [sending, stopStreaming]);
+
+  /* The composer is disabled while the turn runs, and disabling a focused element blurs
+     it — leaving a keyboard reader at the top of the document, one tab away from a Stop
+     button they cannot see. Focus follows the control that replaced it, and the effect
+     below hands it back to the composer when the turn ends. */
+  useEffect(() => {
+    if (sending) stopRef.current?.focus();
+  }, [sending]);
 
   async function send(message: string) {
     if (!message.trim() || sending) return;
     const id = `${Date.now()}`;
+    const controller = new AbortController();
+    streamRef.current = { id, controller };
     setDraft("");
+    setRecallCursor(null);
     setSending(true);
     stick.current = true;
+    setFollowingTail(true);
     setTurns((prev) => [
       ...prev,
       { id, question: message, streaming: true, streamedText: "", stages: [] },
@@ -330,24 +393,37 @@ export default function App() {
     const patch = (fn: (turn: Turn) => Turn) =>
       setTurns((prev) => prev.map((t) => (t.id === id ? fn(t) : t)));
 
-    await streamChat(message, threadId, {
-      // The trail keeps every stage rather than replacing one with the next: the point of
-      // showing the work is that the reader can see the access check happened, and a
-      // stage that flashes past for 400ms was never seen.
-      onStatus: (stage) =>
-        patch((t) => {
-          const stages = t.stages ?? [];
-          if (stages[stages.length - 1] === stage) return t;
-          return { ...t, stages: [...stages, stage] };
-        }),
-      onToken: (text) => patch((t) => ({ ...t, streamedText: (t.streamedText ?? "") + text })),
-      onFinal: (response: AgentResponse) => {
-        if (response.thread_id) setThreadId(response.thread_id);
-        patch((t) => ({ ...t, response, streaming: false, stages: undefined }));
-      },
-      onError: (msg) => patch((t) => ({ ...t, streaming: false, error: msg })),
-    });
-    setSending(false);
+    try {
+      await streamChat(
+        message,
+        threadId,
+        {
+          // The trail keeps every stage rather than replacing one with the next: the point
+          // of showing the work is that the reader can see the access check happened, and a
+          // stage that flashes past for 400ms was never seen.
+          onStatus: (stage) =>
+            patch((t) => {
+              const stages = t.stages ?? [];
+              if (stages[stages.length - 1] === stage) return t;
+              return { ...t, stages: [...stages, stage] };
+            }),
+          onToken: (text) => patch((t) => ({ ...t, streamedText: (t.streamedText ?? "") + text })),
+          onFinal: (response: AgentResponse) => {
+            if (response.thread_id) setThreadId(response.thread_id);
+            patch((t) => ({ ...t, response, streaming: false, stages: undefined }));
+          },
+          onError: (msg) => patch((t) => ({ ...t, streaming: false, error: msg })),
+          // stopStreaming has already marked the turn; there is nothing to report.
+          onAborted: () => undefined,
+        },
+        controller.signal,
+      );
+    } finally {
+      // In a finally because an exception on the way out used to leave `sending` true
+      // for good: the composer stayed disabled and the only way back was a reload.
+      if (streamRef.current?.id === id) streamRef.current = null;
+      setSending(false);
+    }
   }
 
   async function onUpload(file: File) {
@@ -361,15 +437,22 @@ export default function App() {
   }
 
   function newConversation() {
+    // A turn whose transcript is about to be thrown away has nowhere to arrive. Left
+    // running it goes on streaming an answer into a conversation that no longer exists.
+    abandonStream();
     setTurns([]);
     setThreadId(null);
     setView("chat");
+    setRecallCursor(null);
+    setFollowingTail(true);
     stick.current = true;
     dismissDrawer();
   }
 
   const isAdmin = current?.role === "admin";
-  const suggestions = SUGGESTIONS[current?.handle ?? ""] ?? BASE_SUGGESTIONS;
+  const suggestions = openersFor(current);
+  /** What this person has already asked, oldest first — the list Up walks back through. */
+  const asked = turns.map((t) => t.question);
 
   return (
     <div className={`app${railOpen ? " rail-open" : ""}`}>
@@ -614,11 +697,25 @@ export default function App() {
                     <div className="turn-body">
                       {turn.streaming && (
                         <div className="reply reply--working">
-                          {turn.streamedText ? (
+                          {/* The trail stays on screen once the prose starts arriving
+                              rather than being replaced by it: what the turn is doing is
+                              worth seeing for the whole turn, and a reader who looked away
+                              during the checks should not find the record of them gone. */}
+                          <StageTrail
+                            stages={turn.stages ?? []}
+                            compact={Boolean(turn.streamedText)}
+                          />
+                          {turn.streamedText && (
                             <p className="reply-text is-streaming">{turn.streamedText}</p>
-                          ) : (
-                            <StageTrail stages={turn.stages ?? []} />
                           )}
+                        </div>
+                      )}
+
+                      {turn.stopped && (
+                        <div className="reply reply--stopped" role="status">
+                          Stopped — the answer was not shown. The lookup may already have
+                          finished on the server; nothing is ever written without your
+                          approval.
                         </div>
                       )}
 
@@ -630,7 +727,11 @@ export default function App() {
 
                       {turn.response && (
                         <>
-                          <Reply response={turn.response} onSend={(text) => void send(text)} />
+                          <Reply
+                            response={turn.response}
+                            onSend={(text) => void send(text)}
+                            busy={sending}
+                          />
                           {turn.response.pending_action && (
                             <ApprovalCard
                               action={turn.response.pending_action}
@@ -665,6 +766,13 @@ export default function App() {
             </div>
 
             <div className="dock">
+              {/* Only while the reader has left the tail. It is a way back, not a nag. */}
+              {!followingTail && turns.length > 0 && (
+                <button className="jump-latest" type="button" onClick={jumpToLatest}>
+                  <ArrowDownIcon />
+                  Jump to latest
+                </button>
+              )}
               <form
                 className={`composer${sending ? " is-busy" : ""}`}
                 onSubmit={(e) => {
@@ -681,29 +789,64 @@ export default function App() {
                   placeholder={
                     sending ? "Checking the records…" : "Ask about facilities, instruments, bookings, billing, policies…"
                   }
-                  onChange={(e) => setDraft(e.target.value)}
+                  onChange={(e) => {
+                    setDraft(e.target.value);
+                    // Typing leaves the history walk: from here Up is a caret key again,
+                    // so an edited draft cannot be swallowed by the next Up.
+                    setRecallCursor(null);
+                  }}
                   onKeyDown={(e) => {
-                    // isComposing guards the IME: Enter mid-composition commits a
-                    // candidate, it does not mean "send".
-                    if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+                    const intent = composerIntent(
+                      {
+                        key: e.key,
+                        shiftKey: e.shiftKey,
+                        altKey: e.altKey,
+                        ctrlKey: e.ctrlKey,
+                        metaKey: e.metaKey,
+                        // isComposing guards the IME: Enter mid-composition commits a
+                        // candidate, it does not mean "send".
+                        isComposing: e.nativeEvent.isComposing,
+                      },
+                      { draft, recalling: recallCursor !== null },
+                    );
+                    if (intent === "send") {
                       e.preventDefault();
                       void send(draft);
+                    } else if (intent === "older" || intent === "newer") {
+                      e.preventDefault();
+                      const next = recall(asked, recallCursor, intent);
+                      setRecallCursor(next.cursor);
+                      setDraft(next.draft);
                     }
                   }}
                 />
-                <button
-                  className="send-btn"
-                  type="submit"
-                  disabled={sending || !draft.trim()}
-                  aria-label={sending ? "Working" : "Send"}
-                  title={sending ? "Working…" : "Send"}
-                >
-                  {sending ? <SpinnerIcon /> : <SendIcon />}
-                </button>
+                {sending ? (
+                  <button
+                    ref={stopRef}
+                    className="send-btn send-btn--stop"
+                    type="button"
+                    onClick={stopStreaming}
+                    aria-label="Stop this turn"
+                    title="Stop (Esc)"
+                  >
+                    <StopIcon />
+                  </button>
+                ) : (
+                  <button
+                    className="send-btn"
+                    type="submit"
+                    disabled={!draft.trim()}
+                    aria-label="Send"
+                    title="Send"
+                  >
+                    <SendIcon />
+                  </button>
+                )}
               </form>
               <p className="hint">
-                Verified or silent — answers carry their sources, and write actions wait
-                for your approval.
+                {sending
+                  ? "Esc stops this turn. Nothing is written without your approval."
+                  : "Verified or silent — answers carry their sources, and write actions wait for your approval."}
               </p>
             </div>
           </div>

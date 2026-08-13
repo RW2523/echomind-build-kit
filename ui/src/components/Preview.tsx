@@ -17,10 +17,17 @@ export function Preview({
   children: React.ReactNode;
 }) {
   const closeRef = useRef<HTMLButtonElement>(null);
+  // Every caller passes a fresh arrow, so `onClose` has a new identity on each parent
+  // render. With it in the dependency list the whole effect tore down and re-ran once
+  // per streamed token — re-locking scroll and yanking focus back to the close button,
+  // off whatever the reader was actually using inside the dialog. The ref keeps the
+  // latest callback without making the effect depend on its identity.
+  const closeHandler = useRef(onClose);
+  closeHandler.current = onClose;
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape") closeHandler.current();
     };
     window.addEventListener("keydown", onKey);
     // The page behind must not scroll while a preview is over it.
@@ -36,7 +43,8 @@ export function Preview({
       document.body.style.overflow = previous;
       opener?.focus?.();
     };
-  }, [onClose]);
+    // Mounts once: see closeHandler above.
+  }, []);
 
   return (
     <div className="preview-backdrop" onClick={onClose} role="presentation">

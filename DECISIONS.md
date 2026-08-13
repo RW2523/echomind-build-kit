@@ -860,3 +860,83 @@ diminishing returns.
   cannot answer at all, because the training policy says what training requires and not
   whether this person has it. First person plus a noun the platform holds about them now
   routes deterministically. "What is the training policy?" has no first person and stays.
+- 2026-08-13 | Suggested next steps are derived in the UI, from the payload, or not shown |
+  The chat surface ends every turn with nothing to do next. The chips are read out of what
+  the response actually carries — meta.plan.tool, meta.result_facts, the rows, the card —
+  and each one sends its own sentence through the normal chat path, so nothing bypasses the
+  router, the tool tiers or the approval card. No server field was added: everything the
+  rules need is already on the wire. Each rule was run against the live API and kept only
+  if the question it asks is answered well; "what would cancelling bk-0133 cost me?" came
+  back as a dump of every booking and was dropped rather than shipped hopefully. Values
+  are quoted, never composed: ui/test/followups.test.ts asserts that every value in every
+  chip appears in the payload it was derived from.
+- 2026-08-13 | An absent value is named, in one place | String(row[c] ?? "") printed an
+  empty cell for null and "[object Object]" for a facilities row's instrument list. cells.ts
+  decides absence once — null, undefined, and whitespace-only strings, and deliberately not
+  0 or false — and both tables and the card fields go through it. A recorded zero is still
+  a zero: hiding it would be the same failure the house rule names, in the other direction.
+- 2026-08-13 | The only "derived" mark is the platform's own | The card contract carries no
+  provenance flag and the rows carry no annotation, so nothing is inferred. What does exist
+  is reference.v_devices publishing derived_half_day_rate and derived_day_rate — named that
+  way by 009_domain_spaces.sql precisely so nobody reads them as a published tariff — and
+  that prefix is carried to the column header as a mark.
+- 2026-08-13 | Escape stops the stream; it does not cancel the turn | /chat/stream has no
+  cancel endpoint and the turn is already running in a worker thread, so aborting the fetch
+  ends the stream and nothing else. The UI says exactly that ("the lookup may already have
+  finished on the server") rather than claiming a cancellation it cannot perform. A write
+  is impossible either way: it needs an approval this path never reaches.
+- 2026-08-13 | UI tests run under node, from pytest | No vitest, no jest, no DOM shim: the
+  pure decisions are plain functions run by node --test over the TypeScript, and a render
+  smoke test puts the real components through react-dom/server (bundled with the esbuild
+  vite already installs) to catch the one thing a pure test cannot — a component built,
+  imported, and never actually drawn, which is how a modal shipped that no button opened.
+  tests/test_ui_units.py runs both, so `make test` is still the single gate, and a second
+  test pins the file naming to the script that globs it.
+- 2026-08-13 | The chat surface is verified in a real DOM, not by hand | The pure decisions
+  and the static markup were both tested, and neither can see the seam between them: a
+  handler bound to nothing, an onSend that never reaches a chip, a focus hand-off that was
+  written and never runs. ui/test/interaction.dom.tsx mounts the real App in jsdom and
+  drives real events over the real api.ts with only `fetch` stubbed, so streamChat's SSE
+  framing and abort handling stay inside what is tested. jsdom is a devDependency; the
+  hand-written declarations in test/support/jsdom.d.ts keep @types/node (and Node's globals)
+  out of a browser application's compile, the same reason node-test.d.ts exists.
+- 2026-08-13 | The DOM env is its own module, imported first | react-dom decides at load
+  time whether a browser exists and caches the answer. Setting the globals after it loads
+  sends change events down an Internet Explorer polyfill and fails with
+  `activeElement.attachEvent is not a function`, which reads as a component bug. Import
+  order is the fix, so it cannot live inside the file that needs it.
+- 2026-08-13 | Identity of DOM nodes is asserted without assert.equal | A failing
+  `assert.equal(activeElement, button)` builds a diff of two jsdom object graphs and takes
+  long enough to look like a hang. Found while mutation-testing: two genuinely caught
+  regressions were reported as missed because the run timed out instead of failing.
+- 2026-08-13 | A follow-up chip is disabled while a turn is in flight | send() refuses a
+  second turn, so a chip left enabled takes the click and does nothing — indistinguishable
+  from broken. Focus is safe to lose there because the shell moves it to Stop when a turn
+  starts. The same applies to clarify options.
+- 2026-08-13 | A restored turn asks the server whether its action is still pending |
+  /threads/{id} returns awaiting_approval; it was declared in api.ts and read nowhere, so a
+  page refresh drew a live approval card — "Awaiting your approval", "Nothing is written
+  until you approve" — over a booking that had already been made, beneath a reply saying it
+  was done. A decided action's checkpointed payload is the database row, so action_id was
+  undefined and Approve posted to /actions/undefined/approve. A refresh is the most
+  ordinary thing a person does, and it was turning a completed write back into a decision
+  they appeared not to have taken. The card says "decided" rather than guessing "executed":
+  the snapshot records that it was decided, not which way.
+- 2026-08-13 | The composer does not take focus from an open dialog | When a streaming turn
+  finished it focused the textarea regardless, so a whole message could be typed and sent
+  from a field hidden behind a modal that still claimed aria-modal="true".
+- 2026-08-13 | Preview's effect mounts once | Every caller passes a fresh arrow for
+  onClose, and it was in the dependency list, so the whole effect tore down and re-ran once
+  per streamed token — re-locking scroll and yanking focus back to the close button, off
+  whatever the reader was using inside the dialog.
+- 2026-08-13 | A source that cannot be fetched is not shown as the source | The failure
+  sentence was rendered in <pre class="source-text">, the same element and styling as a
+  real passage, under the document's own title and breadcrumb — so a reader checking a
+  claim saw the UI's apology in the position of the quotation, and Copy copied it as
+  though it were the source.
+- 2026-08-13 | An empty list is "none", and that belongs in the server | _readable_values
+  joined a list with ", ", so [] became "" — indistinguishable downstream from a field
+  nobody filled in, and the evidence table said "not recorded" for something the platform
+  had recorded precisely. Fixed at the join rather than in the UI: a first attempt in
+  cells.ts turned lists of objects into "[object Object]", the exact bug that file was
+  written to prevent, and overrode a documented decision that "[]" is cryptic but true.

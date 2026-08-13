@@ -36,3 +36,6 @@ logs/
 files/outputs/
 *.tsbuildinfo
 scenario_reports/
+
+# Bundled by `npm test` so the render smoke test can be run by node.
+ui/.test-build/

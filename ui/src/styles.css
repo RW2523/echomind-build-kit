@@ -1715,3 +1715,166 @@ tr:last-child td { border-bottom: none; }
   .spaces { padding: var(--s3); }
   .fact { grid-template-columns: minmax(0, 1fr); gap: 0; }
 }
+
+/* ==========================================================================
+   suggested next steps, absence, and the controls added around a turn
+   ========================================================================== */
+
+/* The row of next questions under a finished reply. It sits below the evidence because
+   the answer and the way to check it are what the reader came for; the offer of a next
+   move is only useful once both have been read. */
+.follow-ups {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s3);
+  margin-top: var(--s4);
+  padding-top: var(--s3);
+  border-top: 1px solid var(--line);
+  min-width: 0;
+}
+.follow-ups-label {
+  flex: 0 0 auto;
+  font-size: var(--t-2xs);
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  font-weight: 600;
+  color: var(--ink-faint);
+}
+.follow-ups-row { display: flex; flex-wrap: wrap; gap: var(--s2); min-width: 0; }
+/* Quieter than a clarify option on purpose: those are the answer to the question on
+   screen, these are an offer beside it. A chip that shouts competes with the reply. */
+.follow-up {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-full);
+  padding: 5px 13px;
+  font: inherit;
+  font-size: var(--t-sm);
+  color: var(--ink-soft);
+  cursor: pointer;
+  text-align: left;
+  overflow-wrap: anywhere;
+  transition: border-color 0.12s ease, background 0.12s ease, color 0.12s ease;
+}
+.follow-up:hover:not(:disabled) {
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+/* One turn at a time, and it says so. send() refuses a second turn while one is running,
+   so a chip left looking live would take the click and do nothing at all. */
+.follow-up:disabled,
+.option:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* Absence, wherever it is shown: a table cell, a card field. Italic and faded so it
+   cannot be mistaken for a value the platform sent, and never blank — an empty cell is
+   indistinguishable from a value the renderer dropped on the way. */
+.cell-missing { color: var(--ink-faint); font-style: italic; }
+
+/* The platform's own `derived_` prefix, carried to the screen as a mark rather than left
+   in the column name. See db/migrations/009_domain_spaces.sql. */
+.col-derived {
+  margin-left: 6px;
+  padding: 0 5px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-full);
+  font-size: var(--t-2xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: none;
+  color: var(--ink-faint);
+  vertical-align: 1px;
+}
+
+/* A header that scrolls away takes the meaning of every column with it. */
+.table-wrap { max-height: min(60vh, 520px); overflow: auto; }
+.table-wrap thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  /* Opaque: rows scrolling under a translucent header read as corrupted data. */
+  background: var(--surface-2);
+}
+
+.copy-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: 0 0 auto;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  padding: 3px 8px;
+  font: inherit;
+  font-size: var(--t-xs);
+  color: var(--ink-soft);
+  cursor: pointer;
+  transition: border-color 0.12s ease, color 0.12s ease;
+}
+.copy-btn:hover { border-color: var(--accent-line); color: var(--accent); }
+.copy-btn svg { width: 13px; height: 13px; }
+.copy-btn-label { line-height: 1; }
+
+.preview-tools { display: flex; justify-content: flex-end; margin-top: var(--s3); }
+.sql-block-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s3);
+}
+
+/* Once the prose is arriving the trail is history, so it steps back to one quiet line
+   rather than pushing the reply down the screen. */
+.stage-trail--compact { margin-bottom: var(--s2); }
+.stage-trail--compact .stage { font-size: var(--t-xs); }
+
+/* A turn the reader ended. Neutral, not amber: nothing failed. */
+.reply--stopped {
+  padding: var(--s3) var(--s4);
+  border: 1px solid var(--line);
+  border-left: 2px solid var(--line-strong);
+  border-radius: 0 var(--r-md) var(--r-md) 0;
+  background: var(--surface-2);
+  font-size: var(--t-sm);
+  color: var(--ink-soft);
+  max-width: 62ch;
+}
+
+.send-btn--stop { background: var(--surface-3); color: var(--ink); border-color: var(--line-strong); }
+.send-btn--stop:hover { background: var(--surface-2); color: var(--accent); }
+
+/* The way back to the tail, for a reader who scrolled up while an answer was arriving.
+   Centred over the composer and out of the flow, so nothing below it moves when it
+   appears or goes. */
+.jump-latest {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: calc(100% + var(--s2));
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-full);
+  padding: 5px 13px;
+  font: inherit;
+  font-size: var(--t-xs);
+  color: var(--ink-soft);
+  box-shadow: var(--shadow-2);
+  cursor: pointer;
+  z-index: 6;
+}
+.jump-latest:hover { color: var(--accent); border-color: var(--accent-line); }
+.jump-latest svg { width: 14px; height: 14px; }
+
+@media (max-width: 640px) {
+  /* The label above the chips rather than beside them: on a narrow screen the inline
+     label leaves a column too thin to read a question in. */
+  .follow-ups { flex-direction: column; gap: var(--s2); }
+}
+/* An unavailable source is not a passage, and must not be dressed as one. */
+.source-missing { margin: 0; padding: var(--s3) 0; color: var(--ink-soft); font-size: var(--t-sm); }

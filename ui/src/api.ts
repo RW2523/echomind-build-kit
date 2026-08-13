@@ -65,6 +65,14 @@ export async function loginAs(handle: string): Promise<{ token: string; user: De
  * Stream a turn. `onStatus` and `onToken` render progressively; `onFinal` carries the
  * complete, verified payload — citations and gate results only exist there, so nothing
  * is ever shown as sourced before the checks have run.
+ *
+ * `signal` aborts the request. What that does and does not do is worth being exact
+ * about, because the UI has to say it accurately: the HTTP stream ends immediately and
+ * nothing further is delivered, but /chat/stream has no cancel of its own and the turn
+ * is already running in a worker thread the server cannot interrupt, so the lookup
+ * finishes and its checkpoint is written. What cannot happen either way is a write:
+ * every write tool returns a pending action and executes only after an approval that
+ * this path never reaches.
  */
 export async function streamChat(
   message: string,
@@ -74,45 +82,78 @@ export async function streamChat(
     onToken?: (text: string) => void;
     onFinal: (response: AgentResponse) => void;
     onError?: (message: string) => void;
+    /** Called instead of onError when the caller aborted, so a deliberate stop is not
+     *  reported to the reader as a failure. */
+    onAborted?: () => void;
   },
+  signal?: AbortSignal,
 ): Promise<void> {
-  const response = await fetch("/chat/stream", {
-    method: "POST",
-    headers: headers({ "Content-Type": "application/json" }),
-    body: JSON.stringify({ message, thread_id: threadId }),
-  });
+  try {
+    const response = await fetch("/chat/stream", {
+      method: "POST",
+      headers: headers({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ message, thread_id: threadId }),
+      signal,
+    });
 
-  if (!response.ok || !response.body) {
-    handlers.onError?.(`Request failed (${response.status})`);
-    return;
-  }
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-
-    // SSE frames are separated by a blank line.
-    const frames = buffer.split("\n\n");
-    buffer = frames.pop() ?? "";
-    for (const frame of frames) {
-      let event = "message";
-      const dataLines: string[] = [];
-      for (const line of frame.split("\n")) {
-        if (line.startsWith("event:")) event = line.slice(6).trim();
-        else if (line.startsWith("data:")) dataLines.push(line.slice(5).trim());
-      }
-      if (!dataLines.length) continue;
-      const payload = JSON.parse(dataLines.join("\n"));
-      if (event === "status") handlers.onStatus?.(payload.stage);
-      else if (event === "token") handlers.onToken?.(payload.text);
-      else if (event === "final") handlers.onFinal(payload as AgentResponse);
-      else if (event === "error") handlers.onError?.(payload.message);
+    if (!response.ok || !response.body) {
+      handlers.onError?.(`Request failed (${response.status})`);
+      return;
     }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    /** Whether the stream said anything conclusive before it closed. */
+    let settled = false;
+
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      // SSE frames are separated by a blank line.
+      const frames = buffer.split("\n\n");
+      buffer = frames.pop() ?? "";
+      for (const frame of frames) {
+        let event = "message";
+        const dataLines: string[] = [];
+        for (const line of frame.split("\n")) {
+          if (line.startsWith("event:")) event = line.slice(6).trim();
+          else if (line.startsWith("data:")) dataLines.push(line.slice(5).trim());
+        }
+        if (!dataLines.length) continue;
+        const payload = JSON.parse(dataLines.join("\n"));
+        if (event === "status") handlers.onStatus?.(payload.stage);
+        else if (event === "token") handlers.onToken?.(payload.text);
+        else if (event === "final") {
+          settled = true;
+          handlers.onFinal(payload as AgentResponse);
+        } else if (event === "error") {
+          settled = true;
+          handlers.onError?.(payload.message);
+        }
+      }
+    }
+
+    // A stream that closes without a final payload and without an error leaves the turn
+    // marked "streaming" for good: a stage trail that never resolves, under a composer
+    // that has gone back to normal. A proxy timing the connection out is enough to do it.
+    // Ending on a sentence is not a worse outcome than the truth — it is the truth.
+    if (!settled && !signal?.aborted) {
+      handlers.onError?.(
+        "The connection closed before the answer arrived. Nothing was written — ask again.",
+      );
+    }
+  } catch (e) {
+    // A dropped connection used to escape this function and reject the caller's await,
+    // which left `sending` true forever: the composer stayed disabled and the only way
+    // back was a reload. Every ending now leaves through a handler.
+    if (signal?.aborted || (e instanceof DOMException && e.name === "AbortError")) {
+      handlers.onAborted?.();
+      return;
+    }
+    handlers.onError?.(e instanceof Error ? e.message : "The connection to the assistant failed.");
   }
 }
 

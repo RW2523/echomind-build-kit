@@ -1359,7 +1359,13 @@ def _readable_values(result: dict, skip: str = "") -> dict[str, Any]:
         elif isinstance(value, list):
             if any(isinstance(item, dict) for item in value):
                 continue
-            out[key] = ", ".join(str(item) for item in value)
+            # An empty list joins to "", which nothing downstream can tell from a field
+            # nobody filled in — so the evidence table showed "not recorded" for something
+            # the platform had recorded precisely. "This instrument accepts no sample
+            # types" and "nobody wrote down what it accepts" are different claims, and
+            # only the first is true here. "none" is a statement about the data, not a
+            # stand-in for its absence.
+            out[key] = ", ".join(str(item) for item in value) if value else "none"
         elif isinstance(value, dict):
             for inner, nested in value.items():
                 if nested is None or isinstance(nested, (str, int, float)):
