@@ -13,10 +13,10 @@ from __future__ import annotations
 import json
 import logging
 import uuid
-from uuid import UUID
 from datetime import UTC, date, datetime, time
 from decimal import Decimal
 from typing import Any
+from uuid import UUID
 
 from sqlalchemy import text
 
@@ -717,10 +717,10 @@ def _render_invoice_statement(user_id: str, params: dict) -> tuple:
     ctx = _ctx_for(user_id)
     summary = tools_mod.get_billing_summary(ctx, account_code=account_code, period=period)
     lines = summary.get("lines") or []
-    fields = dict(
-        account_code=account_code, period=period, lines=lines,
-        total=summary.get("total"), lab=summary.get("lab_id"),
-    )
+    fields = {
+        "account_code": account_code, "period": period, "lines": lines,
+        "total": summary.get("total"), "lab": summary.get("lab_id"),
+    }
     body = documents.build_invoice_statement(**fields)
     return (
         f"Invoice statement — {account_code} {period}",

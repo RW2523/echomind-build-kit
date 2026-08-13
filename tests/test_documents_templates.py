@@ -475,7 +475,7 @@ def test_booking_confirmation_renders_from_a_real_booking():
         bid = s.execute(
             text("SELECT id FROM infinity.bookings WHERE user_id='u-alice' LIMIT 1")
         ).scalar_one()
-    title, body, records = actions._render_booking_confirmation(
+    title, body, _records = actions._render_booking_confirmation(
         "u-alice", {"booking_id": bid}
     )
     assert bid in title and bid in body
@@ -503,7 +503,7 @@ def test_a_booking_that_is_not_yours_is_not_found():
 @pytest.mark.tools
 def test_usage_summary_renders_through_the_scoped_tool():
     from server.mcp import actions
-    title, body, records = actions._render_usage_summary("u-alice", {"month": "2026-03"})
+    title, body, _records = actions._render_usage_summary("u-alice", {"month": "2026-03"})
     assert "u-alice" in title
     assert "Scheduled h" in body and "Tracked h" in body
 

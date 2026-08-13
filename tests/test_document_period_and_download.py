@@ -208,8 +208,8 @@ def client():
 
 
 def _executed_document(client, token) -> str:
-    from server.mcp import tools as tools_mod
     from server.auth import decode
+    from server.mcp import tools as tools_mod
 
     ctx = decode(token)
     pending = tools_mod.call(
@@ -373,7 +373,6 @@ def test_a_pipe_in_a_description_does_not_break_the_layout():
 def test_the_generated_invoice_pdf_is_the_laid_out_one_not_the_markdown_one(ctxs):
     """The wiring, not the layout: an invoice asked for as a PDF has to come out as the
     form, and the same request as Markdown has to stay Markdown."""
-    from pathlib import Path
 
     from server.config import REPO_ROOT
     from server.mcp import actions as actions_mod

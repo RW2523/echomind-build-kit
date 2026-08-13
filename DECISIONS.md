@@ -815,3 +815,20 @@ diminishing returns.
   corrupted the seed, or a planner menu missing two tools. This runs realistic journeys
   through the dev server — the seam where several of those lived — and writes route,
   tools, SQL, proposals, decisions and audit rows to scenario_reports/<date>.json.
+- 2026-08-13 | A heading breaks a chunk at MIN_STANDALONE, not TARGET_MIN | A five-section
+  policy document was one 360-token chunk: session limits, fair-share caps, cancellation
+  charges, instrument status and bumping averaged into a single embedding that resembled
+  no question in particular. A cancellation question scored 0.55, most of the corpus fell
+  below the confidence floor, and the correct answer was refused for want of context. The
+  undersized-fragment pass already existed to fold anything too small back in.
+- 2026-08-13 | A chunk spanning sections names all of them | cur_crumb was set from the
+  first block only, so a chunk covering Session limits, Cancellation and No-shows was
+  cited as "Session limits" — sending a reader checking a cancellation answer to the wrong
+  part of the page.
+- 2026-08-13 | The grader checks the figure, it does not ask for it | context_precision
+  told the judge "the quote must contain that value" and then verified only that the quote
+  existed in the context, so a passage saying data does not live forever was credited
+  against a reference giving the retention period in days. The instruction was already
+  there; nothing checked it. Whether "30" appears in a sentence is not a matter of opinion.
+  Precision held at 0.992 under the stricter grader, so the chunking gain is real rather
+  than an artefact of a lenient judge.

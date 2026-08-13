@@ -120,6 +120,39 @@ def _blocks(markdown: str, title: str, version: str) -> list[_Block]:
     return out
 
 
+def _spanning_crumb(first: str, later: str) -> str:
+    """One breadcrumb for a chunk that covers two sections, naming both ends.
+
+    Breadcrumbs read "Title > Section (vN)". Two of those side by side is unreadable, so
+    the shared prefix is kept and the section names are joined.
+    """
+    def split(crumb: str) -> tuple[str, str, str]:
+        """(title, section, version) — the version may be on either half.
+
+        A preamble chunk's breadcrumb is "Title (vN)" with no section at all, so reading
+        the version only off the tail left it stranded mid-string: "Title (v1.6) >
+        Session limits".
+        """
+        head, _, tail = crumb.partition(" > ")
+        source = tail or head
+        section, _, version = source.rpartition(" (")
+        if not version:
+            return head, (tail or "").strip(), ""
+        if not tail:
+            return section.strip(), "", f" ({version}"
+        return head, section.strip(), f" ({version}"
+
+    head, first_section, version = split(first)
+    _, later_section, _ = split(later)
+    if not later_section or later_section in first_section:
+        return first
+    # A chunk that opens with the document's preamble has no section of its own yet, so
+    # the first heading it reaches becomes its name rather than leaving it bare.
+    if not first_section:
+        return f"{head} > {later_section}{version}"
+    return f"{head} > {first_section}, {later_section}{version}"
+
+
 def chunk_markdown(markdown: str, title: str, version: str) -> list[Chunk]:
     blocks = _blocks(markdown, title, version)
     chunks: list[Chunk] = []
@@ -137,8 +170,19 @@ def chunk_markdown(markdown: str, title: str, version: str) -> list[Chunk]:
     for block in blocks:
         btokens = estimate_tokens(block.text)
 
-        # Heading change is a natural boundary once the chunk is big enough to stand alone.
-        if cur and block.breadcrumb != cur_crumb and cur_tokens >= TARGET_MIN:
+        # A heading change is a natural boundary once the chunk can stand alone — and
+        # "stand alone" is MIN_STANDALONE, not TARGET_MIN.
+        #
+        # Requiring TARGET_MIN meant a policy document of five short sections, each on a
+        # different subject, became one chunk of ~360 tokens: session limits, fair-share
+        # caps, cancellation charges, instrument status and bumping, averaged into a
+        # single embedding. Nothing in it resembled a question about any one of them, so
+        # a question about cancellation scored 0.55 and most of the corpus fell below the
+        # confidence floor — leaving the generator with thin context to answer from, which
+        # is where invented detail comes from. The undersized-fragment pass below already
+        # exists to fold anything too small back in, so the lower threshold cannot produce
+        # a chunk that could not stand on its own.
+        if cur and block.breadcrumb != cur_crumb and cur_tokens >= MIN_STANDALONE:
             flush()
 
         if cur and cur_tokens + btokens > TARGET_MAX:
@@ -149,6 +193,12 @@ def chunk_markdown(markdown: str, title: str, version: str) -> list[Chunk]:
 
         if not cur:
             cur_crumb = block.breadcrumb
+        elif block.breadcrumb != cur_crumb:
+            # Spanning more than one section: say so rather than attributing the whole
+            # chunk to the heading it happened to start under. A citation reading
+            # "Session limits" beside an answer about cancellation charges sends the
+            # reader to the wrong part of the page to check it.
+            cur_crumb = _spanning_crumb(cur_crumb, block.breadcrumb)
 
         # An atomic block larger than the target still goes in whole — a split table is
         # worse than an oversized chunk.

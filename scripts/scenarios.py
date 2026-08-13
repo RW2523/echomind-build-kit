@@ -24,19 +24,20 @@ import json
 import sys
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import requests
 from sqlalchemy import text
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from scripts.mint_jwt import mint  # noqa: E402
-from server.config import REPO_ROOT  # noqa: E402
-from server.db import owner_engine, session_scope  # noqa: E402
+from scripts.mint_jwt import mint
+from server.config import REPO_ROOT
+from server.db import owner_engine, session_scope
 
 # Through the dev server rather than the API, because two of the failures this file
 # exists to catch lived in the seam between them and were invisible from the API side.
@@ -44,14 +45,14 @@ DEFAULT_BASE = "http://localhost:5173"
 OUT_DIR = REPO_ROOT / "scenario_reports"
 
 USERS = {
-    "alice": dict(id="u-alice", name="Alice Nguyen", role="user",
-                  lab_ids=("lab-a",), facility_ids=()),
-    "asha": dict(id="u-asha", name="Asha Patel", role="pi",
-                 lab_ids=("lab-a",), facility_ids=()),
-    "bob": dict(id="u-bob", name="Bob Okafor", role="user",
-                lab_ids=("lab-b",), facility_ids=()),
-    "cora": dict(id="u-cora", name="Cora Diaz", role="admin",
-                 lab_ids=(), facility_ids=("fac-imaging",)),
+    "alice": {"id": "u-alice", "name": "Alice Nguyen", "role": "user",
+              "lab_ids": ("lab-a",), "facility_ids": ()},
+    "asha": {"id": "u-asha", "name": "Asha Patel", "role": "pi",
+             "lab_ids": ("lab-a",), "facility_ids": ()},
+    "bob": {"id": "u-bob", "name": "Bob Okafor", "role": "user",
+            "lab_ids": ("lab-b",), "facility_ids": ()},
+    "cora": {"id": "u-cora", "name": "Cora Diaz", "role": "admin",
+             "lab_ids": (), "facility_ids": ("fac-imaging",)},
 }
 
 
@@ -87,7 +88,7 @@ class Turn:
     problems: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
-        return {k: v for k, v in self.__dict__.items()}
+        return dict(self.__dict__)
 
 
 @dataclass

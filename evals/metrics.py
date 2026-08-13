@@ -365,6 +365,39 @@ def answer_correctness(
     return round(max(0.0, min(1.0, score)), 3)
 
 
+# How the same quantity gets written in prose versus a table.
+_SPELLED = {
+    "1": ("one", "a single"), "2": ("two",), "3": ("three",), "4": ("four",),
+    "5": ("five",), "6": ("six",), "7": ("seven",), "8": ("eight",), "9": ("nine",),
+    "10": ("ten",), "12": ("twelve", "a dozen"), "14": ("fourteen", "a fortnight"),
+    "24": ("twenty-four", "two years"), "30": ("thirty",), "60": ("sixty",),
+    "90": ("ninety",), "100": ("a hundred", "one hundred", "full"),
+}
+_NUMBER_RE = re.compile(r"\b\d+(?:\.\d+)?\b")
+
+
+def _carries_the_values(quote: str, reference: str) -> bool:
+    """Does the quoted sentence actually contain the figure the answer turns on?
+
+    The judging prompt asks for this and cannot be relied on to do it: a context saying
+    data does not live forever was quoted against a reference giving the retention period
+    in days, and counted useful. The instruction was already there — what was missing was
+    anything checking it. Whether "30" appears in a sentence is not a matter of opinion,
+    so it is decided here rather than asked.
+
+    Only applies when the reference turns on a number. A reference with no figure in it is
+    left to the judge, which is the right tool for "does this say the same thing".
+    """
+    wanted = _NUMBER_RE.findall(reference)
+    if not wanted:
+        return True
+    low = quote.lower()
+    return any(
+        number in low or any(word in low for word in _SPELLED.get(number, ()))
+        for number in wanted
+    )
+
+
 def context_precision(contexts: list[str], reference: str, question: str) -> float:
     """Mean precision@k, weighted by per-context relevance to the reference answer."""
     if not contexts:
@@ -415,8 +448,12 @@ def context_precision(contexts: list[str], reference: str, question: str) -> flo
             useful = 0
         # The quote has to be real. Asking for evidence only helps if the evidence is
         # checked — otherwise "useful" is still a bare opinion with a sentence next to it.
-        if useful and not _quotes_the_context(str(result.get("quote", "")), context):
+        quote = str(result.get("quote", ""))
+        if useful and not _quotes_the_context(quote, context):
             log.info("relevance claimed a quote that is not in the context; not counted")
+            useful = 0
+        if useful and not _carries_the_values(quote, reference):
+            log.info("the quote does not carry the figure the answer turns on; not counted")
             useful = 0
         relevances.append(useful)
 
