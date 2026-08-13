@@ -788,3 +788,30 @@ diminishing returns.
   dropped others — while the footer said nothing between them was dropped. Not a guaranteed
   total order (identical rows stay tied), but the strongest a view can offer, and the
   response names the columns it used so the reader can judge.
+- 2026-08-13 | A document asked for by name goes to the action branch | "give me the March
+  2026 invoice" was classified as data and answered with the invoice's figures — truthful,
+  not what was asked, and inconsistent with "give me an invoice" followed by "March 2026",
+  which produces the document. Same intent, two destinations. The rule is deliberately
+  narrow (a delivery verb AND a noun naming an artefact this system renders) because
+  "give me the billing summary" belongs to get_billing_summary and capturing it would
+  trade one bug for a worse one. ACTION_HINTS, which promised this and was never called,
+  is gone.
+- 2026-08-13 | The write tools the planner is shown are a hand-written list | cancel_booking
+  and reschedule_booking were registered, tested and reachable by direct call, and absent
+  from action.WRITE_TOOLS — so the planner could not propose them and "cancel booking
+  bk-x" produced a new booking instead. Registering a tool is not the same as offering it.
+- 2026-08-13 | Answering our own question does not restart the plan | Asked which account
+  code the invoice was for and told "ACC-A1", the planner proposed a booking confirmation
+  for a booking id it invented: two words say nothing about invoices. The subject now
+  comes from the question we asked, and overrides the template the planner picked, with
+  its params dropped rather than carried onto a different document.
+- 2026-08-13 | The period is read the way people write it | _document_params_from matched
+  only strict YYYY-MM, so "the March 2026 invoice" looked like it named no period at all,
+  the required-params check failed, and the planner's wrong template survived the
+  correction meant to replace it.
+- 2026-08-13 | scripts/scenarios.py: drive the product, record the evidence | The suite
+  checks units and the eval checks answer quality; neither noticed a download button that
+  could not authenticate, a Source popup that opened nothing, a cancellation that
+  corrupted the seed, or a planner menu missing two tools. This runs realistic journeys
+  through the dev server — the seam where several of those lived — and writes route,
+  tools, SQL, proposals, decisions and audit rows to scenario_reports/<date>.json.

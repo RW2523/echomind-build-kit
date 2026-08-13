@@ -103,10 +103,28 @@ Other rules:
 """
 
 # The router is an LLM call, but obvious cases should not depend on one.
-ACTION_HINTS = re.compile(
-    r"\b(book|reserve|schedule me|submit|create|onboard|register|generate|draft|"
-    r"issue|raise|request)\b",
-    re.IGNORECASE,
+#
+# This one is not obvious to a classifier and is obvious to a person: "give me the March
+# invoice" asks for the document, and the router sent it to the data branch, which
+# answered with the invoice's figures instead. Truthful, and not what was asked — and
+# inconsistent besides, since "give me an invoice" followed by "March 2026" produces the
+# document. The same intent reaching two destinations is the defect.
+#
+# Deliberately narrow. It needs a delivery verb AND a noun that names an artefact this
+# system can actually render. "summary" is excluded on purpose: "give me the billing
+# summary" is get_billing_summary's job, and capturing it here would trade this bug for a
+# worse one. So is "bookings" — a list of them is data, not a document.
+_DELIVERY_VERB = (
+    r"(?:give|send|get|email|mail)\s+(?:me|us|it)\b"
+    r"|(?:i|we)\s+(?:want|need|would like)\b"
+    r"|\b(?:produce|prepare|export|download)\b"
+)
+_ARTEFACT_NOUN = (
+    r"\binvoice|\bstatement|\bdirectory|\bconfirmation|\bpacket"
+    r"|\bcapability report|\bas a (?:pdf|docx|document|word)|\bin (?:pdf|docx)"
+)
+DOCUMENT_REQUEST_RE = re.compile(
+    rf"(?=.*(?:{_DELIVERY_VERB}))(?=.*(?:{_ARTEFACT_NOUN}))", re.IGNORECASE | re.DOTALL
 )
 SMALLTALK_RE = re.compile(
     r"^\s*(hi|hey|hello|yo|thanks|thank you|cheers|good morning|good afternoon|"
@@ -119,6 +137,8 @@ def route(message: str, history: str = "") -> tuple[str, str]:
     """Return (route, why). `history` lets follow-ups like "book it" route correctly."""
     if SMALLTALK_RE.match(message.strip()):
         return "smalltalk", "greeting pattern"
+    if DOCUMENT_REQUEST_RE.search(message):
+        return "action", "asks for a document by name"
 
     verdict = chat_json(
         [

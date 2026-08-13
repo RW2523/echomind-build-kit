@@ -95,6 +95,30 @@ def restore_seeded_state():
             elif created == "document":
                 Path(result["absolute_path"]).unlink(missing_ok=True)
 
+            # Changes, not creations. cancel_booking and reschedule_booking alter rows
+            # the seed put there, so "delete what was created" cannot undo them — and
+            # without this every run left a few more bookings cancelled until all 200
+            # were, and scheduling.v_device_occupancy reported an empty facility.
+            if result.get("cancelled"):
+                conn.execute(
+                    text("UPDATE infinity.bookings SET status = :was WHERE id = :id"),
+                    {"was": result.get("previous_status") or "confirmed",
+                     "id": result["cancelled"]},
+                )
+            elif result.get("rescheduled"):
+                moved_from = result.get("moved_from") or {}
+                conn.execute(
+                    text("""UPDATE infinity.bookings
+                            SET status = :was,
+                                starts_at = CAST(:starts AS timestamptz),
+                                ends_at   = CAST(:ends AS timestamptz)
+                            WHERE id = :id"""),
+                    {"was": result.get("previous_status") or "confirmed",
+                     "starts": moved_from.get("starts_at"),
+                     "ends": moved_from.get("ends_at"),
+                     "id": result["rescheduled"]},
+                )
+
         # audit_log rows cascade from actions.
         conn.execute(
             text("DELETE FROM echomind.actions WHERE id <> ALL(:before)"),

@@ -32,6 +32,11 @@ create_service_request(template_id, fields)
     Propose a service request. fields must satisfy the template's required fields.
 request_booking(instrument_id, starts_at, ends_at, account_code)
     Propose an instrument booking. ISO-8601 UTC timestamps, max 12 hours.
+cancel_booking(booking_id, reason?)
+    Propose cancelling a booking the caller may act on. The charge the rules give is
+    worked out and shown on the card; never state or guess a charge yourself.
+reschedule_booking(booking_id, starts_at, ends_at)
+    Propose moving a booking to a new slot. ISO-8601 UTC timestamps, max 12 hours.
 generate_document(template, params)
     template is one of usage_report, onboarding_packet, monthly_summary,
     invoice_statement (params: account_code, period), facility_directory
@@ -533,20 +538,36 @@ def carry_forward_document_subject(
     Only fires on an explicit convert/export phrasing, and only when the conversation
     actually names a subject — so "generate a document" with nothing behind it still asks.
     """
-    if not _CONVERT_RE.search(message):
+    # Either the user said "convert it", or they are answering a question we asked about
+    # a document — in which case the subject is whatever we were asking about, and
+    # re-planning from two words loses it. Asked "which account code should the invoice
+    # be for?" and told "ACC-A1", the planner proposed a booking confirmation for a
+    # booking id it made up, because "ACC-A1" on its own says nothing about invoices.
+    if not (_CONVERT_RE.search(message) or _answering_a_document_question(history)):
         return plan
     tool = plan.get("tool")
     if tool not in (None, "generate_document"):
         return plan
     arguments = plan.get("arguments") if isinstance(plan.get("arguments"), dict) else {}
-    if arguments.get("template"):
+    # A template the planner chose is normally left alone — but not when the user is
+    # answering a question we asked about a different document. Told "ACC-A1" after
+    # "which account code should the invoice be for?", the planner proposed a booking
+    # confirmation for a booking id it invented; deferring to that would be deferring to
+    # a guess about which document the conversation is even about.
+    answering = _answering_a_document_question(history)
+    if arguments.get("template") and not answering:
         return plan
 
     haystack = f"{message}\n{history or ''}"
     for template, pattern in _DOCUMENT_SUBJECTS:
         if not (pattern.search(message) or pattern.search(history or "")):
             continue
-        params = dict(arguments.get("params") or {})
+        # Start clean when overriding: the planner's params belong to the template it
+        # picked, and carrying a booking_id onto an invoice is how a wrong id survives
+        # the correction that was supposed to remove it.
+        params = {} if (answering and arguments.get("template") != template) else dict(
+            arguments.get("params") or {}
+        )
         params.update(_document_params_from(template, haystack))
         if _MISSING_FOR.get(template, ()) and not all(
             params.get(k) for k in _MISSING_FOR[template]
@@ -788,6 +809,25 @@ def _ask_for_period(
     }
 
 
+def _answering_a_document_question(history: str) -> bool:
+    """Did we just ask something, about a document, that this message answers?
+
+    Only the immediately preceding turn, and only a clarify: a question two turns back has
+    been overtaken, and any other response type was not a question at all.
+    """
+    last_clarify = None
+    for line in (history or "").splitlines():
+        found = _HISTORY_LINE_RE.match(line)
+        if not found:
+            continue
+        speaker, kind, said = found.group(1), (found.group(2) or "").strip(), found.group(3)
+        if speaker == "assistant":
+            last_clarify = said if kind == "clarify" else None
+    if not last_clarify:
+        return False
+    return any(pattern.search(last_clarify) for _, pattern in _DOCUMENT_SUBJECTS)
+
+
 _ACCOUNT_RE = re.compile(r"\bACC-[A-Z0-9]+\b")
 _PERIOD_RE = re.compile(r"\b(20\d{2})-(0[1-9]|1[0-2])\b")
 _BOOKING_RE = re.compile(r"\bbk-[a-z0-9]+\b", re.I)
@@ -808,10 +848,14 @@ def _document_params_from(template: str, text_: str) -> dict[str, Any]:
     """
     if template == "invoice_statement":
         account = _ACCOUNT_RE.search(text_)
-        period = _PERIOD_RE.search(text_)
+        # _normalise_period, not the bare YYYY-MM pattern: the conversation says "the
+        # March 2026 invoice" far more often than "2026-03", and reading only the strict
+        # form left the period looking absent. The required-params check then failed and
+        # the planner's own (wrong) template survived the correction meant to replace it.
+        period = _normalise_period(text_, datetime.now(UTC).date())
         return {
             **({"account_code": account.group(0)} if account else {}),
-            **({"period": period.group(0)} if period else {}),
+            **({"period": period} if period else {}),
         }
     if template == "usage_summary":
         period = _PERIOD_RE.search(text_)

@@ -108,3 +108,6 @@ fmt: venv
 clean:
 	rm -rf $(VENV) .pytest_cache .ruff_cache
 	find . -name __pycache__ -type d -prune -exec rm -rf {} +
+
+scenarios:  ## drive the assistant through realistic situations; writes scenario_reports/
+	$(PY) -m scripts.scenarios

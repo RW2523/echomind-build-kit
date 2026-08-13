@@ -35,3 +35,4 @@ logs/
 # Generated at runtime
 files/outputs/
 *.tsbuildinfo
+scenario_reports/

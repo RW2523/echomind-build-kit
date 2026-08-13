@@ -382,6 +382,7 @@ def _exec_cancel_booking(action: dict, payload: dict) -> dict[str, Any]:
         ).mappings().first()
         if row is None:
             raise not_found("booking")
+        previous_status = row["status"]
         if row["status"] in ("cancelled", "completed"):
             raise ToolError(
                 "conflict",
@@ -398,6 +399,12 @@ def _exec_cancel_booking(action: dict, payload: dict) -> dict[str, Any]:
     applied = ((payload.get("policy") or {}).get("applied")) or {}
     return {
         "cancelled": booking_id,
+        # What it was before. Approving an action mutates seeded platform data, and the
+        # suite's tear-down can only undo what the result describes — it knew how to
+        # delete a booking that was created and nothing about one that was changed. So
+        # every run cancelled a few more until all 200 were cancelled and the occupancy
+        # view was empty. A change has to say what it changed from.
+        "previous_status": previous_status,
         "reason": payload.get("reason"),
         "charge_percent": (payload.get("policy") or {}).get("charge_percent"),
         "charged_hours": (payload.get("policy") or {}).get("charged_hours"),
@@ -458,11 +465,13 @@ def _exec_reschedule_booking(action: dict, payload: dict) -> dict[str, Any]:
             {"bid": booking_id, "starts": payload["starts_at"], "ends": payload["ends_at"]},
         )
         was_from, was_to = row["starts_at"].isoformat(), row["ends_at"].isoformat()
+        previous_status = row["status"]
 
     release = (payload.get("policy") or {}).get("release") or {}
     applied = release.get("applied") or {}
     return {
         "rescheduled": booking_id,
+        "previous_status": previous_status,
         "moved_from": {"starts_at": was_from, "ends_at": was_to},
         "moved_to": {"starts_at": payload["starts_at"], "ends_at": payload["ends_at"]},
         "status": "requested",
