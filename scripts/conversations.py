@@ -351,6 +351,28 @@ class Runner:
 
         print(f"{BOLD}Multi-turn conversation suite{RESET} — {len(picked)} conversations "
               f"against {BASE}\n")
+
+        # A server started before the code under test silently blesses code it never ran:
+        # two passes in one session did exactly that, and the failures surfaced two restarts
+        # later attributed to the wrong change. Loud warning, not a failure — the driver
+        # cannot know whether the drift is deliberate.
+        try:
+            health = self.client.get(f"{BASE}/readyz").json()
+            started = health.get("started_at")
+            if started:
+                from datetime import datetime
+                from pathlib import Path as _P
+                newest = max(
+                    f.stat().st_mtime for f in _P("server").rglob("*.py")
+                )
+                server_started = datetime.fromisoformat(started).timestamp()
+                if newest > server_started:
+                    print("\n  WARNING: server/ has files newer than the running API — "
+                          "these results describe code the server has not loaded. "
+                          "Restart it and rerun.\n")
+        except Exception:
+            pass
+
         started = time.time()
 
         for convo in picked:

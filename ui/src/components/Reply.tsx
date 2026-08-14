@@ -51,6 +51,15 @@ const BADGES: Record<string, string> = {
  */
 const INLINE_MARK = /\*\*([^*\n]+)\*\*|`([^`\n]+)`/g;
 
+/** The reply as the reader saw it.
+ *
+ * Copy handed back `response.text` verbatim, which still carries the generator's inline
+ * marks — the renderer strips them before drawing, so the clipboard got `**2,431.00**`
+ * where the screen said 2,431.00. Same regex, same result, one definition. */
+export function replyPlainText(text: string): string {
+  return text.replace(INLINE_MARK, (_, bold, code) => bold ?? code);
+}
+
 function inlineMarks(text: string, keyPrefix: string): React.ReactNode[] {
   const nodes: React.ReactNode[] = [];
   let cursor = 0;

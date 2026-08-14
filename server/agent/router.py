@@ -117,10 +117,13 @@ Other rules:
 _DELIVERY_VERB = (
     r"(?:give|send|get|email|mail)\s+(?:me|us|it)\b"
     r"|(?:i|we)\s+(?:want|need|would like)\b"
-    r"|\b(?:produce|prepare|export|download)\b"
+    r"|\b(?:produce|prepare|export|download|generate)\b"
 )
+# "report" is here and "summary" deliberately is not: "give me the billing summary" is
+# get_billing_summary's bread-and-butter data question, and claiming the word for
+# documents would trade a routing gap for a worse one.
 _ARTEFACT_NOUN = (
-    r"\binvoice|\bstatement|\bdirectory|\bconfirmation|\bpacket"
+    r"\binvoice|\bstatement|\bdirectory|\bconfirmation|\bpacket|\breport"
     r"|\bcapability report|\bas a (?:pdf|docx|document|word)|\bin (?:pdf|docx)"
 )
 DOCUMENT_REQUEST_RE = re.compile(
@@ -137,15 +140,24 @@ DOCUMENT_REQUEST_RE = re.compile(
 #
 # Narrow on purpose: first person, and a noun naming something the platform holds about
 # them. "What is the training policy" has no first person and stays where it belongs.
+# Narrower than its first version, which hijacked two golden conversations — a lesson
+# masked at the time by a server that had not restarted, so the suite blessed a regex it
+# never ran. "What am I charged if I cancel a booking?" matched on charged+booking and
+# went to data with no citation: it is a policy hypothetical, not a record lookup, which
+# is what the exclusion below is for. "Generate my usage report" matched on "my usage"
+# and lost its approval card: billing and usage nouns are gone, and generate+report now
+# belongs to the document rule above.
 _SELF_RECORD_RE = re.compile(
     r"\b(?:am|are|do|does|have|has|can|was|were)\s+i\b.*"
     r"\b(?:trained|training|certifi\w*|approved|authoris\w*|authoriz\w*|booked|"
-    r"bookings?|registered|enrolled|charged|billed|allowed|invoices?|usage|"
-    r"samples?)\b"
-    r"|\bmy\s+(?:training|certification|bookings?|usage|invoices?|charges|samples?|"
-    r"requests?|account codes?|profile|record)\b",
+    r"bookings?|registered|enrolled|allowed)\b"
+    r"|\bmy\s+(?:training|certification|bookings?|account codes?|profile)\b",
     re.IGNORECASE,
 )
+
+# "if I cancel", "if I miss it" — a conditional is a question about the rules, and the
+# rules live in the knowledge branch with the citations to prove them.
+_HYPOTHETICAL_RE = re.compile(r"\b(?:if|when|suppose|say)\s+i\b", re.IGNORECASE)
 SMALLTALK_RE = re.compile(
     r"^\s*(hi|hey|hello|yo|thanks|thank you|cheers|good morning|good afternoon|"
     r"who are you|what can you do|help)\b[\s!.?]*$",
@@ -159,7 +171,7 @@ def route(message: str, history: str = "") -> tuple[str, str]:
         return "smalltalk", "greeting pattern"
     if DOCUMENT_REQUEST_RE.search(message):
         return "action", "asks for a document by name"
-    if _SELF_RECORD_RE.search(message):
+    if _SELF_RECORD_RE.search(message) and not _HYPOTHETICAL_RE.search(message):
         return "data", "asks about the caller's own record"
 
     verdict = chat_json(

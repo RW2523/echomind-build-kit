@@ -940,3 +940,56 @@ diminishing returns.
   had recorded precisely. Fixed at the join rather than in the UI: a first attempt in
   cells.ts turned lists of objects into "[object Object]", the exact bug that file was
   written to prevent, and overrode a documented decision that "[]" is cryptic but true.
+- 2026-08-13 | A free slot's meaning rides in its key | check_availability's slot rows
+  arrived as bare starts_at/ends_at — the same keys a booking row carries — and the
+  generator was left to remember which it was reading. It did not: a wide-open day came
+  back as "It is booked from 08:00 to 20:00", a free window read as its own opposite, over
+  structured facts saying requested_window_free = true. The rows are now free_from /
+  free_until, where no amount of fluent composition can invert them, and the booking chip
+  reads the same keys — so the sentence, the facts and the chip can no longer disagree.
+- 2026-08-13 | Availability counts completed bookings as busy | The busy query filtered to
+  requested and confirmed, so every past day read as fully free — the same defect the
+  occupancy view had (migration 009), in the tool this time. A slot that was used is not a
+  slot that was free.
+- 2026-08-13 | Returning to chat lands where the reader was | Leaving for Resources or an
+  admin view unmounts the transcript; coming back remounted it at the top with Jump to
+  latest hidden, because followingTail still said true. A reader on the tail is put back on
+  it; one who had scrolled up gets the control and keeps the choice.
+- 2026-08-13 | Copy hands back the sentence on screen | It copied response.text verbatim,
+  which still carries the generator's inline marks — the clipboard got **2,431.00** where
+  the screen said 2,431.00. Same regex the renderer strips with, one definition, exported.
+- 2026-08-13 | Only the composer's own submission clears the composer | send() cleared the
+  draft unconditionally, so clicking a follow-up chip or a clarify option threw away
+  whatever the reader was midway through typing.
+- 2026-08-13 | A stop that arrives after the answer says nothing | The final payload can
+  land between pressing Stop and the handler running, and the turn was then marked stopped
+  — drawing "the answer was not shown" directly above the answer it was showing.
+- 2026-08-14 | The self-record rule excludes hypotheticals and lost its billing nouns |
+  Its first version hijacked two golden conversations: "What am I charged if I cancel a
+  booking?" matched on charged+booking and went to the data branch with no citation — it
+  is a policy hypothetical, and conditionals ("if I", "when I") are questions about rules,
+  which live in the knowledge branch with citations. "Generate my usage report" matched
+  "my usage" and lost its approval card; generate+report now belongs to the document rule,
+  while "summary" stays out of the artefact nouns because "give me the billing summary" is
+  get_billing_summary's bread-and-butter data question.
+- 2026-08-14 | The golden suites blessed a router rule the server had never loaded | make
+  convo drives the API on 8080; the rule landed without a restart, so two full passes
+  described the old code, and the failures surfaced two restarts later attributed to
+  whatever change was in hand then. /healthz now reports started_at, and the conversation
+  driver warns loudly when server/ holds files newer than the running process. A warning,
+  not a failure: the driver cannot know whether the drift is deliberate.
+- 2026-08-14 | A string integer on a form is coerced, not refused | The planner reads "24
+  samples" off the uploaded form and sometimes writes it back as the string "24" — same
+  value, wrong JSON type, and the tool's refusal made demo scene 4 flake on nothing but
+  quoting. "24" becomes 24; "24.5", "many" and True are still refused, because a value
+  that has to be reinterpreted to fit is not the value on the form.
+- 2026-08-14 | The stale-server guard reads /readyz | It was written against /healthz,
+  which returns {"ok": true} and nothing else, so the guard silently never functioned —
+  a guard against silent staleness, itself silently stale. The verbose payload, and now
+  started_at, live on /readyz.
+- 2026-08-14 | The model server is a container, and its absence looks like a broken bot |
+  echomind-trt (Qwen3-8B on :8001) was OOM-killed, exit 137, when the voice and backend
+  containers started; every turn then failed with a connection error that read like an
+  application fault. docker start restored it unchanged. The observability judge tests
+  flake under the box's new load — they pass 4/4 in isolation and the metric code is
+  unchanged since they were stable — so a failure there reads as environment first.

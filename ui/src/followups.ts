@@ -130,8 +130,11 @@ export function followUpsFor(response: AgentResponse): FollowUp[] {
   if (tool === "check_availability") {
     const instrument = text(facts.instrument_name, NAME);
     const row = firstRow(response);
-    const from = instantParts(row?.starts_at);
-    const to = instantParts(row?.ends_at);
+    // free_from/free_until — renamed server-side so a free window cannot be read back
+    // as a booking. If these are absent the payload predates the rename and no chip is
+    // offered, which errs on silence rather than on booking a window we cannot vouch for.
+    const from = instantParts(row?.free_from);
+    const to = instantParts(row?.free_until);
     if (instrument && from && to && from.date === to.date) {
       add({
         text: `Book ${instrument} on ${from.date} from ${from.clock} to ${to.clock}`,

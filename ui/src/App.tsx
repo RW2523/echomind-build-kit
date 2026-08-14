@@ -25,7 +25,7 @@ import {
   TrashIcon,
   UploadIcon,
 } from "./components/icons";
-import { Reply } from "./components/Reply";
+import { Reply, replyPlainText } from "./components/Reply";
 import { StageTrail } from "./components/StageTrail";
 import { copyText } from "./clipboard";
 import {
@@ -299,6 +299,22 @@ export default function App() {
     });
   }, [turns]);
 
+  /* Coming back from Resources or the admin views remounts the transcript at the top —
+     the reader left mid-conversation and returned to its beginning, with Jump to latest
+     hidden because followingTail still said true. If they were following the tail, put
+     them back on it; if they had scrolled up to read something, the control appears and
+     the choice stays theirs. */
+  useEffect(() => {
+    if (view !== "chat") return;
+    const el = scrollRef.current;
+    if (!el) return;
+    if (stick.current) {
+      el.scrollTo({ top: el.scrollHeight, behavior: "auto" });
+    } else {
+      setFollowingTail(false);
+    }
+  }, [view]);
+
   /* The composer grows with the draft and then scrolls — measured rather than guessed,
      because a wrapped line is not a newline and counting "\n" gets it wrong. */
   useLayoutEffect(() => {
@@ -346,9 +362,16 @@ export default function App() {
     streamRef.current = null;
     live.controller.abort();
     setTurns((prev) =>
-      prev.map((t) =>
-        t.id === live.id ? { ...t, streaming: false, stages: undefined, stopped: true } : t,
-      ),
+      prev.map((t) => {
+        if (t.id !== live.id) return t;
+        // The final payload can land between the reader pressing Stop and this running:
+        // send()'s finally clears streamRef only after the SSE body is fully read, which
+        // is after onFinal has stored the response. Marking the turn stopped then drew
+        // "the answer was not shown" directly above the answer it was showing. A stop
+        // that arrived after the answer changed nothing, and should say nothing.
+        if (t.response) return { ...t, streaming: false, stages: undefined };
+        return { ...t, streaming: false, stages: undefined, stopped: true };
+      }),
     );
   }, []);
 
@@ -380,7 +403,11 @@ export default function App() {
     const id = `${Date.now()}`;
     const controller = new AbortController();
     streamRef.current = { id, controller };
-    setDraft("");
+    // Only the composer's own submission clears the composer. Every other caller —
+    // follow-up chips, clarify options, starter prompts — passes text that has nothing
+    // to do with the draft, and clearing it threw away whatever the reader was midway
+    // through typing because they clicked a suggestion.
+    setDraft((current) => (current === message ? "" : current));
     setRecallCursor(null);
     setSending(true);
     stick.current = true;
@@ -756,7 +783,7 @@ export default function App() {
                               }
                             />
                           )}
-                          <TurnActions text={turn.response.text} />
+                          <TurnActions text={replyPlainText(turn.response.text)} />
                         </>
                       )}
                     </div>

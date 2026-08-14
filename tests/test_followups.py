@@ -464,7 +464,10 @@ def test_availability_result_never_exposes_its_schema_as_columns():
                 "free_slots": [{"starts_at": "2027-04-08T08:00:00Z",
                                 "ends_at": "2027-04-08T20:00:00Z"}]}
     rows, columns, _ = _rows_from_tool_result(bookable, "check_availability")
-    assert columns == ["starts_at", "ends_at"]
+    # free_from/free_until, not starts_at/ends_at: with the booking-shaped keys the
+    # generator read a free slot back as a booking. The meaning rides in the key.
+    assert columns == ["free_from", "free_until"]
+    assert rows[0]["free_from"] == "2027-04-08T08:00:00Z"
 
 
 def test_relative_month_phrase_resolves_against_today():

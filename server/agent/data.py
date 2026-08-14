@@ -1316,7 +1316,18 @@ def _rows_from_tool_result(
     # that belong in the table; everything else is a scalar the answer speaks in prose.
     if tool == "check_availability":
         slots = result.get("free_slots")
-        rows = slots if isinstance(slots, list) and slots else []
+        # The slot dicts arrive as bare starts_at/ends_at — the same keys a booking row
+        # carries — and nothing in a row said which it was. The generator was left to
+        # remember that this table lists free windows, and it did not: a wide-open day
+        # produced "It is booked from 08:00 to 20:00", a free slot read back as its own
+        # opposite, over structured facts saying requested_window_free = true. The
+        # meaning now travels in the key, where no amount of fluent composition can
+        # invert it.
+        rows = (
+            [{"free_from": s["starts_at"], "free_until": s["ends_at"]} for s in slots]
+            if isinstance(slots, list) and slots
+            else []
+        )
         columns = list(rows[0]) if rows else []
         return rows, columns, _readable_values(result, skip="free_slots")
 

@@ -253,10 +253,18 @@ def check_availability(
         ).mappings().first()
         if instrument is None:
             raise not_found("instrument")
+        # 'completed' occupies its slot exactly as the occupancy view says it does
+        # (migration 009). Without it, every past day read as fully free: asked whether
+        # the Confocal was free on a date months ago, the tool returned
+        # requested_window_free = true and a single day-wide "free slot" — which the
+        # generator then misread as a booking, so the sentence said "not free" over
+        # structured facts claiming the opposite. The same question, one contradiction,
+        # two different lies. A slot that was used is not a slot that was free.
         busy = s.execute(
             text(
                 """SELECT starts_at, ends_at FROM infinity.bookings
-                   WHERE instrument_id = :id AND status IN ('requested', 'confirmed')
+                   WHERE instrument_id = :id
+                     AND status IN ('requested', 'confirmed', 'completed')
                      AND starts_at < :end AND ends_at > :start
                    ORDER BY starts_at"""
             ),
@@ -844,7 +852,18 @@ def create_service_request(ctx: Ctx, template_id: str,
                 f"{f['name']} must be one of: {', '.join(f.get('options', []))}."
             )
         if f.get("type") == "integer" and not isinstance(value, int):
-            raise invalid_params(f"{f['name']} must be an integer.")
+            # The planner reads "24 samples" off the uploaded form and sometimes writes
+            # it back as the string "24" — same value, wrong type, and refusing it made
+            # scene 4 flake on nothing but JSON quoting. Coercion is not invention: "24"
+            # becomes 24, while "24.5", "many" and True are still refused, because a
+            # value that has to be reinterpreted to fit is not the value on the form.
+            if (
+                isinstance(value, str)
+                and value.strip().lstrip("+-").isdigit()
+            ):
+                fields[f["name"]] = value = int(value.strip())
+            else:
+                raise invalid_params(f"{f['name']} must be an integer.")
 
     payload = {"template_id": template_id, "fields": fields}
     preview = f"Submit '{tpl['name']}' with " + ", ".join(f"{k}={v}" for k, v in fields.items())

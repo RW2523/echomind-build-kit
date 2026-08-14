@@ -501,13 +501,13 @@ export const CAPTURED: Record<string, Captured> = {
       "citations": [],
       "rows": [
         {
-          "starts_at": "2026-03-18T08:00:00+00:00",
-          "ends_at": "2026-03-18T20:00:00+00:00"
+          "free_from": "2026-03-18T08:00:00+00:00",
+          "free_until": "2026-03-18T20:00:00+00:00"
         }
       ],
       "columns": [
-        "starts_at",
-        "ends_at"
+        "free_from",
+        "free_until"
       ],
       "executed_sql": null,
       "pending_action": null,

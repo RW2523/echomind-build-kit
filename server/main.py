@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -61,6 +62,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+STARTED_AT = datetime.now(UTC).isoformat()
+
 app.include_router(chat_api.router)
 app.include_router(tools_api.router)
 app.include_router(actions_api.router)
@@ -96,4 +99,9 @@ def readyz() -> dict:
         "escalation_enabled": settings.escalation_enabled,
         "langfuse_enabled": settings.langfuse_enabled,
         "version": __version__,
+        # When this process started, so a test driver can notice it is exercising a
+        # server older than the code under test. Two golden-suite passes in one session
+        # blessed a router rule the server had never loaded; the failures surfaced two
+        # restarts later, attributed to whatever change happened to be in hand then.
+        "started_at": STARTED_AT,
     }
