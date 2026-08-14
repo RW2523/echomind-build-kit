@@ -210,11 +210,39 @@ def _parse(payload: dict) -> dict[int, bool]:
     return out
 
 
+def _squeeze(text: str) -> str:
+    """Text as a containment check wants it: one case, one space, no citation marks."""
+    return re.sub(r"\s+", " ", re.sub(r"\[\d+\]", "", text)).strip().lower()
+
+
 def faithfulness(answer: str, contexts: list[str], question: str) -> float:
-    statements = _statements(answer)
-    if not statements:
+    """Per-claim entailment, except where entailment is not a judgment call.
+
+    A sentence quoted verbatim from the context cannot be unfaithful to it, but the
+    pipeline atomises it into rephrasings first — "instrument time, a service request,
+    or a consumable" becomes three "X is a kind of chargeable item" claims — and then
+    asks the judge whether the rephrasings are supported. That puts a quotation at the
+    mercy of a marginal entailment call: the same verbatim answer scored 1.0 for months
+    and 0.571 after the judge's engine restarted, with the metric code untouched.
+    Sentences present verbatim in the context are counted supported without asking;
+    everything else still faces the judge, fail-closed as before.
+    """
+    joined = "\n\n".join(contexts)
+    haystack = _squeeze(joined)
+    quoted: list[str] = []
+    judged: list[str] = []
+    for sentence in re.split(r"(?<=[.!?])\s+", answer.strip()):
+        if not sentence.strip():
+            continue
+        (quoted if _squeeze(sentence) in haystack else judged).append(sentence)
+
+    statements = _statements(" ".join(judged)) if judged else []
+    if not statements and not quoted:
         return float("nan")
-    verdicts = _verdicts(statements, "\n\n".join(contexts), question)
+    verdicts = list(_verdicts(statements, joined, question)) if statements else []
+    # Each verbatim sentence counts as one fully supported claim: weighting it higher
+    # would let a long quotation drown out an invented sentence beside it.
+    verdicts.extend([1] * len(quoted))
     return round(sum(verdicts) / len(verdicts), 3)
 
 
@@ -297,6 +325,23 @@ def _classify(
     dropped_fp = len(count("FP")) - len(real_fp)
     if dropped_fn or dropped_fp:
         log.info("dropped %d unfounded FN and %d unfounded FP", dropped_fn, dropped_fp)
+
+    # A figure the answer states that appears nowhere in the reference, the sources or
+    # the question is an invention whether or not the judge noticed. "60 days" against a
+    # reference saying 30 slipped past as a TP whenever batching nudged the marginal
+    # call — the same answer scored high in the full suite and low alone, on identical
+    # code. The numbers settle it: every alien figure guarantees a counted invention.
+    # Substring containment errs toward not punishing ("60" inside "360" passes), the
+    # same bias _carries_the_values chose.
+    grounded_text = f"{reference}\n{sources}\n{question}"
+    alien = [
+        n for n in dict.fromkeys(_NUMBER_RE.findall(_CITATION_RE.sub("", answer)))
+        if n not in grounded_text
+    ]
+    if len(alien) > len(real_fp):
+        real_fp = real_fp + [f"states {n}, absent from reference and sources"
+                             for n in alien[len(real_fp):]]
+        log.info("forced %d invented-figure FP: %s", len(alien), alien)
     return len(count("TP")) + dropped_fp, len(real_fp), len(real_fn)
 
 

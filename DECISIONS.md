@@ -993,3 +993,13 @@ diminishing returns.
   application fault. docker start restored it unchanged. The observability judge tests
   flake under the box's new load — they pass 4/4 in isolation and the metric code is
   unchanged since they were stable — so a failure there reads as environment first.
+- 2026-08-14 | A quoted sentence is supported by definition; an alien figure is invented by
+  definition | The judge's engine restart moved two marginal boundaries and both graders
+  wobbled with it. Faithfulness atomised a verbatim sentence into paraphrases and then
+  asked whether the paraphrases were supported — a quotation at the mercy of an entailment
+  call, 1.0 for months and 0.571 after the restart with the metric code untouched.
+  Sentences present verbatim in the context now count as supported without asking.
+  Correctness let "60 days" pass against a reference saying 30 whenever batching nudged
+  the call: a figure appearing in neither the reference, the sources nor the question now
+  forces a counted invention. Both follow the file's own precedent — demand evidence,
+  verify it in code, and never ask an opinion where a substring check settles it.
