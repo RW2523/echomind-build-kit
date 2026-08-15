@@ -166,11 +166,32 @@ def _document_context(message: str, ctx: Ctx) -> str:
         return ""
     if not chunks:
         return ""
-    body = "\n\n".join(f"[{c.breadcrumb}]\n{c.text}" for c in chunks)
-    return (
-        "\n\nDOCUMENTS THE CALLER CAN SEE (use these to fill in field values the user "
-        f"has already written down; do not invent values):\n{body}"
-    )
+    # Only what the caller wrote down themselves. Retrieval also returns public policy
+    # text — the same permission filter admits it, correctly — and one heading told the
+    # planner all of it was "values the user has already written down". With no form
+    # uploaded, "Bulk RNA-seq: 15 working days" from the turnaround policy came back as
+    # sample_count=15 on an approval card: a turnaround time, presented as a sample count,
+    # for a human to approve. A policy is not something the user filled in, so it does not
+    # get to fill in a form on their behalf. Public and lab documents are still shown, so
+    # the planner can see what a template expects — but under a heading that says what
+    # they are, and with the instruction that field values may only come from the caller's
+    # own documents.
+    own = [c for c in chunks if c.visibility == "private"]
+    shared = [c for c in chunks if c.visibility != "private"]
+    parts = []
+    if own:
+        body = "\n\n".join(f"[{c.breadcrumb}]\n{c.text}" for c in own)
+        parts.append(
+            "\n\nTHE CALLER'S OWN DOCUMENTS (the only source for field values — copy them "
+            f"exactly; do not invent or infer a value):\n{body}"
+        )
+    if shared:
+        body = "\n\n".join(f"[{c.breadcrumb}]\n{c.text}" for c in shared)
+        parts.append(
+            "\n\nSHARED POLICY AND REFERENCE TEXT (background only; never a source of "
+            f"field values — if a field is not in the caller's own documents, ask):\n{body}"
+        )
+    return "".join(parts)
 
 
 _WORD_QUANTITIES = {
@@ -931,6 +952,65 @@ def require_supplied_identity(plan: dict[str, Any], source: str) -> dict[str, An
     }
 
 
+def require_supplied_fields(plan: dict[str, Any], source: str) -> dict[str, Any]:
+    """A service request's field values must come from what the user put in front of us.
+
+    Same discipline as require_supplied_identity, for the same reason. Asked to submit a
+    form that had not been uploaded, the planner proposed sample_count=15 — a turnaround
+    time from the public policy text — then, once that text was fenced off, sample_count=12
+    and 24, from nowhere at all. The prompt already said not to invent; this checks. A
+    fabricated sample count on an approval card is indistinguishable from a real one, and
+    the approver has no way to know it was never on any form.
+
+    Only values with substance are checked: numbers, and words of three or more letters.
+    Enum choices are exempt when they appear in the template's own options — "150bp" is
+    picked from a list, not read off a document. `source` is the message, the conversation
+    and only the caller's OWN documents; shared policy text is deliberately not part of it,
+    because a policy is not something the user filled in.
+    """
+    if plan.get("tool") != "create_service_request":
+        return plan
+    arguments = plan.get("arguments")
+    if not isinstance(arguments, dict):
+        return plan
+    fields = arguments.get("fields")
+    if not isinstance(fields, dict) or not fields:
+        return plan
+
+    haystack = re.sub(r"\s+", " ", source.lower())
+    ungrounded: list[str] = []
+    for name, value in fields.items():
+        if value is None or isinstance(value, bool):
+            continue
+        text_ = re.sub(r"\s+", " ", str(value).strip().lower())
+        if not text_:
+            continue
+        # A number is either on the page or it is invented. A short token ("no", "yes",
+        # "150bp") is not enough on its own to prove anything, so it is not asked to.
+        if re.fullmatch(r"[\d.,]+", text_):
+            if not re.search(rf"(?<![\d.]){re.escape(text_.rstrip('.'))}(?![\d])", haystack):
+                ungrounded.append(name)
+        elif len(text_) >= 3 and text_ not in haystack:
+            # Whole phrase absent; accept if every substantive word is present, which
+            # covers "Mus musculus" written as "mus musculus (mouse)".
+            words = [w for w in re.findall(r"[a-z0-9]+", text_) if len(w) >= 3]
+            if words and not all(w in haystack for w in words):
+                ungrounded.append(name)
+    if not ungrounded:
+        return plan
+
+    log.warning("service request invented field(s) %s; asking instead", ungrounded)
+    return {
+        "tool": None,
+        "missing": ungrounded,
+        "ask": (
+            "I can only submit values you have actually given me. I do not have "
+            + ", ".join(ungrounded)
+            + " from you — could you tell me, or upload the filled form?"
+        ),
+    }
+
+
 def plan(message: str, ctx: Ctx, history: str = "") -> dict[str, Any]:
     catalog = _catalog(ctx)
     system = SYSTEM.format(
@@ -960,6 +1040,11 @@ def plan(message: str, ctx: Ctx, history: str = "") -> dict[str, Any]:
     chosen = apply_relative_date(chosen, message)
     chosen = carry_forward_instrument(chosen, message, history)
     chosen = require_document_period(chosen, message, history)
+    # The identity guard may read any document the caller can see: a name on a shared
+    # roster is still a real person. The fields guard reads only what the caller wrote
+    # down themselves — the whole point of it.
+    own_documents = documents.split("SHARED POLICY AND REFERENCE TEXT", 1)[0]
+    chosen = require_supplied_fields(chosen, f"{message}\n{history}\n{own_documents}")
     return require_supplied_identity(chosen, f"{message}\n{history}\n{documents}")
 
 

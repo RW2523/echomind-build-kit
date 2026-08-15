@@ -549,3 +549,81 @@ def test_a_short_question_after_a_clarification_is_not_hijacked(message):
     history = [{"q": "give me an invoice", "a": "Which period?", "type": "clarify",
                 "route": "action"}]
     assert _answering_our_question({"message": message, "history": history}) is None
+
+
+# --- a service request's values come from the caller, or are asked for ------------------
+#
+# Found while chasing a demo flake: asked to submit a form that had not been uploaded, the
+# planner proposed sample_count=15 (a turnaround time from the public policy text), and
+# once that text was fenced off, 12 and 24 — from nowhere. A fabricated value on an
+# approval card is indistinguishable from a real one.
+
+
+_RNA_PLAN = {
+    "tool": "create_service_request",
+    "arguments": {
+        "template_id": "tpl-rna-seq",
+        "fields": {"sample_count": 12, "organism": "Mus musculus", "read_length": "150bp"},
+    },
+}
+_FORM = "sample_count: 12\norganism: Mus musculus\nread_length: 150bp"
+
+
+def test_values_read_off_the_callers_form_are_accepted():
+    out = action_mod.require_supplied_fields(_RNA_PLAN, f"submit my form\n{_FORM}")
+    assert out["tool"] == "create_service_request"
+
+
+def test_values_stated_in_the_conversation_are_accepted():
+    out = action_mod.require_supplied_fields(
+        _RNA_PLAN, "submit 12 samples of Mus musculus at 150bp"
+    )
+    assert out["tool"] == "create_service_request"
+
+
+def test_values_from_nowhere_are_asked_for_not_proposed():
+    out = action_mod.require_supplied_fields(_RNA_PLAN, "please submit my form")
+    assert out["tool"] is None
+    assert set(out["missing"]) == {"sample_count", "organism", "read_length"}
+    assert "sample_count" in out["ask"]
+
+
+def test_a_number_the_form_does_not_say_is_caught_even_when_the_form_exists():
+    """The form says 12; the planner said 24. The form is not a licence."""
+    plan = {**_RNA_PLAN, "arguments": {**_RNA_PLAN["arguments"],
+            "fields": {**_RNA_PLAN["arguments"]["fields"], "sample_count": 24}}}
+    out = action_mod.require_supplied_fields(plan, _FORM)
+    assert out["tool"] is None and out["missing"] == ["sample_count"]
+
+
+def test_a_larger_number_does_not_smuggle_a_smaller_one():
+    """"120 samples" contains the digits 12; it is not evidence for 12."""
+    out = action_mod.require_supplied_fields(_RNA_PLAN, "I have 120 samples of Mus musculus at 150bp")
+    assert out["tool"] is None and "sample_count" in out["missing"]
+
+
+def test_shared_policy_text_is_not_a_source_of_field_values():
+    """"Bulk RNA-seq: 15 working days" is a turnaround time. It became a sample count."""
+    plan = {**_RNA_PLAN, "arguments": {**_RNA_PLAN["arguments"],
+            "fields": {**_RNA_PLAN["arguments"]["fields"], "sample_count": 15}}}
+    # the guard is handed only the caller's own documents; policy text is not among them
+    out = action_mod.require_supplied_fields(plan, "submit my form")
+    assert out["tool"] is None and "sample_count" in out["missing"]
+
+
+def test_the_document_context_separates_the_callers_own_documents_from_shared_text():
+    """The planner was told all retrieved text was 'values the user has already written
+    down'. A policy is not something the user filled in."""
+    from server.mcp.actions import _ctx_for
+
+    context = action_mod._document_context(
+        "submit my bulk RNA-seq submission form as a service request", _ctx_for("u-alice")
+    )
+    # with nothing uploaded, only shared text can come back — and it must be labelled so
+    assert "SHARED POLICY AND REFERENCE TEXT" in context or context == ""
+    assert "THE CALLER'S OWN DOCUMENTS" not in context
+
+
+def test_other_write_tools_are_left_alone_by_the_fields_guard():
+    plan = {"tool": "request_booking", "arguments": {"instrument_id": "i-1"}}
+    assert action_mod.require_supplied_fields(plan, "book it") == plan

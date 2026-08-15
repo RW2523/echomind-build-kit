@@ -1003,3 +1003,19 @@ diminishing returns.
   the call: a figure appearing in neither the reference, the sources nor the question now
   forces a counted invention. Both follow the file's own precedent — demand evidence,
   verify it in code, and never ask an opinion where a substring check settles it.
+- 2026-08-15 | A service request's field values must be traceable to the caller | Chasing
+  a one-in-three demo flake led somewhere worse. Asked to submit a form that had not been
+  uploaded, the planner proposed sample_count=15 — "Bulk RNA-seq: 15 working days", a
+  turnaround time from the public policy, put on an approval card as a sample count. Once
+  that text was fenced off it proposed 12, then 24, from nowhere. The prompt already said
+  never invent; require_supplied_fields checks, the way require_supplied_identity already
+  did for onboarding: a number is either in the caller's message, conversation or own
+  documents, or it is asked for. Shared policy text is deliberately not a source — a
+  policy is not something the user filled in. The document context now labels the two
+  kinds apart, where before one heading told the planner all of it was "values the user
+  has already written down".
+- 2026-08-15 | The demo flake was that same looseness under load | Scene 4's field
+  extraction was a retrieval race between a fresh private upload and public corpus text
+  under a heading that made no distinction between them. With the caller's own documents
+  labelled as the only source of values, the scene passes 16/16 consecutive runs where it
+  had passed roughly two in three.
