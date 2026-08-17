@@ -1254,3 +1254,8 @@ diminishing returns.
   someone installs a microscope, read up to three times per turn by the guards asking
   whether the caller named one. 14ms per read, three reads a turn, for a list that is
   static between deployments.
+- 2026-08-17 | The upload size limit is enforced during the read, not after it | The check
+  was already there and ran after `await file.read()` had put the whole body in memory, so
+  it protected the ingest pipeline and not the process: a 2 GB upload was fully resident
+  before anything said no to it. Read to the limit and stop, and answer 413 rather than
+  400 — the status has a meaning and this is what it means.

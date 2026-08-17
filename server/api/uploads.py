@@ -46,13 +46,22 @@ async def upload(
             },
         )
 
-    body = await file.read()
-    if len(body) > MAX_BYTES:
-        raise HTTPException(
-            status_code=400,
-            detail={"code": "invalid_params",
-                    "message": "File is larger than 5 MB.", "hint": "Split it up."},
-        )
+    # Read to the limit and stop, rather than read it all and then measure. The check was
+    # here already; it ran after `await file.read()` had put the whole body in memory, so
+    # the size limit protected the ingest pipeline and not the process — a 2 GB upload was
+    # fully resident before anyone said no to it.
+    chunks: list[bytes] = []
+    total = 0
+    while piece := await file.read(64 * 1024):
+        total += len(piece)
+        if total > MAX_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail={"code": "invalid_params",
+                        "message": "File is larger than 5 MB.", "hint": "Split it up."},
+            )
+        chunks.append(piece)
+    body = b"".join(chunks)
 
     with tempfile.TemporaryDirectory() as tmp:
         # .txt goes through the markdown path; it is just unstructured prose.
