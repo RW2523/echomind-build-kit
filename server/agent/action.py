@@ -1138,6 +1138,72 @@ def open_bookings_of(ctx: Ctx) -> list[dict[str, Any]]:
         ]
 
 
+# A time the caller actually settled — a clock time, a date, or a day the conversation
+# can resolve. Deliberately generous: this only decides whether to ASK, and asking someone
+# who already told us is the annoying failure.
+_WHEN_STATED_RE = re.compile(
+    r"\b\d{1,2}\s*(?::\d{2}|[ap]\.?m\.?|o'?clock)"
+    r"|\b\d{4}-\d{2}-\d{2}\b"
+    r"|\b(?:today|tonight|tomorrow|yesterday|now|asap|this (?:morning|afternoon|evening))\b"
+    r"|\b(?:mon|tues?|wed(?:nes)?|thur?s?|fri|sat(?:ur)?|sun)(?:day)?\b"
+    r"|\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b"
+    r"|\b(?:next|this|coming)\s+\w+"
+    r"|\b\d{1,2}(?:st|nd|rd|th)\b",
+    re.IGNORECASE,
+)
+
+
+def _when_was_never_said(plan: dict, message: str, history: str) -> AgentResponse | None:
+    """Ask when, rather than invent a slot and then refuse it.
+
+    "Can I book Confocal C2" names no day and no time. The planner supplied today at
+    10:00 regardless — booking, on one occasion, a slot that had begun ten hours earlier.
+    The past-start check in the tool now stops that, but stopping it produces its own
+    confusion: the caller is told that a start time they never chose has already passed.
+
+    Asked against the whole thread, because "is C2 free on 2 April 2027?" then "book it
+    from 9am" is a caller who has said when — in two turns, which is still saying it.
+    """
+    if plan.get("tool") != "request_booking":
+        return None
+    if not (plan.get("arguments") or {}).get("starts_at"):
+        return None
+    if _WHEN_STATED_RE.search(f"{history}\n{message}"):
+        return None
+    log.info("booking planned with a time nobody gave; asking when")
+    return AgentResponse(
+        response_type="clarify",
+        route="action",
+        text=("When would you like it? Give me a day and a start time — the cores are "
+              "open 08:00–20:00 UTC, Monday to Friday."),
+        meta={"plan": plan, "awaiting": "starts_at"},
+    )
+
+
+def _started_bookings_of(ctx: Ctx) -> list[dict[str, Any]]:
+    """Bookings that are live or lately past — not cancelled, not completed, already begun.
+
+    The counterpart to open_bookings_of, and the reason the "nothing to change" message
+    can tell a caller which of the two situations they are in.
+    """
+    with session_scope() as s:
+        return [
+            dict(row)
+            for row in s.execute(
+                text(
+                    """SELECT b.id, b.starts_at, b.status, i.name AS instrument
+                       FROM infinity.bookings b
+                       JOIN infinity.instruments i ON i.id = b.instrument_id
+                       WHERE b.user_id = :uid
+                         AND b.status NOT IN ('cancelled', 'completed')
+                         AND b.starts_at <= now()
+                       ORDER BY b.starts_at DESC"""
+                ),
+                {"uid": ctx.user_id},
+            ).mappings().all()
+        ]
+
+
 def _with_the_booking_being_discussed(
     plan: dict, message: str, history: str, ctx: Ctx
 ) -> dict | None:
@@ -1188,11 +1254,29 @@ def _which_booking(plan: dict, message: str, history: str, ctx: Ctx) -> AgentRes
     }:
         return None
     if not open_bookings:
+        # "You have no upcoming bookings" is true and reads as a denial of the booking
+        # they made four turns ago. Someone holding a slot that started this morning is
+        # not someone with no bookings, and telling them so sounds like the record was
+        # lost. Say which of the two it is.
+        started = _started_bookings_of(ctx)
+        if started:
+            soonest = started[0]
+            return AgentResponse(
+                response_type="redirect",
+                route="action",
+                text=(
+                    f"Your {soonest['instrument']} booking on "
+                    f"{soonest['starts_at']:%-d %B at %H:%M} UTC has already started, and "
+                    "the cancellation rules cover notice given before the start — so this "
+                    "one is the core facility admin's to unwind, not mine."
+                ),
+                meta={"plan": plan, "already_started": [b["id"] for b in started]},
+            )
         return AgentResponse(
             response_type="redirect",
             route="action",
-            text=("You have no upcoming bookings to change. A booking that has already "
-                  "run or been cancelled cannot be moved."),
+            text=("You have no bookings open to change — nothing upcoming, and nothing "
+                  "still running. A completed or cancelled booking cannot be moved."),
             meta={"plan": plan},
         )
     listed = "; ".join(
@@ -1298,6 +1382,9 @@ def propose(
         if resolved := _with_the_booking_being_discussed(chosen, message, history, ctx):
             chosen = resolved
         elif ask := _which_booking(chosen, message, history, ctx):
+            return ask
+
+        if ask := _when_was_never_said(chosen, message, history):
             return ask
 
     # An identifier nobody gave is not an identifier. "Where is my sample?" planned

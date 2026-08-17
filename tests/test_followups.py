@@ -1586,3 +1586,118 @@ def test_pi_acknowledgement_is_checked_against_what_was_said(
 
     plan = {"tool": "create_onboarding_request", "arguments": {"pi_ack": flag}}
     assert _pi_has_acknowledged(message, history, plan) == acknowledged
+
+
+# --- a day is a day, a slot must be ahead, and a loop is not an answer --------------
+
+
+def test_a_bare_date_to_covers_that_whole_day():
+    """"Up to 2026-08-17" parsed as midnight excluded two bookings made that morning:
+    "you have 1 requested" to someone holding three."""
+    from datetime import UTC, datetime
+
+    from server.mcp.tools import _is_date_only, _parse_dt
+
+    assert _is_date_only("2026-08-17") and not _is_date_only("2026-08-17T10:00")
+    midnight = _parse_dt("2026-08-17", "date_to")
+    assert midnight < datetime(2026, 8, 17, 10, 0, tzinfo=UTC), "the bug, before widening"
+
+
+@pytest.mark.tools
+def test_a_slot_that_has_already_started_cannot_be_reserved(ctxs):
+    """The planner supplied today at 10:00 for a request naming no time, and at 20:25
+    that evening it was accepted and executed."""
+    from datetime import UTC, datetime, timedelta
+
+    from server.mcp import tools as tools_mod
+    from server.mcp.errors import ToolError
+
+    past = datetime.now(UTC) - timedelta(hours=3)
+    with pytest.raises(ToolError, match="already passed"):
+        tools_mod.request_booking(
+            ctxs["alice"], instrument_id="ins-confocal-c2",
+            starts_at=past.isoformat(), ends_at=(past + timedelta(hours=1)).isoformat(),
+            account_code="ACC-A1",
+        )
+
+
+@pytest.mark.parametrize(
+    ("message", "history", "asks"),
+    [
+        # The transcript: no day, no time, and a slot invented anyway.
+        ("can I book Confocal C2", "", True),
+        ("book the confocal", "", True),
+        ("book it for 2 hours", "", True),
+        # Said outright, or said an earlier turn — both are saying it.
+        ("book it from 9am for 2 hours", "", False),
+        ("book Confocal C2 tomorrow", "", False),
+        ("book it on 2027-04-08", "", False),
+        ("book it next Tuesday", "", False),
+        ("book it for 2 hours", "user: is Confocal C2 free on 2 April 2027?", False),
+    ],
+)
+def test_a_booking_with_no_time_given_asks_when(message, history, asks):
+    from server.agent.action import _when_was_never_said
+
+    plan = {"tool": "request_booking",
+            "arguments": {"instrument_id": "ins-confocal-c2",
+                          "starts_at": "2026-08-17T10:00:00Z",
+                          "ends_at": "2026-08-17T12:00:00Z"}}
+    assert (_when_was_never_said(plan, message, history) is not None) == asks
+
+
+@pytest.mark.parametrize(
+    ("draft", "looped"),
+    [
+        ("3 requested. 28 total. " * 20, True),          # the transcript, ~40 sentences
+        ("A is 1. B is 2. " * 6, True),                  # a two-sentence cycle
+        ("You have 24 bookings. 3 are cancelled, 20 completed, 1 requested. "
+         "10 are for Advanced Imaging.", False),
+        ("The hourly rate for MALDI-TOF R2 is $44.00.", False),
+        ("Advanced Imaging Core has 5. Genomics Core has 4. Mass Spectrometry has 3. "
+         "Light Sheet LS7 is under maintenance.", False),
+    ],
+)
+def test_a_looped_draft_is_never_shipped(draft, looped):
+    """Every figure in the loop was supported by the rows, so the number check had no
+    objection — repetition is the same supported value over and over."""
+    from server.agent.data import is_degenerate
+
+    assert is_degenerate(draft) == looped
+
+
+def test_a_field_name_leaks_even_when_it_starts_a_sentence():
+    """"Requested_window_free is False." — sentence case walked past a lowercase-only
+    pattern."""
+    from server.agent.data import humanise_field_names
+
+    keys = {"requested_window_free"}
+    assert humanise_field_names("Requested_window_free is False.", keys) == \
+        "the requested window is free is False."
+    # A stored value keeps its spelling: it is not a field of this result.
+    assert humanise_field_names("The status is in_prep.", keys) == "The status is in_prep."
+
+
+@pytest.mark.parametrize(
+    ("draft", "expected"),
+    [
+        # The transcript: the next thing the caller typed was "for a hour or what".
+        ("The cost for Confocal C2 is $42.00.", "The cost for Confocal C2 is $42.00 per hour."),
+        # Already said, in any of the usual ways — left alone.
+        ("Confocal C2 is charged at $42.00 per hour.", "Confocal C2 is charged at $42.00 per hour."),
+        ("The hourly rate is $42.00.", "The hourly rate is $42.00."),
+        # Not a rate in these rows.
+        ("Your invoice total is $2689.00.", "Your invoice total is $2689.00."),
+    ],
+)
+def test_a_rate_is_quoted_with_its_unit(draft, expected):
+    from server.agent.data import name_the_rate_unit
+
+    assert name_the_rate_unit(draft, [{"name": "Confocal C2", "hourly_rate": 42.0}]) == expected
+
+
+def test_a_figure_from_a_table_without_rates_is_untouched():
+    from server.agent.data import name_the_rate_unit
+
+    assert name_the_rate_unit("Your total is $412.00.", [{"amount": 412.0}]) == \
+        "Your total is $412.00."

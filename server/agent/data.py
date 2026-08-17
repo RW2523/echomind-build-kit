@@ -708,7 +708,7 @@ def _answer_from_scalars(question: str, scalars: dict[str, Any]) -> tuple[str, b
     draft = humanise_field_names(canonicalize_numbers(draft, [], scalars), set(scalars))
     draft = drop_a_label_restated_as_a_value(draft, [], scalars)
     draft = start_with_a_capital(draft, [], scalars)
-    if not draft or verify_numbers(draft, [], question, scalars):
+    if not draft or is_degenerate(draft) or verify_numbers(draft, [], question, scalars):
         # Deterministic fallback: lead with the reason it cannot be done if there is one,
         # else state the facts plainly.
         reason = scalars.get("unavailable_reason")
@@ -774,8 +774,11 @@ _FIELD_LABELS = {
     "free_slots": "free slots",
 }
 
-# Two or more lowercase words joined by underscores — a schema identifier, never English.
-_IDENTIFIER_RE = re.compile(r"\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b")
+# Two or more words joined by underscores — a schema identifier, never English. The first
+# letter may be capital: a leaked field name that lands at the start of a sentence gets
+# sentence case from the model, and a lowercase-only pattern walked straight past it.
+# "Requested_window_free is False. Conflicting bookings are 0." shipped exactly that way.
+_IDENTIFIER_RE = re.compile(r"\b[A-Za-z][a-z0-9]*(?:_[a-z0-9]+)+\b")
 
 
 def humanise_key(key: str) -> str:
@@ -914,7 +917,12 @@ def answer_from_rows(
     )
     draft = prefer_names_over_ids(draft, rows)
     draft = drop_a_label_restated_as_a_value(draft, rows, scalars)
+    draft = name_the_rate_unit(draft, rows)
     draft = start_with_a_capital(draft, rows, scalars)
+
+    if is_degenerate(draft):
+        log.warning("draft looped; using deterministic rendering: %r", draft[:120])
+        return _deterministic_answer(rows, question), False
 
     offenders = verify_numbers(draft, rows, question, scalars)
     if offenders:
@@ -965,6 +973,58 @@ def drop_a_label_restated_as_a_value(
             break
         parts.pop()
     return " ".join(parts)
+
+
+_RATE_SAID_RE = re.compile(r"per hour|an hour|each hour|hourly|/\s*h\b|p/?h\b", re.IGNORECASE)
+_MONEY_RE = re.compile(r"\$(\d+(?:\.\d+)?)")
+
+
+def name_the_rate_unit(text: str, rows: list[dict]) -> str:
+    """Say "$42.00 per hour" when the figure came out of an hourly_rate column.
+
+    "The cost for Confocal C2 is $42.00." is a rate with its unit dropped, which is a
+    different number — the next thing the caller typed was "for a hour or what". The
+    column knows the unit even when the sentence forgets it.
+
+    Only the first figure, only one that matches a rate actually in these rows, and only
+    when the reply has not already said it some other way.
+    """
+    rates = {
+        _display(row["hourly_rate"])
+        for row in rows
+        if isinstance(row, dict) and row.get("hourly_rate") is not None
+    }
+    if not rates or _RATE_SAID_RE.search(text):
+        return text
+    return _MONEY_RE.sub(
+        lambda m: f"{m.group(0)} per hour" if m.group(1) in rates else m.group(0),
+        text, count=1,
+    )
+
+
+def is_degenerate(draft: str) -> bool:
+    """Has the model fallen into a loop rather than finished a sentence?
+
+    A real answer said "3 requested. 28 total." and then said it again, forty times, all
+    the way to the token limit, and the whole wall of it reached the reader. Every figure
+    in it was supported by the rows, so verify_numbers had no objection — repetition is
+    not an unsupported value, it is the same supported value over and over.
+
+    Decoding at temperature 0 makes this rare and makes it total when it happens: the
+    model cannot sample its way out of the cycle it has entered. Cheap to detect, so it
+    is checked on every draft rather than only where it has been seen.
+    """
+    parts = [p.strip().lower() for p in re.split(r"(?<=[.!?])\s+", draft.strip()) if p.strip()]
+    if len(parts) < 4:
+        return False
+    counts: dict[str, int] = {}
+    for part in parts:
+        counts[part] = counts.get(part, 0) + 1
+    if max(counts.values()) >= 3:
+        return True
+    # A loop with a two-sentence period repeats no single sentence three times but still
+    # says almost nothing: distinct content well below what was emitted.
+    return len(counts) / len(parts) < 0.5
 
 
 def start_with_a_capital(text: str, rows: list[dict], scalars: dict[str, Any]) -> str:

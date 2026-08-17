@@ -1203,3 +1203,32 @@ diminishing returns.
   not the same as having said so; the planner reads the caller's role and concludes
   otherwise. The flag is now necessary but never sufficient — words back it, and a bare
   "yes" counts only as an answer to our own question.
+- 2026-08-17 | A bare date_to covers that whole day | "Up to 2026-08-17" parsed as an
+  instant means midnight at the START of it, so two bookings made at 10:00 and 11:00 that
+  morning fell outside their own window: "you have 1 requested" to a caller holding three,
+  two of them made minutes earlier. The same off-by-a-day emptied a range entirely when a
+  planner sent date_from = date_to for a single day.
+- 2026-08-17 | A slot that has already started cannot be reserved | request_booking
+  checked duration, same-day and opening hours, and never that the start was ahead. Asked
+  "can I book Confocal C2" with no time given, the planner supplied 10:00 that morning
+  and at 20:25 the booking was accepted and executed — then reported as unreachable,
+  because it was. Every rule downstream measures from the start: notice, no-show, moves.
+- 2026-08-17 | A booking with no time given asks when | Refusing the invented slot fixed
+  the write and not the confusion: the caller was told a start time they never chose had
+  passed. Asked against the whole thread, so "is C2 free on 2 April?" then "book it from
+  9am" is still a caller who said when.
+- 2026-08-17 | A looped draft is never shipped | One reply said "3 requested. 28 total."
+  and then said it again, forty times, to the token limit, and all of it reached the
+  reader. Every figure was supported by the rows, so the number check had no objection —
+  repetition is the same supported value over and over. At temperature 0 this is rare and
+  total: the model cannot sample its way out of the cycle.
+- 2026-08-17 | A field name leaks even when it starts a sentence | The identifier pattern
+  matched lowercase only, so sentence case walked past it: "Requested_window_free is
+  False." went out verbatim.
+- 2026-08-17 | A rate is quoted with its unit | "The cost for Confocal C2 is $42.00" is a
+  rate with the unit dropped, which is a different number — the next thing the caller
+  typed was "for a hour or what". The column knows the unit when the sentence forgets it.
+- 2026-08-17 | "Nothing to change" says which nothing | "You have no upcoming bookings"
+  is true of someone whose slot started this morning and reads as the record having been
+  lost. The two cases are now told apart, and the started one names the booking and points
+  at the admin, as the cancellation rules require.

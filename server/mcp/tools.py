@@ -382,6 +382,13 @@ def get_my_bookings(ctx: Ctx, date_from: str | None = None,
                     date_to: str | None = None) -> dict[str, Any]:
     start = _parse_dt(date_from, "date_from") if date_from else None
     end = _parse_dt(date_to, "date_to") if date_to else None
+    # A bare date names a DAY, and "up to 2026-08-17" plainly includes that day. Parsed as
+    # an instant it means midnight at the start of it, so a booking at 10:00 that morning
+    # falls outside — "what are my requested bookings?" answered "you have 1" to someone
+    # holding three, two of them made minutes earlier. The same off-by-a-day emptied a
+    # window entirely when the planner sent date_from = date_to for a single day.
+    if end is not None and date_to and _is_date_only(date_to):
+        end = end + timedelta(days=1) - timedelta(microseconds=1)
     with session_scope() as s:
         rows = s.execute(
             text(
@@ -934,6 +941,19 @@ def request_booking(ctx: Ctx, instrument_id: str, starts_at: str, ends_at: str,
         raise invalid_params("The end of the booking must be after its start.")
     if (end - start) > timedelta(hours=12):
         raise invalid_params("A single booking may not exceed 12 hours.")
+
+    # You cannot reserve time that has already gone. Asked "can I book Confocal C2" with
+    # no date given, the planner supplied today at 10:00 — and at 20:25 that evening the
+    # booking was accepted, executed, and immediately unreachable: the caller was then
+    # told they had "no upcoming bookings to change" about a slot they had just made.
+    # Every rule downstream assumes a start in the future — cancellation notice is
+    # measured from it, no-show is judged against it — so a past start is not a booking
+    # any of them can describe.
+    if start.astimezone(UTC) <= datetime.now(UTC):
+        raise invalid_params(
+            "That start time has already passed, so the slot cannot be reserved.",
+            "Give a start in the future — say the day and the time you want.",
+        )
 
     # check_availability publishes 08:00-20:00 and computes its free slots inside those
     # hours; this tool accepted 03:00 anyway. Two tools disagreeing about the same rule is
