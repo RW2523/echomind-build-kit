@@ -28,6 +28,25 @@ def forbidden() -> ToolError:
     return ToolError("forbidden", FORBIDDEN_MESSAGE, FORBIDDEN_HINT)
 
 
+def missing_or_not_yours(what: str = "record") -> ToolError:
+    """For a lookup that deliberately will not say WHICH of the two it is.
+
+    A sample the caller cannot see and a sample that does not exist have to be answered
+    identically, or the barcode space can be enumerated by anyone with an account. That
+    is the right call and it stays. What was wrong was the wording: asked to track
+    "SMP-0001" — a barcode of a shape this platform has never used, the real ones being
+    BC1000xx — the caller was told "You do not have access to this resource", which
+    accuses them of reaching for someone else's data when they had simply mistyped.
+    Naming both possibilities gives away nothing and points at the likelier one.
+    """
+    return ToolError(
+        "forbidden",
+        f"I can't show you that {what} — either there is no such {what} or it is not "
+        "one of yours.",
+        "Check the identifier first; if it is right, the core facility admin can look.",
+    )
+
+
 def not_found(what: str = "resource") -> ToolError:
     return ToolError("not_found", f"No such {what}.", "Check the identifier and try again.")
 

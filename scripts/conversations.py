@@ -68,7 +68,14 @@ def conversations() -> list[Conversation]:
             "booking-followup-duration", "alice",
             "A follow-up that changes only the length must not inherit the old window.",
             [
-                Turn("Show me my bookings", kind="rows_answer", contains=("20",)),
+                # Not a literal count: this suite runs against a demo database that
+                # bookings get made and cancelled in, so "20" asserted the seed rather
+                # than the behaviour and went red the first time anyone used the demo.
+                # What matters here is that the lookup returns her bookings at all — the
+                # turns after it are the actual subject.
+                Turn("Show me my bookings", kind="rows_answer", contains=("ACC-A1",),
+                     check=lambda r: None if len(r.get("rows") or []) > 1 else
+                     "no bookings returned"),
                 Turn("Is Confocal C2 free on 2 April 2027?", kind="rows_answer"),
                 Turn("Book it for 2 hours from 9am",
                      kind="approval_request", contains=("Confocal C2", "2.0 h")),
@@ -368,10 +375,17 @@ class Runner:
         # joined by an underscore — which is how "count is 0. bookings is none." passed a
         # suite whose whole job is catching exactly that. Caught structurally rather than
         # in the prose: scanning for bare words would flag `status` and `instrument`,
-        # which are column names AND ordinary English. `count` is not. It is a fact ABOUT
-        # a result set and never a column of one, so a row carrying it is the envelope
-        # being rendered as its own contents.
-        if "count" in (reply.get("columns") or []):
+        # which are column names AND ordinary English. `count` is not — in a TOOL result
+        # it is a fact ABOUT the result set and never a column of one, so a row carrying
+        # it is the envelope being rendered as its own contents.
+        #
+        # SQL is exempt, and the first draft of this check was wrong to include it:
+        # "how many bookings were made in March 2026?" is answered by SELECT COUNT(*),
+        # which Postgres names `count`, and the reply — "62 bookings were made in March
+        # 2026." — is exactly right. A guard that fails a correct answer teaches people
+        # to ignore the guard.
+        plan = (reply.get("meta") or {}).get("plan") or {}
+        if plan.get("mode") != "sql" and "count" in (reply.get("columns") or []):
             problems.append("result envelope rendered as a row (a 'count' column)")
         return problems
 

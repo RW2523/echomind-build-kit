@@ -1150,3 +1150,38 @@ diminishing returns.
   already repaired this on error; a write never got the chance, so the planner putting
   instrument_id on reschedule_booking reached the caller as "That lookup does not take an
   instrument." Only when what remains can still run.
+- 2026-08-16 | The instrument a conversation is about is the one said LAST, not the one
+  introduced last | _unique keeps first-appearance order, so taking [-1] meant "the last
+  instrument to be introduced" — a different thing the moment one turn names several. A
+  recommendation reading "Confocal C2, Confocal C3 and Spinning Disk SD1 are suitable.
+  Light Sheet LS7 is excluded" put the excluded one last in that ordering and kept it
+  there; two turns later, all about Confocal C2, "book it from 9am" proposed the Light
+  Sheet — the one machine in the thread named in order to rule it out.
+- 2026-08-16 | A question about the instruments in general reads all of them | "Which
+  instruments are offline?" planned get_instrument_health against ONE instrument the
+  caller never named and answered the survey from it: "Spinning Disk SD1 is available. No
+  instruments are offline", while Q-TOF 6546 was offline. A named instrument still goes
+  to the health tool; it is the unnamed case a single row cannot answer.
+- 2026-08-16 | A record that may not exist is not called an access problem | Barcodes
+  cannot be enumerated by a non-admin, so a missing sample and someone else's sample must
+  answer alike — that stays. The wording did not have to: "SMP-0001", a shape this
+  platform has never used, drew "You do not have access to this resource", accusing a
+  caller who mistyped of reaching for other people's data. Naming both possibilities
+  gives away nothing.
+- 2026-08-16 | The convo suite's `count` check exempts SQL | COUNT(*) is named `count` by
+  Postgres, so "how many bookings were made in March 2026?" — answered correctly as 62 —
+  tripped a guard meant for tool envelopes. A check that fails a right answer teaches
+  people to ignore the check.
+- 2026-08-16 | A categorical breakdown is counted in Python, like every other aggregate |
+  Asked to show 24 bookings the model volunteered the split unprompted and got it wrong
+  three ways — 12/1/11, then 22/0/2 twice — against a real 20/1/3. The TOTAL was right
+  every time, because the total is computed for it. verify_numbers could not catch the
+  parts: 12 and 22 appear in the rows as clock times and 2 as a day of the month, so
+  every wrong figure was "supported" by some timestamp. Counting is the same arithmetic
+  as summing and now lives in the same place — and, having been computed, is added to the
+  allowed numbers too. Omitting that second half rejected the very figures we had just
+  supplied and collapsed a composed answer into a raw table of 17 rows.
+- 2026-08-16 | The multi-turn suite asserts behaviour, not the seed's row counts |
+  "Show me my bookings" asserted the literal "20", which went red the first time anyone
+  used the demo — bookings get made and cancelled in that database. The turns after it
+  were always the real subject.

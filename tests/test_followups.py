@@ -7,7 +7,7 @@ neighbour of one. They are deterministic on purpose: the defects they cover repr
 
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 import pytest
 
@@ -1369,24 +1369,47 @@ def test_the_booking_under_discussion_is_resolved_from_the_thread(ctxs):
     """"Can I reschedule to 08:00 to 12:00" planned no booking_id at all and was refused
     as "That lookup does not take an instrument"; a neighbouring run supplied one that
     did not exist and was refused as "No such booking"."""
-    from server.agent.action import _with_the_booking_being_discussed, open_bookings_of
+    import server.agent.action as action_mod
+    from server.agent.action import _with_the_booking_being_discussed
 
-    open_ = open_bookings_of(ctxs["alice"])
-    if not open_:
-        pytest.skip("no open bookings seeded for alice")
-    real = open_[0]["id"]
+    # Stubbed rather than read from the seed: whether the demo happens to hold an open
+    # booking depends on what the last demo run cancelled, and a test that quietly skips
+    # itself is a test nobody notices has stopped covering anything.
+    real, other = "bk-aaaa1111", "bk-bbbb2222"
+    original = action_mod.open_bookings_of
+    action_mod.open_bookings_of = lambda ctx: [
+        {"id": real, "starts_at": datetime(2026, 8, 20, 9, 0), "status": "requested",
+         "instrument": "Bioanalyzer B4"},
+    ]
+    try:
+        # No id at all, resolved from the id named earlier in the thread.
+        plan = {"tool": "reschedule_booking",
+                "arguments": {"starts_at": "x", "ends_at": "y"}}
+        out = _with_the_booking_being_discussed(
+            plan, "can I reschedule it", f"assistant: your latest booking is {real}",
+            ctxs["alice"],
+        )
+        assert out["arguments"]["booking_id"] == real
 
-    # No id at all, resolved from the id named earlier in the thread.
-    plan = {"tool": "reschedule_booking", "arguments": {"starts_at": "x", "ends_at": "y"}}
-    out = _with_the_booking_being_discussed(
-        plan, "can I reschedule it", f"assistant: your latest booking is {real}",
-        ctxs["alice"],
-    )
-    assert out["arguments"]["booking_id"] == real
+        # No id and none named, but they have exactly one open — that is the one.
+        plan = {"tool": "cancel_booking", "arguments": {}}
+        out = _with_the_booking_being_discussed(plan, "cancel it", "", ctxs["alice"])
+        assert out["arguments"]["booking_id"] == real
 
-    # An id already valid is left exactly as it is.
-    plan = {"tool": "cancel_booking", "arguments": {"booking_id": real}}
-    assert _with_the_booking_being_discussed(plan, "cancel it", "", ctxs["alice"]) is None
+        # An id already valid is left exactly as it is.
+        plan = {"tool": "cancel_booking", "arguments": {"booking_id": real}}
+        assert _with_the_booking_being_discussed(
+            plan, "cancel it", "", ctxs["alice"]
+        ) is None
+
+        # An id named in the thread that is not theirs never wins.
+        plan = {"tool": "cancel_booking", "arguments": {"booking_id": other}}
+        out = _with_the_booking_being_discussed(
+            plan, "cancel it", f"assistant: {other}", ctxs["alice"]
+        )
+        assert out["arguments"]["booking_id"] == real
+    finally:
+        action_mod.open_bookings_of = original
 
 
 @pytest.mark.tools
@@ -1421,3 +1444,81 @@ def test_a_write_drops_arguments_its_tool_has_no_parameter_for():
     assert _without_arguments_the_tool_does_not_take(
         {"tool": "reschedule_booking", "arguments": {"instrument_id": "ins-x"}}
     ) is None
+
+
+@pytest.mark.tools
+def test_a_question_about_instruments_in_general_reads_all_of_them():
+    """"Which instruments are offline?" surveyed ONE instrument the caller never named
+    and reported "No instruments are offline" — Q-TOF 6546 is offline. Another run
+    contradicted itself in a sentence: "Cryo-EM Titan is offline. Status is available.\""""
+    from server.agent.data import _plan_across_every_instrument
+
+    health = {"mode": "tool", "tool": "get_instrument_health",
+              "arguments": {"instrument_id": "ins-spinning-disk"}}
+    out = _plan_across_every_instrument(health, "which instruments are offline?")
+    assert out == {"mode": "tool", "tool": "get_facility_catalog", "arguments": {}}
+
+    # An instrument the caller DID name is exactly what the health tool is for.
+    assert _plan_across_every_instrument(
+        health, "is the Spinning Disk SD1 working?"
+    ) is None
+    assert _plan_across_every_instrument(
+        {"mode": "tool", "tool": "get_my_bookings", "arguments": {}}, "any offline?"
+    ) is None
+
+
+@pytest.mark.tools
+def test_a_missing_record_is_not_called_an_access_problem(ctxs):
+    """Barcodes cannot be enumerated by a non-admin, so a sample that is absent and one
+    that is someone else's must answer alike — that stays. The WORDING accused a caller
+    who mistyped "SMP-0001" (real ones are BC1000xx) of reaching for others' data."""
+    from server.mcp import tools as tools_mod
+    from server.mcp.errors import ToolError
+
+    with pytest.raises(ToolError) as caught:
+        tools_mod.track_sample(ctxs["alice"], barcode="SMP-0001")
+    assert caught.value.code == "forbidden", "still indistinguishable from a denial"
+    assert "no such" in caught.value.message.lower()
+    assert "not one of yours" in caught.value.message.lower()
+
+    # An admin is told plainly, as before.
+    with pytest.raises(ToolError) as caught:
+        tools_mod.track_sample(ctxs["cora"], barcode="SMP-0001")
+    assert caught.value.code == "not_found"
+
+
+# --- counting is arithmetic, and arithmetic is done here ---------------------------
+
+
+def test_a_categorical_breakdown_is_counted_not_guessed():
+    """Asked to show 24 bookings the model volunteered the split and got it wrong three
+    ways — 12/1/11, then 22/0/2 twice — against a real 20/1/3. The total was right each
+    time, because the total was computed for it."""
+    from server.agent.data import column_value_counts
+
+    rows = [{"id": f"bk-{i}", "status": s, "instrument": "MALDI-TOF R2",
+             "starts_at": "2026-03-01T12:00:00"}
+            for i, s in enumerate(["completed"] * 20 + ["requested"] + ["cancelled"] * 3)]
+    counts = column_value_counts(rows)
+    assert counts["status"] == {"cancelled": 3, "completed": 20, "requested": 1}
+    assert counts["instrument"] == {"MALDI-TOF R2": 24}
+    # An id is distinct per row; counting it says nothing. A timestamp is not a category.
+    assert "id" not in counts and "starts_at" not in counts
+
+
+def test_a_verified_count_is_a_number_the_reply_may_use():
+    """Handed the split but not allowed to say it, every figure was rejected as
+    unsupported and a composed answer collapsed into a raw table of 17 rows."""
+    from server.agent.data import _allowed_numbers
+
+    rows = [{"status": s} for s in ["completed"] * 5 + ["cancelled"] * 2]
+    allowed = _allowed_numbers(rows, "show my bookings", {})
+    assert Decimal(5) in allowed and Decimal(2) in allowed
+    assert Decimal(7) in allowed, "the row count itself"
+
+
+def test_counting_needs_more_than_one_row():
+    from server.agent.data import column_value_counts
+
+    assert column_value_counts([{"status": "completed"}]) == {}
+    assert column_value_counts([]) == {}

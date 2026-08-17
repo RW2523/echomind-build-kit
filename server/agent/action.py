@@ -509,7 +509,15 @@ def _referenced_instrument(
         return None, msg_family
 
     if hist_concrete:
-        return hist_concrete[-1], []
+        # By where it was last SAID, not where it was first said. _unique keeps
+        # first-appearance order, so [-1] meant "the last instrument to be introduced",
+        # which is a different thing the moment one turn names several: a recommendation
+        # answering "Confocal C2, Confocal C3 and Spinning Disk SD1 are suitable. Light
+        # Sheet LS7 is excluded due to mismatched techniques" put Light Sheet last in that
+        # ordering and kept it there. The next two turns were about Confocal C2, and "book
+        # it from 9am" proposed the Light Sheet — the one instrument in the thread that had
+        # been named in order to rule it out.
+        return _last_mentioned(history, rows) or hist_concrete[-1], []
 
     hist_family = _unique(instrument_family_mentioned(history, rows))
     if len(hist_family) == 1:
@@ -522,6 +530,25 @@ def _referenced_instrument(
 def _unique(items: list[str]) -> list[str]:
     """Distinct, order preserved."""
     return list(dict.fromkeys(items))
+
+
+def _last_mentioned(text_: str, rows: list[tuple[str, str]]) -> str | None:
+    """The instrument named latest in this text, by position of its LAST occurrence.
+
+    instruments_mentioned answers "which were named, in the order they first appear",
+    which is the right question for reading a sentence and the wrong one for deciding
+    what a conversation is currently about.
+    """
+    latest: str | None = None
+    latest_at = -1
+    for iid, name in rows:
+        for needle in (name, iid, *_MODEL_TOKEN_RE.findall(name)):
+            for match in re.finditer(
+                rf"(?<![\w-]){re.escape(needle)}(?![\w-])", text_, re.IGNORECASE
+            ):
+                if match.start() > latest_at:
+                    latest, latest_at = iid, match.start()
+    return latest
 
 
 # "as a pdf", "in word", "give me a PDF of it". The tool has always accepted a format and

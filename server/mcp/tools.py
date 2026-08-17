@@ -34,7 +34,13 @@ from server.auth import Ctx
 from server.db import ro_session, session_scope
 from server.mcp import actions as actions_mod
 from server.mcp import documents
-from server.mcp.errors import ToolError, forbidden, invalid_params, not_found
+from server.mcp.errors import (
+    ToolError,
+    forbidden,
+    invalid_params,
+    missing_or_not_yours,
+    not_found,
+)
 from server.mcp.sql_guard import MAX_ROWS
 from server.mcp.sql_guard import validate as validate_sql
 from server.observability import traced_tool
@@ -502,7 +508,7 @@ def get_request_status(ctx: Ctx, request_id: str | None = None,
             ).mappings().first()
             # Same indistinguishability rule as user profiles.
             if row is None:
-                raise forbidden() if not ctx.is_admin else not_found("request")
+                raise not_found("request") if ctx.is_admin else missing_or_not_yours("request")
             _assert_can_read_owned_by(ctx, s, row["user_id"])
             samples = s.execute(
                 text(
@@ -560,7 +566,7 @@ def track_sample(ctx: Ctx, barcode: str | None = None,
             {"bc": barcode, "sid": sample_id},
         ).mappings().first()
         if row is None:
-            raise forbidden() if not ctx.is_admin else not_found("sample")
+            raise not_found("sample") if ctx.is_admin else missing_or_not_yours("sample")
         _assert_can_read_owned_by(ctx, s, row["user_id"])
 
     history = row["history"] or []
@@ -657,7 +663,7 @@ def get_project_overview(ctx: Ctx, project_id: str) -> dict[str, Any]:
         if not (ctx.is_admin or ctx.is_pi):
             raise forbidden()
         if project is None:
-            raise forbidden() if not ctx.is_admin else not_found("project")
+            raise not_found("project") if ctx.is_admin else missing_or_not_yours("project")
 
         members = s.execute(
             text(

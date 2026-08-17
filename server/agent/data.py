@@ -351,6 +351,39 @@ def wants_average(question: str) -> bool:
     return bool(_AVERAGE_RE.search(question))
 
 
+def column_value_counts(rows: list[dict]) -> dict[str, dict[str, int]]:
+    """How many rows carry each value of a small categorical column, counted in Python.
+
+    Asked to show 24 bookings the model volunteered the split and got it wrong three
+    different ways — "12 completed, 1 requested, 11 cancelled", then "22 completed, 0
+    requested, 2 cancelled" twice — against a real 20/1/3. The total was right every
+    time, because the total is computed here; only the parts were guessed.
+
+    verify_numbers cannot catch this on its own: 12 and 22 appear in the rows as clock
+    times and 2 as a day of the month, so every wrong figure is "supported" by some
+    timestamp. Counting is the same kind of arithmetic as summing, and belongs in the
+    same place — given as a verified fact, the model has nothing left to work out.
+
+    Kept to genuinely categorical columns: a handful of repeating short strings. Ids,
+    names and timestamps are all distinct per row and counting them says nothing.
+    """
+    if len(rows) < 2:
+        return {}
+    counts: dict[str, dict[str, int]] = {}
+    for column in rows[0]:
+        if column.lower() in NEVER_SUMMED or column.lower().endswith(("_at", "_id")):
+            continue
+        values = [row.get(column) for row in rows]
+        if any(not isinstance(v, str) or len(v) > 40 for v in values):
+            continue
+        distinct = set(values)
+        # More than a handful of distinct values, or one per row, is not a category.
+        if len(distinct) > 6 or len(distinct) == len(rows):
+            continue
+        counts[column] = {value: values.count(value) for value in sorted(distinct)}
+    return counts
+
+
 def column_averages(rows: list[dict]) -> dict[str, Decimal]:
     """Mean of each purely-numeric column — the average across the returned groups.
 
@@ -390,6 +423,15 @@ def _allowed_numbers(
         allowed |= _numbers_in(key) | _numbers_in(humanise_key(key))
     # Verified aggregates over the returned rows.
     allowed |= set(column_totals(rows).values())
+    # Counts per category, on the same footing as the sums: we computed them, so a reply
+    # quoting them is quoting us. Omitted at first, and the effect was immediate — the
+    # model stated the split we had just handed it, every figure was rejected as
+    # unsupported, and a composed answer became a raw table of 17 rows.
+    allowed |= {
+        Decimal(n)
+        for tally in column_value_counts(rows).values()
+        for n in tally.values()
+    }
     if wants_average(question):
         allowed |= set(column_averages(rows).values())
 
@@ -815,6 +857,19 @@ def answer_from_rows(
     if totals:
         context += "\n\nVERIFIED COLUMN TOTALS (computed from the rows above):\n" + "\n".join(
             f"  sum({k}) = {v}" for k, v in totals.items()
+        )
+    if breakdowns := column_value_counts(rows):
+        # Given so the model states the split rather than working it out. Its own
+        # arithmetic put "12 completed, 1 requested, 11 cancelled" under a correct total
+        # of 24, where the truth was 20, 1 and 3.
+        context += (
+            "\n\nVERIFIED COUNTS (computed from the rows above — use these exact figures "
+            "for any breakdown, and never count the rows yourself):\n"
+            + "\n".join(
+                f"  {humanise_key(column)}: "
+                + ", ".join(f"{value} = {n}" for value, n in tally.items())
+                for column, tally in breakdowns.items()
+            )
         )
     if averages:
         # The question asked for an average; the mean of each column is the figure it
@@ -1361,6 +1416,29 @@ def _plan_for_an_instrument_rate(plan: dict, question: str) -> dict | None:
             "arguments": {"facility_id": named[0]}}
 
 
+def _plan_across_every_instrument(plan: dict, question: str) -> dict | None:
+    """A question about the instruments in general, answered from all of them.
+
+    "Which instruments are offline?" planned get_instrument_health against ONE instrument
+    the caller never named — ins-em-titan in one run, ins-spinning-disk in the next — and
+    answered the survey from that single row: "Spinning Disk SD1 is available. No
+    instruments are offline." Q-TOF 6546 is offline. The other run managed to contradict
+    itself inside one sentence: "ins-em-titan and Cryo-EM Titan are offline. Status is
+    available."
+
+    A health check on an instrument the caller DID name is exactly the right tool and is
+    left alone; it is the unnamed case where one row cannot answer the question asked.
+    The catalogue carries every instrument with its status.
+    """
+    if plan.get("mode") == "sql" or plan.get("tool") != "get_instrument_health":
+        return None
+    from server.agent.action import _instrument_rows, instruments_mentioned
+
+    if instruments_mentioned(question, _instrument_rows()):
+        return None
+    return {"mode": "tool", "tool": "get_facility_catalog", "arguments": {}}
+
+
 _COORDINATE_ARGS = ("near_latitude", "near_longitude")
 _LOCATION_ARGS = (*_COORDINATE_ARGS, "campus")
 
@@ -1571,6 +1649,10 @@ def answer(question: str, ctx: Ctx, history: str = "") -> AgentResponse:
     if rate := _plan_for_an_instrument_rate(plan, question):
         log.info("a published rate was asked for; reading the catalogue: %s", rate)
         plan = rate
+
+    if survey := _plan_across_every_instrument(plan, question):
+        log.info("no instrument was named; reading all of them instead: %s", survey)
+        plan = survey
 
     unranked = False
     if grounded := _plan_without_an_invented_location(plan, question, history):
