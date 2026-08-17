@@ -1790,15 +1790,18 @@ def test_an_instant_is_shown_as_a_time_people_read(raw, shown):
 
 def test_a_ranking_score_is_not_a_fact_about_the_instrument():
     """"The score is 4 due to a modality match with control and quality" — our sort key,
-    explained to the reader as a property of the equipment."""
+    explained to the reader as a property of the equipment.
+
+    why_matched went the same way a turn later, once it showed up in prose as "The match
+    was due to modality...": it is genuine evidence, and the card's meta line is where a
+    justification reads as one. See the sibling test below."""
     from server.agent.data import _drop_ranking_internals
 
     rows = [{"instrument": "Bioanalyzer B4", "score": 4,
              "why_matched": ["nucleic acid QC"], "hourly_rate": 22.0}]
     trimmed, cols = _drop_ranking_internals(rows, list(rows[0]))
     assert "score" not in trimmed[0] and "score" not in cols
-    # The evidence for the match stays — that is why the tool publishes it.
-    assert trimmed[0]["why_matched"] == ["nucleic acid QC"]
+    assert trimmed[0]["hourly_rate"] == 22.0, "what the reader asked about stays"
 
 
 def test_a_menu_optionality_marker_is_not_an_argument_name():
@@ -1843,3 +1846,76 @@ def test_a_specimen_nothing_accepts_still_returns_nothing(ctxs):
         ctxs["alice"], goal="imaging", sample_type="moon rock")
     assert nothing["matched"] == 0 and nothing["matches"] == []
     assert nothing["no_instrument_lists_that_sample_type"] is False
+
+
+# --- how the sentence reads --------------------------------------------------------
+
+
+def test_a_name_is_spelled_the_way_the_record_spells_it():
+    """"The instrument bioanalyzer b4 ... has a sample type of total rna, libraries, and
+    genomic dna" — an instrument and an assay reduced to lowercase, which reads as though
+    the platform were unsure of their names."""
+    from server.agent.data import canonicalize_spellings
+
+    rows = [{"instrument": "Bioanalyzer B4", "facility": "Genomics Core",
+             "sample_types": ["total RNA", "libraries", "genomic DNA"],
+             "state": "in_prep"}]
+    out = canonicalize_spellings(
+        "the instrument bioanalyzer b4 has a sample type of total rna and genomic dna "
+        "in the genomics core.", rows, {})
+    assert "Bioanalyzer B4" in out and "total RNA" in out
+    assert "genomic DNA" in out and "Genomics Core" in out
+
+    # Only values the record capitalises, so a stored lowercase value is never "fixed".
+    assert canonicalize_spellings("The state is in_prep.", rows, {}) == \
+        "The state is in_prep."
+
+
+def test_the_question_is_not_read_back_before_it_is_answered():
+    from server.agent.data import strip_an_echoed_question
+
+    assert strip_an_echoed_question(
+        "Show me closes lab? The lab under maintenance is Light Sheet LS7.",
+        "show me closes lab?",
+    ) == "The lab under maintenance is Light Sheet LS7."
+    # A reply that merely starts with similar words is left alone.
+    assert strip_an_echoed_question(
+        "You have 17 bookings, all completed.", "show my bookings"
+    ) == "You have 17 bookings, all completed."
+    # Never strip down to nothing.
+    assert strip_an_echoed_question("show my bookings. Yes.", "show my bookings") == \
+        "show my bookings. Yes."
+
+
+@pytest.mark.parametrize(
+    ("draft", "expected"),
+    [
+        ("the status is requested. it is for Confocal C2.",
+         "The status is requested. It is for Confocal C2."),
+        ("Bioanalyzer B4 is available. it accepts total RNA.",
+         "Bioanalyzer B4 is available. It accepts total RNA."),
+        # A sentence opening ON a stored value keeps its spelling — rule 4 outranks tidiness.
+        ("in_prep is where it has got to. the next step is QC.",
+         "in_prep is where it has got to. The next step is QC."),
+        ("bk-0071 is the latest. it was on 17 Aug.",
+         "bk-0071 is the latest. It was on 17 Aug."),
+    ],
+)
+def test_every_sentence_opens_with_a_capital(draft, expected):
+    from server.agent.data import start_with_a_capital
+
+    rows = [{"status": "in_prep", "id": "bk-0071", "instrument": "Confocal C2"}]
+    assert start_with_a_capital(draft, rows, {}) == expected
+
+
+def test_how_a_match_was_ranked_is_not_part_of_the_answer():
+    """"The match was due to modality..." answers a question about our ranking that
+    nobody asked. The card still carries the matching techniques in its meta line."""
+    from server.agent.data import _drop_ranking_internals
+
+    rows = [{"instrument": "Bioanalyzer B4", "score": 4,
+             "why_matched": ["nucleic acid QC"], "hourly_rate": 22.0}]
+    trimmed, cols = _drop_ranking_internals(rows, list(rows[0]))
+    assert "score" not in trimmed[0] and "why_matched" not in trimmed[0]
+    assert "why_matched" not in cols
+    assert trimmed[0]["hourly_rate"] == 22.0

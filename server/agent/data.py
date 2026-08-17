@@ -166,8 +166,15 @@ Absolute rules:
    the question wrote it that way. If a row says 5514.50, never write 5,514.50.
 5. RESULT FACTS describe the whole result set, not each row. If it says count = 20,
    there are 20 in total; do not multiply it by the number of rows shown.
-6. Two or three sentences. No preamble, no apology, no "based on the data".
+6. Two or three sentences of prose. No preamble, no apology, no "based on the data", and
+   no bullet lists, headings or markdown — the table below your reply is where a list
+   belongs. Do not repeat the question back before answering it: the reader wrote it.
 7. Do not describe the query or the tool. Describe the answer.
+7a. Answer what was ASKED and stop. A row carries many columns and most of them are not
+   the question: asked what an instrument costs, give the rate — not its rate and its
+   sample types and its modality and its room. The table below your reply already shows
+   the rest, so listing it is not thoroughness, it is making the reader search your
+   sentence for the one figure they wanted.
 8. Never write a field name. Facts and columns are labelled in ordinary English — use
    those words or your own. "requested_window_free is False. Conflicting bookings are 0."
    is two labels that read as a contradiction; "the instrument is under maintenance, so
@@ -863,6 +870,61 @@ def humanise_field_names(text: str, keys: Iterable[str]) -> str:
     )
 
 
+def canonicalize_spellings(text: str, rows: list[dict], scalars: dict[str, Any]) -> str:
+    """Rewrite each named value to the exact capitalisation the record uses.
+
+    The sibling of canonicalize_numbers, and the same rule: rule 4 says a value is spelled
+    the way the record spells it, and asking a model to preserve capitalisation works most
+    of the time. "The instrument bioanalyzer b4 ... has a sample type of total rna,
+    libraries, and genomic dna" is the rest of the time — an instrument and an assay
+    reduced to lowercase, which reads as though the platform were unsure of their names.
+
+    Only values the record itself capitalises, so this can restore a name and never
+    invent one: `in_prep` is stored lowercase and stays lowercase wherever it appears.
+    Matched whole-word and case-insensitively, replaced with the stored spelling.
+    """
+    named: set[str] = set()
+    for value in [v for row in rows for v in row.values()] + list(scalars.values()):
+        if isinstance(value, str) and len(value.strip()) >= 3 and any(
+            c.isupper() for c in value
+        ):
+            named.add(value.strip())
+        elif isinstance(value, list):
+            named |= {
+                str(item).strip() for item in value
+                if isinstance(item, str) and len(item.strip()) >= 3
+                and any(c.isupper() for c in item)
+            }
+    if not named:
+        return text
+    # Longest first, so "Confocal C2" is settled before the bare "Confocal" inside it.
+    for spelling in sorted(named, key=len, reverse=True):
+        text = re.sub(
+            rf"(?<![\w-]){re.escape(spelling)}(?![\w-])",
+            spelling.replace("\\", "\\\\"),
+            text,
+            flags=re.IGNORECASE,
+        )
+    return text
+
+
+def strip_an_echoed_question(text: str, question: str) -> str:
+    """Drop the caller's own question when the reply opens by repeating it.
+
+    "Show me closes lab? The lab with status 'maintenance' is Light Sheet LS7." — the
+    reader wrote the first sentence and does not need it read back, typo and all.
+    """
+    opening = question.strip().rstrip("?.!").lower()
+    if len(opening) < 8:
+        return text
+    body = text.lstrip()
+    if body.lower().startswith(opening):
+        remainder = body[len(opening):].lstrip(" ?.!:,-—")
+        if len(remainder) >= 20:
+            return remainder
+    return text
+
+
 def canonicalize_numbers(text: str, rows: list[dict], scalars: dict[str, Any]) -> str:
     """Rewrite each number in the draft to the exact spelling the record uses.
 
@@ -970,6 +1032,8 @@ def answer_from_rows(
         draft, set(scalars) | {key for row in rows for key in row}
     )
     draft = prefer_names_over_ids(draft, rows)
+    draft = canonicalize_spellings(draft, rows, scalars)
+    draft = strip_an_echoed_question(draft, question)
     draft = drop_a_label_restated_as_a_value(draft, rows, scalars)
     draft = name_the_rate_unit(draft, rows)
     draft = start_with_a_capital(draft, rows, scalars)
@@ -1082,24 +1146,26 @@ def is_degenerate(draft: str) -> bool:
 
 
 def start_with_a_capital(text: str, rows: list[dict], scalars: dict[str, Any]) -> str:
-    """Open the reply with a capital — unless the first word is a stored value.
+    """Open every sentence with a capital — unless it opens on a stored value.
 
-    Answers arrived as "the imaging core's opening hours are 08:00-20:00 Mon-Fri." and
-    "the status is requested." Lowercase openings read as a fragment of a log line rather
-    than an answer to a person.
+    Answers arrived as "the imaging core's opening hours are 08:00-20:00 Mon-Fri." and,
+    mid-paragraph, "...is available. it has a sample type of total RNA." Lowercase
+    openings read as fragments of a log line rather than as sentences.
 
-    Rule 4 outranks tidiness: a value is spelled the way the record spells it. If the
-    reply opens ON a value — a status of `in_prep`, an id — it is left exactly as it is.
+    Rule 4 outranks tidiness: a value is spelled the way the record spells it. A sentence
+    opening ON a value — a status of `in_prep`, an id — is left exactly as it is.
     """
-    if not text or not text[0].islower():
+    if not text:
         return text
-    opening = re.match(r"[a-z0-9_-]+", text)
-    if opening:
-        stored = {str(value).lower() for row in rows for value in row.values()}
-        stored |= {str(value).lower() for value in scalars.values()}
-        if opening.group(0) in stored:
-            return text
-    return text[0].upper() + text[1:]
+    stored = {str(value).lower() for row in rows for value in row.values()}
+    stored |= {str(value).lower() for value in scalars.values()}
+
+    def raise_it(match: re.Match[str]) -> str:
+        lead, word = match.group(1), match.group(2)
+        return lead + word if word.lower() in stored else lead + word[0].upper() + word[1:]
+
+    # The start of the reply, and anything after a full stop, question mark or newline.
+    return re.sub(r"(\A|(?<=[.!?])\s+|\n+)([a-z][a-z0-9_-]*)", raise_it, text)
 
 
 def _correct_sum_reported_as_average(draft: str, question: str, rows: list[dict]) -> str | None:
@@ -1425,12 +1491,14 @@ def _directory_without_a_ranking(rows: list[dict]) -> str | None:
     return f"{_NO_LOCATION_CAVEAT} The cores on record are {', '.join(listed)}."
 
 
-# How recommend_instrument decided its order. Real, and not about the instrument: a
-# reader asking which machine does nucleic acid QC was told "the score is 4 due to a
-# modality match with control and quality" — our sort key, explained to them as a
-# property of the equipment. why_matched stays: the techniques that earned a match are
-# evidence, and the tool publishes them for exactly that reason.
-_RANKING_INTERNALS = ("score",)
+# How recommend_instrument decided, rather than what it found. `score` is our sort key,
+# and a reader asking which machine does nucleic acid QC was told "the score is 4 due to a
+# modality match with control and quality" — an internal explained to them as a property
+# of the equipment. `why_matched` is genuine evidence and still travels: the card puts the
+# matching techniques in its meta line, which is where a justification belongs. Recited in
+# the sentence it became "The match was due to modality...", which answers a question
+# about our ranking that nobody asked.
+_RANKING_INTERNALS = ("score", "why_matched")
 
 
 def _drop_ranking_internals(

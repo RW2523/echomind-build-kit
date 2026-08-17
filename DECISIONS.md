@@ -1289,3 +1289,27 @@ diminishing returns.
   closes lab?" became a catalogue lookup on a typo and answered "No such facility. Check
   the identifier and try again" about an identifier nobody had typed. A core they DID name
   and we do not have still gets the honest not_found.
+- 2026-08-17 | A name is spelled the way the record spells it, in code | canonicalize_
+  numbers has done this for figures since it was written, and rule 4 says the same about
+  every value; asking a model to preserve capitalisation works most of the time. "The
+  instrument bioanalyzer b4 ... has a sample type of total rna, libraries, and genomic
+  dna" is the rest of the time — an instrument and an assay in lowercase, reading as
+  though the platform were unsure of their names. Only values the record itself
+  capitalises, so a stored `in_prep` is never "corrected".
+- 2026-08-17 | Every sentence opens with a capital, not only the first | The opening fix
+  reached the first character of the reply and stopped, so "...is available. it has a
+  sample type of total RNA" kept its lowercase mid-paragraph. A sentence opening ON a
+  stored value is still left exactly as it is.
+- 2026-08-17 | The question is not read back before it is answered | "Show me closes lab?
+  The lab under maintenance is Light Sheet LS7." The reader wrote the first sentence,
+  typo and all.
+- 2026-08-17 | How a match was ranked is not part of the answer | `score` is a sort key
+  and reached the reader as a property of the equipment. `why_matched` is genuine
+  evidence and went the same way once it appeared in prose as "The match was due to
+  modality..." — the card's meta line is where a justification reads as one, and it still
+  carries it.
+- 2026-08-17 | Answer what was asked and stop | A row carries many columns and most are
+  not the question. Asked what an instrument costs, the reply gave the rate, the sample
+  types, the modality and the room; the table underneath already shows those, so listing
+  them is not thoroughness, it is making the reader search the sentence for the figure
+  they wanted. Bullet lists went with it: the table is where a list belongs.
