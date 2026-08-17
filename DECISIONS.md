@@ -1185,3 +1185,21 @@ diminishing returns.
   "Show me my bookings" asserted the literal "20", which went red the first time anyone
   used the demo — bookings get made and cancelled in that database. The turns after it
   were always the real subject.
+- 2026-08-16 | A bare `name` column belongs to the row's subject, which is what the row
+  leads with | A project member row is {user_id, role, name, lab_id}. Letting every id
+  column claim the name made a lab into a person — "Asha Patel is in your project, with
+  role lead, in lab-a" went out as "...in Jia Chen". Letting none of them claim it was no
+  better: u-dana and u-jia then reached the reader as themselves. These rows come from a
+  SELECT that puts the entity first, so the first id column owns the name and the rest
+  need a column named for themselves.
+- 2026-08-16 | A NULL reads as "not recorded" | str(None) put "Cora Lindqvist is in None"
+  in front of a scientist — a word you have to be a programmer to discount, and one that
+  could be mistaken for a value.
+- 2026-08-16 | The PI's acknowledgement is checked against what was said, both ways |
+  pi_ack=false was refused as "pi_ack must be true" — unhelpful. On the same request
+  phrased the same way the planner also sent pi_ack=TRUE with nothing in the conversation
+  acknowledging anything, recording a consent against a PI who never gave it, which is
+  the failure the approval mechanism exists to prevent. SYSTEM already says being a PI is
+  not the same as having said so; the planner reads the caller's role and concludes
+  otherwise. The flag is now necessary but never sufficient — words back it, and a bare
+  "yes" counts only as an answer to our own question.

@@ -1075,6 +1075,45 @@ def plan(message: str, ctx: Ctx, history: str = "") -> dict[str, Any]:
     return require_supplied_identity(chosen, f"{message}\n{history}\n{documents}")
 
 
+# An acknowledgement, said outright: "the PI has approved it", "I am the PI and I
+# acknowledge this", "signed off by the PI".
+_PI_ACK_RE = re.compile(
+    r"\bpi\b[^.?!]{0,50}?\b(?:acknowledg\w*|approv\w*|agreed|consent\w*|confirm\w*"
+    r"|sign(?:ed)?[ -]?off|ok(?:ay|'?d)?)\b"
+    r"|\b(?:acknowledg\w*|approv\w*|confirm\w*|consent\w*|sign(?:ed)?[ -]?off)\b"
+    r"[^.?!]{0,50}?\bpi\b"
+    r"|\bi\s+acknowledge\b|\bi\s+am\s+the\s+pi\b|\bas\s+(?:the\s+)?pi\b",
+    re.IGNORECASE,
+)
+# Or said in answer to our own question, where "yes" is the whole sentence.
+_AFFIRMATIVE_RE = re.compile(
+    r"^\s*(?:yes|yep|yeah|yup|correct|confirmed|indeed|they have|he has|she has|"
+    r"i have|i do|go ahead|that'?s right|of course|sure)\b",
+    re.IGNORECASE,
+)
+_WE_ASKED_FOR_PI_ACK = "has the pi acknowledged"
+
+
+def _pi_has_acknowledged(message: str, history: str, plan: dict) -> bool:
+    """Did the caller actually say the PI acknowledges this, in words?
+
+    Not "is pi_ack true in the plan" — that is the model's opinion of the conversation,
+    and on an onboarding request phrased no differently it came back true one run and
+    false the next. The plan's flag is necessary but never sufficient: something the
+    caller said has to back it.
+    """
+    if not (plan.get("arguments") or {}).get("pi_ack"):
+        return False
+    said = f"{history}\n{message}"
+    if _PI_ACK_RE.search(said):
+        return True
+    # "Yes." on its own means yes only when the previous turn was us asking this.
+    return bool(
+        _AFFIRMATIVE_RE.search(message)
+        and _WE_ASKED_FOR_PI_ACK in history.lower()
+    )
+
+
 _BOOKING_TOOLS = frozenset({"cancel_booking", "reschedule_booking"})
 _BOOKING_ID_RE = re.compile(r"\bbk-[a-z0-9]+\b", re.IGNORECASE)
 
@@ -1287,14 +1326,22 @@ def propose(
                 meta={"plan": chosen, "awaiting": invented},
             )
 
-        # Onboarding needs the PI to have actually said yes. The planner is told to ask
-        # when they have not, and instead sent pi_ack=false — which the tool refused as
-        # "pi_ack must be true", a field name and a boolean where a question belonged.
-        # Refusing and asking are both correct about the consent; only one of them lets
-        # the caller finish. The acknowledgement itself is still never assumed.
-        if name == "create_onboarding_request" and not (
-            chosen.get("arguments") or {}
-        ).get("pi_ack"):
+        # Onboarding needs the PI to have actually said yes.
+        #
+        # Two ways to get this wrong and the dangerous one is not the obvious one. The
+        # planner sent pi_ack=false, which the tool refused as "pi_ack must be true" — a
+        # field name and a boolean where a question belonged, and merely unhelpful. It
+        # also, on the same request phrased the same way, sent pi_ack=TRUE with nothing
+        # in the conversation acknowledging anything: a consent recorded against a PI who
+        # had not given it, which is the failure this whole approval mechanism exists to
+        # prevent. SYSTEM says being a PI is not the same as having said so; the planner
+        # reads the caller's role and concludes otherwise.
+        #
+        # So the acknowledgement is checked against what was actually said, in either
+        # direction, and asked for when it was not.
+        if name == "create_onboarding_request" and not _pi_has_acknowledged(
+            message, history, chosen
+        ):
             log.info("onboarding planned without pi_ack; asking for it")
             return AgentResponse(
                 response_type="clarify",

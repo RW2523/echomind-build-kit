@@ -554,6 +554,12 @@ def _display(value: Any) -> str:
     1.9750000000000000 into 1.98 and 0E-20 into 0.00. Integers (a count of 20) and strings
     are left exactly as they are.
     """
+    if value is None:
+        # A NULL is a field nobody filled in, and str(None) is the Python literal for it.
+        # A project member with no lab on file came back as "Cora Lindqvist is in None" —
+        # a word the reader has to be a programmer to discount. "not recorded" is what the
+        # absence actually means, and it cannot be mistaken for a value.
+        return "not recorded"
     if isinstance(value, bool):
         return "yes" if value else "no"
     if isinstance(value, Decimal | float):
@@ -621,11 +627,25 @@ def _names_for_ids(rows: list[dict]) -> dict[str, str]:
     """
     names: dict[str, str] = {}
     for row in rows:
-        for key, value in row.items():
-            if not (isinstance(value, str) and _INTERNAL_ID_RE.fullmatch(value.strip())):
-                continue
+        id_keys = [
+            key for key, value in row.items()
+            if isinstance(value, str) and _INTERNAL_ID_RE.fullmatch(value.strip())
+        ]
+        # A bare `name` belongs to the row's SUBJECT, and the subject is what the row
+        # leads with — these rows are built by a SELECT that puts the entity first and
+        # its attributes after. A project member row is {user_id, role, name, lab_id}:
+        # the name is the member's. Letting every id column help itself to it made lab-a
+        # a person, so "Asha Patel is in your project, with role lead, in lab-a" went out
+        # as "...in Jia Chen" — a lab rendered as a colleague. Letting none of them have
+        # it was no better: u-dana and u-jia then reached the reader as themselves.
+        subject = id_keys[0] if id_keys else None
+        for key in id_keys:
+            value = row[key]
             base = key[:-3] if key.endswith("_id") else key
-            for candidate in (base, f"{base}_name", "name", "title"):
+            candidates = [base, f"{base}_name"]
+            if key == subject:
+                candidates += ["name", "title"]
+            for candidate in candidates:
                 label = row.get(candidate)
                 if isinstance(label, str) and label.strip() and label != value:
                     names[value.strip().lower()] = label.strip()

@@ -1522,3 +1522,67 @@ def test_counting_needs_more_than_one_row():
 
     assert column_value_counts([{"status": "completed"}]) == {}
     assert column_value_counts([]) == {}
+
+
+# --- whose name is that, and whose consent -----------------------------------------
+
+
+def test_a_bare_name_belongs_to_the_row_subject_only():
+    """A project member row is {user_id, role, name, lab_id}. Letting every id column
+    help itself to `name` made lab-a a person — "Asha Patel is in your project, with role
+    lead, in Jia Chen". Letting none of them have it leaked u-dana and u-jia instead."""
+    from server.agent.data import _names_for_ids, prefer_names_over_ids
+
+    members = [{"user_id": "u-asha", "role": "lead", "name": "Asha Patel",
+                "lab_id": "lab-a"},
+               {"user_id": "u-jia", "role": "member", "name": "Jia Chen",
+                "lab_id": "lab-a"}]
+    names = _names_for_ids(members)
+    assert names == {"u-asha": "Asha Patel", "u-jia": "Jia Chen"}
+    assert "lab-a" not in names, "a lab is not a person"
+    assert prefer_names_over_ids(
+        "u-asha and u-jia are in lab-a", members
+    ) == "Asha Patel and Jia Chen are in lab-a"
+
+    # One entity in the row: the bare name is unambiguously its own.
+    assert _names_for_ids([{"instrument_id": "ins-novaseq", "name": "NovaSeq X"}]) == {
+        "ins-novaseq": "NovaSeq X"}
+    # An explicit pair per id beats every heuristic.
+    assert _names_for_ids([{"instrument_id": "ins-miseq", "instrument": "MiSeq M3",
+                            "facility_id": "fac-gen", "facility": "Genomics Core"}]) == {
+        "ins-miseq": "MiSeq M3", "fac-gen": "Genomics Core"}
+
+
+def test_a_null_reads_as_absent_not_as_python():
+    """"Cora Lindqvist is in None" — a word the reader has to be a programmer to
+    discount."""
+    from server.agent.data import _display
+
+    assert _display(None) == "not recorded"
+
+
+@pytest.mark.parametrize(
+    ("message", "history", "flag", "acknowledged"),
+    [
+        # The dangerous direction: the planner reads the caller's role and records a
+        # consent the PI never gave.
+        ("onboard a new researcher, Jane Roe, jane@x.edu, Lab A", "", True, False),
+        ("onboard Jane Roe into Lab A", "", False, False),
+        # Said outright, in any of the usual phrasings.
+        ("yes, I am the PI and I acknowledge it", "", True, True),
+        ("the PI has approved this", "", True, True),
+        ("signed off by the PI", "", True, True),
+        # "Yes" counts only as an answer to our own question.
+        ("yes", "assistant (clarify): Has the PI acknowledged this new user?", True, True),
+        ("yes", "assistant (clarify): Which account should I charge?", True, False),
+        # The plan's own flag is necessary as well as insufficient.
+        ("the PI has approved this", "", False, False),
+    ],
+)
+def test_pi_acknowledgement_is_checked_against_what_was_said(
+    message, history, flag, acknowledged
+):
+    from server.agent.action import _pi_has_acknowledged
+
+    plan = {"tool": "create_onboarding_request", "arguments": {"pi_ack": flag}}
+    assert _pi_has_acknowledged(message, history, plan) == acknowledged
