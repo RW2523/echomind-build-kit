@@ -1259,3 +1259,33 @@ diminishing returns.
   it protected the ingest pipeline and not the process: a 2 GB upload was fully resident
   before anything said no to it. Read to the limit and stop, and answer 413 rather than
   400 — the status has a meaning and this is what it means.
+- 2026-08-17 | An ISO instant is shown as a time people read | "2026-08-17T08:00:00+00:00
+  to 2026-08-17T20:00:00+00:00" says the same thing as "17 Aug 2026, 08:00–20:00 UTC" and
+  only one of them can be read at a glance. ISO is how the value is STORED — the API keeps
+  it, because a machine consumes that. Times stay in UTC and say so: the facility publishes
+  its hours in UTC and the cancellation rules are written in it, so converting to a
+  viewer's zone would put a booking at 09:00 beside a rule about 08:00. An offset is
+  converted rather than relabelled, since stamping "UTC" on a wall clock is a wrong time
+  stated confidently. Applied in three places — the prose, the evidence table and the
+  approval card — because the card is read at the moment it matters most.
+- 2026-08-17 | A sample type that names the WORK does not filter the answer away | "Is
+  there any instrument for quality control on nucleic acids?" came back "no instruments
+  matched" while Bioanalyzer B4 sat on record doing nucleic acid QC. "Nucleic acids" was
+  never a specimen the caller declared; it was half the goal. The counterweight is real
+  and an existing test caught the first fix for missing it: "moon rock" IS a specimen, and
+  nothing taking it means nothing matches. Decided on the instrument's own words — if
+  every content word of the phrase appears in a technique it performs, the phrase is
+  describing the work.
+- 2026-08-17 | A ranking score is not a fact about the instrument | "The score is 4 due to
+  a modality match with control and quality" is our sort key, explained to the reader as a
+  property of the equipment. why_matched stays: the techniques that earned a match are
+  evidence, which is why the tool publishes them.
+- 2026-08-17 | An optionality marker is not an argument name | The tool menu writes
+  `near_latitude?` and the planner copied the question mark into the argument name. The
+  dispatcher rejected it and the surplus-argument repair recovered, so it looked harmless
+  — but every guard in between was looking for `near_latitude` and saw nothing, and an
+  invented New York origin sailed past the check written to catch exactly that.
+- 2026-08-17 | A facility id the caller never named is dropped, not refused | "Show me
+  closes lab?" became a catalogue lookup on a typo and answered "No such facility. Check
+  the identifier and try again" about an identifier nobody had typed. A core they DID name
+  and we do not have still gets the honest not_found.

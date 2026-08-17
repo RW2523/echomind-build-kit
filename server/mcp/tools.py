@@ -1526,6 +1526,41 @@ def _instruments_card(matches: list[dict[str, Any]], goal: str,
     }
 
 
+def _content_tokens(phrase: str) -> set[str]:
+    """Words that carry meaning, singular-ish, for comparing a phrase to a technique."""
+    stop = {"a", "an", "the", "of", "on", "for", "and", "in", "to", "by", "with"}
+    return {
+        word[:-1] if len(word) > 3 and word.endswith("s") else word
+        for word in re.findall(r"[a-z0-9]+", phrase.lower())
+        if word not in stop
+    }
+
+
+def _describes_the_work(sample_type: str, candidates: list[dict[str, Any]]) -> bool:
+    """Is this phrase naming what the instrument DOES rather than what it is fed?
+
+    The distinction the sample-type filter turns on, and the two cases pull opposite ways.
+    "Moon rock" is a specimen nothing accepts, and recommending a confocal for it would be
+    wrong — an empty result is the honest answer and there is a test that says so.
+    "Nucleic acids" is not a specimen the caller declared at all: it is half of "quality
+    control on nucleic acids", and Bioanalyzer B4's technique is spelled "nucleic acid
+    QC". One filter should hold and the other should not.
+
+    Decided on the instrument's own words: if every content word of the phrase appears in
+    a technique it performs, the phrase is describing the work.
+    """
+    wanted = _content_tokens(sample_type)
+    if not wanted:
+        return False
+    for candidate in candidates:
+        performed: set[str] = set()
+        for technique in candidate.get("techniques") or []:
+            performed |= _content_tokens(str(technique))
+        if wanted <= performed:
+            return True
+    return False
+
+
 def recommend_instrument(ctx: Ctx, goal: str,
                          sample_type: str | None = None) -> dict[str, Any]:
     """Instruments that can do what `goal` describes, best first, with the evidence.
@@ -1567,6 +1602,7 @@ def recommend_instrument(ctx: Ctx, goal: str,
         ).mappings().all()
 
     matches: list[dict[str, Any]] = []
+    withheld: list[dict[str, Any]] = []
     excluded = 0
     for row in rows:
         score, why = _score_instrument(row, goal_text, goal_tokens)
@@ -1576,10 +1612,10 @@ def recommend_instrument(ctx: Ctx, goal: str,
         # question, so it narrows the list rather than reordering it. The count of what it
         # removed is reported, because a filter that silently empties a result is a filter
         # nobody can argue with.
-        if sample_type and not _accepts_sample(row, sample_type):
+        withheld_by_sample = bool(sample_type) and not _accepts_sample(row, sample_type)
+        if withheld_by_sample:
             excluded += 1
-            continue
-        matches.append({
+        (withheld if withheld_by_sample else matches).append({
             "instrument_id": row["id"],
             "instrument": row["name"],
             "facility_id": row["facility_id"],
@@ -1602,13 +1638,27 @@ def recommend_instrument(ctx: Ctx, goal: str,
     # Equal evidence, so the tie-break is what the caller can act on: something they may
     # book today outranks something equally suitable that is in pieces on a bench. Name
     # last, so the order never depends on the order rows came back.
+    # A sample type that removes EVERY match has not narrowed the answer, it has replaced
+    # it with a wrong one. "Is there any instrument for quality control on nucleic acids?"
+    # came back "no instruments matched" while Bioanalyzer B4 sat on record doing nucleic
+    # acid QC — its sample types are spelled total RNA, libraries and genomic DNA, and
+    # "nucleic acids" was never a sample declaration at all, it was half the goal. The
+    # goal matches are the answer; the mismatch is stated rather than acted on, so the
+    # reply can say which sample types the instrument does take.
+    ignored_sample_type = False
+    if not matches and withheld and _describes_the_work(sample_type, withheld):
+        matches, ignored_sample_type = withheld, True
+        log.info("sample_type %r names the work, not the specimen; answering on the goal",
+                 sample_type)
+
     matches.sort(key=lambda m: (-m["score"], not m["bookable"], m["instrument"]))
 
     return {
         "goal": goal,
         "sample_type": sample_type,
         "matched": len(matches),
-        "excluded_by_sample_type": excluded,
+        "excluded_by_sample_type": 0 if ignored_sample_type else excluded,
+        "no_instrument_lists_that_sample_type": ignored_sample_type,
         "matches": matches,
         "card": _instruments_card(matches, goal, sample_type),
     }

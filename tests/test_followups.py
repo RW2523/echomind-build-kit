@@ -1759,3 +1759,87 @@ def test_rows_narrow_to_the_instrument_that_was_asked_about():
     assert _narrow_to_the_focus_instrument(rows, cols, {})[0] == rows
     assert _narrow_to_the_focus_instrument(
         rows, cols, {"focus_instrument": "ins-absent"})[0] == rows
+
+
+# --- a time people read, and internals they should not ------------------------------
+
+
+@pytest.mark.parametrize(
+    ("raw", "shown"),
+    [
+        # The complaint: a booking window read as two storage timestamps.
+        ("2026-08-17T08:00:00+00:00", "17 Aug 2026, 08:00 UTC"),
+        ("2026-08-17T20:00:00Z", "17 Aug 2026, 20:00 UTC"),
+        ("2026-08-17 08:00:00+00:00", "17 Aug 2026, 08:00 UTC"),
+        # A bare date has no instant to convert.
+        ("2026-08-17", "17 Aug 2026"),
+        # An offset is converted, never relabelled: 08:00+05:30 is 02:30 UTC.
+        ("2026-08-17T08:00:00+05:30", "17 Aug 2026, 02:30 UTC"),
+        # Not instants: a period, an account code, a stored state, a name.
+        ("2026-03", "2026-03"),
+        ("ACC-A1", "ACC-A1"),
+        ("in_prep", "in_prep"),
+        ("MALDI-TOF R2", "MALDI-TOF R2"),
+    ],
+)
+def test_an_instant_is_shown_as_a_time_people_read(raw, shown):
+    from server.agent.data import _display
+
+    assert _display(raw) == shown
+
+
+def test_a_ranking_score_is_not_a_fact_about_the_instrument():
+    """"The score is 4 due to a modality match with control and quality" — our sort key,
+    explained to the reader as a property of the equipment."""
+    from server.agent.data import _drop_ranking_internals
+
+    rows = [{"instrument": "Bioanalyzer B4", "score": 4,
+             "why_matched": ["nucleic acid QC"], "hourly_rate": 22.0}]
+    trimmed, cols = _drop_ranking_internals(rows, list(rows[0]))
+    assert "score" not in trimmed[0] and "score" not in cols
+    # The evidence for the match stays — that is why the tool publishes it.
+    assert trimmed[0]["why_matched"] == ["nucleic acid QC"]
+
+
+def test_a_menu_optionality_marker_is_not_an_argument_name():
+    """The planner copied `near_latitude?` out of the tool menu, so every guard looking
+    for `near_latitude` saw nothing and an invented New York origin sailed past."""
+    from server.agent.data import _normalise_plan
+
+    plan = {"mode": "tool", "tool": "find_facilities",
+            "arguments": {"near_latitude?": "40.7128", "near_longitude?": "-74.0060"}}
+    assert _normalise_plan(plan, "show me nearby labs")["arguments"] == {
+        "near_latitude": "40.7128", "near_longitude": "-74.0060"}
+
+
+@pytest.mark.tools
+def test_a_sample_type_that_matches_nothing_does_not_empty_the_answer(ctxs):
+    """"Quality control on nucleic acids" answered "no instruments matched" while
+    Bioanalyzer B4 sat on record doing nucleic acid QC — its sample types are spelled
+    total RNA, libraries and genomic DNA, and "nucleic acids" was half the goal."""
+    from server.mcp import tools as tools_mod
+
+    result = tools_mod.recommend_instrument(
+        ctxs["alice"], goal="quality control", sample_type="nucleic acids")
+    assert result["matched"] == 1
+    assert result["no_instrument_lists_that_sample_type"] is True
+    assert result["matches"][0]["instrument"] == "Bioanalyzer B4"
+
+    # A sample type that genuinely matches still narrows, and says nothing was ignored.
+    real = tools_mod.recommend_instrument(
+        ctxs["alice"], goal="live-cell imaging", sample_type="live cells")
+    assert real["matched"] >= 2
+    assert real["no_instrument_lists_that_sample_type"] is False
+
+
+def test_a_specimen_nothing_accepts_still_returns_nothing(ctxs):
+    """The counterweight, and an existing test caught the first fix for missing it:
+    "moon rock" is a specimen the caller declared and nothing takes, so an empty result
+    is the honest answer. "Nucleic acids" was never a specimen — it was half the goal,
+    and the instrument's technique is spelled "nucleic acid QC"."""
+    from server.mcp import tools as tools_mod
+
+    nothing = tools_mod.recommend_instrument(
+        ctxs["alice"], goal="imaging", sample_type="moon rock")
+    assert nothing["matched"] == 0 and nothing["matches"] == []
+    assert nothing["no_instrument_lists_that_sample_type"] is False

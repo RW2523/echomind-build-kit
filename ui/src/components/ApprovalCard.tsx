@@ -1,3 +1,4 @@
+import { readableInstant } from "../cells";
 import { useState } from "react";
 import { actionRecords, decideAction, downloadDocument, type ActionResult } from "../api";
 import { Preview } from "./Preview";
@@ -17,6 +18,10 @@ interface Props {
 function render(value: unknown): string {
   if (value === null || value === undefined) return "—";
   if (typeof value === "object") return JSON.stringify(value);
+  // The card is what a person vouches for before a write happens, so its fields are
+  // read at the moment they matter most. "starts at 2026-08-17T10:00:00+00:00" is the
+  // stored form of "17 Aug 2026, 10:00 UTC".
+  if (typeof value === "string") return readableInstant(value) ?? value;
   return String(value);
 }
 

@@ -25,8 +25,25 @@ test("a value is shown as it arrived, not reformatted", () => {
   /* Formatting is allowed; arithmetic is not, and neither is tidying. A figure the
      browser rewrote is a figure no tool stands behind. */
   assert.equal(cellValue("999.00").text, "999.00");
-  assert.equal(cellValue("2026-03-30T01:00:00+00:00").text, "2026-03-30T01:00:00+00:00");
   assert.equal(cellValue(42.5).text, "42.5");
+  assert.equal(cellValue("ACC-A1").text, "ACC-A1");
+  assert.equal(cellValue("in_prep").text, "in_prep");
+  /* A period is not an instant and keeps its own spelling. */
+  assert.equal(cellValue("2026-03").text, "2026-03");
+});
+
+test("an ISO instant is read as a time, because ISO is how it is stored", () => {
+  /* The one conversion, and the exception that proves the rule above: a booking row read
+     "2026-08-17T08:00:00+00:00 to 2026-08-17T20:00:00+00:00", which says the same thing
+     as "17 Aug 2026, 08:00 UTC" and takes a second reading to get there. Nothing about
+     the moment changes — only how it is spelled. */
+  assert.equal(cellValue("2026-03-30T01:00:00+00:00").text, "30 Mar 2026, 01:00 UTC");
+  assert.equal(cellValue("2026-08-17T20:00:00Z").text, "17 Aug 2026, 20:00 UTC");
+  /* A bare date has no instant to convert and keeps its day. */
+  assert.equal(cellValue("2026-08-17").text, "17 Aug 2026");
+  /* An offset is converted, never relabelled: 08:00+05:30 is 02:30 UTC, and stamping
+     "UTC" on the wall clock would state a time that is simply wrong. */
+  assert.equal(cellValue("2026-08-17T08:00:00+05:30").text, "17 Aug 2026, 02:30 UTC");
 });
 
 test("a structured cell shows its contents rather than [object Object]", () => {

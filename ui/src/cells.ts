@@ -16,6 +16,42 @@
 /** The one word this UI uses for "the platform returned nothing here". */
 export const NOT_RECORDED = "not recorded";
 
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const ISO_INSTANT =
+  /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::\d{2}(?:\.\d+)?)?(Z|[+-]\d{2}:?\d{2})?)?$/;
+
+/**
+ * An ISO-8601 instant as a person reads it, or null when the string is not one.
+ *
+ * The one conversion this module makes, and the exception proves the rule above: ISO is
+ * how the value is STORED, not what it says. A booking row read
+ * "2026-08-17T08:00:00+00:00 to 2026-08-17T20:00:00+00:00", which carries the same
+ * meaning as "17 Aug 2026, 08:00 UTC" and takes a second reading to get there.
+ *
+ * Kept in UTC on purpose. The facility publishes 08:00-20:00 UTC and the cancellation
+ * rules are written in it, so showing a viewer's local time would put a booking at 09:00
+ * next to a rule about 08:00 and leave them to reconcile the two. A bare date has no
+ * instant to convert and keeps its day exactly.
+ */
+export function readableInstant(raw: string): string | null {
+  const match = ISO_INSTANT.exec(raw.trim());
+  if (!match) return null;
+  const [, year, month, day, hour, minute, zone] = match;
+  const name = MONTHS[Number(month) - 1];
+  if (!name) return null;
+  if (hour === undefined) return `${Number(day)} ${name} ${year}`;
+  // Offsets are converted rather than relabelled: 08:00+05:30 is 02:30 UTC, and stamping
+  // "UTC" on the wall clock would state a time that is simply wrong.
+  const at = new Date(`${year}-${month}-${day}T${hour}:${minute}:00${zone ?? "Z"}`);
+  if (Number.isNaN(at.getTime())) return null;
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return (
+    `${at.getUTCDate()} ${MONTHS[at.getUTCMonth()]} ${at.getUTCFullYear()}, ` +
+    `${pad(at.getUTCHours())}:${pad(at.getUTCMinutes())} UTC`
+  );
+}
+
 export interface Cell {
   text: string;
   /** True when `text` is our word for absence rather than something the server sent. */
@@ -34,7 +70,9 @@ export interface Cell {
 export function cellValue(raw: unknown): Cell {
   if (raw === null || raw === undefined) return { text: NOT_RECORDED, missing: true };
   if (typeof raw === "string") {
-    return raw.trim() === "" ? { text: NOT_RECORDED, missing: true } : { text: raw, missing: false };
+    if (raw.trim() === "") return { text: NOT_RECORDED, missing: true };
+    const moment = readableInstant(raw);
+    return { text: moment ?? raw, missing: false };
   }
   if (typeof raw === "object") {
     // A list or an object in a cell is still evidence, so it is shown rather than

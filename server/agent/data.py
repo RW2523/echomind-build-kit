@@ -543,6 +543,53 @@ def _all_null(rows: list[dict]) -> bool:
     return len(rows) == 1 and all(v is None for v in rows[0].values())
 
 
+_ISO_INSTANT_RE = re.compile(
+    r"^(\d{4})-(\d{2})-(\d{2})"           # date
+    r"(?:[T ](\d{2}):(\d{2})(?::\d{2}(?:\.\d+)?)?"   # optional time
+    r"(?:Z|[+-]\d{2}:?\d{2})?)?$"          # optional offset
+)
+_MONTH_SHORT = ("Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+
+
+def _as_a_time_people_read(value: Any) -> str | None:
+    """An instant as a person says it, or None when the value is not one.
+
+    Times stay in UTC and say so. The facility publishes its hours in UTC and the
+    cancellation rules are written in it, so quietly converting to a viewer's zone would
+    put a booking at 09:00 beside a rule about 08:00 and leave them to reconcile it.
+    """
+    if isinstance(value, datetime):
+        moment = value.astimezone(UTC)
+        return (f"{moment.day} {_MONTH_SHORT[moment.month - 1]} {moment.year}, "
+                f"{moment:%H:%M} UTC")
+    if isinstance(value, date):
+        return f"{value.day} {_MONTH_SHORT[value.month - 1]} {value.year}"
+    if not isinstance(value, str):
+        return None
+    text_value = value.strip()
+    match = _ISO_INSTANT_RE.match(text_value)
+    if not match:
+        return None
+    if match.group(4) is None:  # a bare date: no instant to convert
+        try:
+            return (f"{int(match.group(3))} {_MONTH_SHORT[int(match.group(2)) - 1]} "
+                    f"{match.group(1)}")
+        except (IndexError, ValueError):
+            return None
+    # Parsed rather than reformatted from the digits: "08:00+05:30" is 02:30 UTC, and
+    # copying the wall clock across while stamping "UTC" on it would be a wrong time
+    # stated confidently. Everything this platform stores is already UTC; a naive value
+    # is read as UTC, which is what _parse_dt does on the way in.
+    try:
+        parsed = datetime.fromisoformat(text_value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return _as_a_time_people_read(
+        parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+    )
+
+
 def _display(value: Any) -> str:
     """A value as a person should read it, not as Postgres stored it.
 
@@ -553,7 +600,14 @@ def _display(value: Any) -> str:
     quantising every real number to 2dp leaves 412.00 and 5514.50 untouched while turning
     1.9750000000000000 into 1.98 and 0E-20 into 0.00. Integers (a count of 20) and strings
     are left exactly as they are.
+
+    A third: an ISO-8601 instant is a storage format, not a value a person reads.
+    "2026-08-17T08:00:00+00:00 to 2026-08-17T20:00:00+00:00" is the same sentence as
+    "17 Aug 2026, 08:00–20:00 UTC" and only one of them can be read at a glance. The API
+    keeps ISO, because a machine consumes that; the prose does not have to.
     """
+    if (spelled := _as_a_time_people_read(value)) is not None:
+        return spelled
     if value is None:
         # A NULL is a field nobody filled in, and str(None) is the Python literal for it.
         # A project member with no lab on file came back as "Cora Lindqvist is in None" —
@@ -1149,6 +1203,19 @@ def _normalise_plan(plan: dict[str, Any], question: str = "") -> dict[str, Any]:
     arguments = plan.get("arguments")
     if not isinstance(arguments, dict):
         return plan
+
+    # The tool menu writes optional parameters as `near_latitude?`, and the planner copies
+    # the question mark into the argument NAME. The dispatcher then rejects it as a
+    # parameter no tool takes — recoverable, since the surplus-argument repair drops it —
+    # but every guard in between is looking for `near_latitude` and sees nothing, so an
+    # invented New York origin sailed past the check written to catch exactly that.
+    if any(key.endswith("?") for key in arguments):
+        renamed = {key.rstrip("?"): value for key, value in arguments.items()}
+        log.info("planner copied the menu's optionality markers into argument names")
+        arguments.clear()
+        arguments.update(renamed)
+        plan["arguments"] = arguments
+
     for key in PLAN_LEVEL_KEYS:
         if key in arguments:
             plan.setdefault(key, arguments.pop(key))
@@ -1356,6 +1423,25 @@ def _directory_without_a_ranking(rows: list[dict]) -> str | None:
     if len(listed) < 2:
         return None
     return f"{_NO_LOCATION_CAVEAT} The cores on record are {', '.join(listed)}."
+
+
+# How recommend_instrument decided its order. Real, and not about the instrument: a
+# reader asking which machine does nucleic acid QC was told "the score is 4 due to a
+# modality match with control and quality" — our sort key, explained to them as a
+# property of the equipment. why_matched stays: the techniques that earned a match are
+# evidence, and the tool publishes them for exactly that reason.
+_RANKING_INTERNALS = ("score",)
+
+
+def _drop_ranking_internals(
+    rows: list[dict], columns: list[str]
+) -> tuple[list[dict], list[str]]:
+    """Remove the columns that exist to order a result, not to describe it."""
+    if not rows or not any(key in rows[0] for key in _RANKING_INTERNALS):
+        return rows, columns
+    trimmed = [{k: v for k, v in row.items() if k not in _RANKING_INTERNALS} for row in rows]
+    kept = [c for c in (columns or list(rows[0])) if c not in _RANKING_INTERNALS]
+    return trimmed, kept
 
 
 def _narrow_to_the_focus_instrument(
@@ -1792,6 +1878,18 @@ def answer(question: str, ctx: Ctx, history: str = "") -> AgentResponse:
         log.info("superlative question; dropping the planner's window: %s", whole)
         plan = whole
 
+    # A facility id the caller never named, that resolves to nothing, is not a filter —
+    # it is a typo turned into a lookup. "Show me closes lab?" became
+    # get_facility_catalog(facility_id=...) and answered "No such facility. Check the
+    # identifier and try again", about an identifier the caller never typed. A core they
+    # DID name and we do not have still gets the honest not_found.
+    if plan.get("tool") == "get_facility_catalog":
+        wanted = str((plan.get("arguments") or {}).get("facility_id") or "").strip()
+        if wanted and wanted.lower() not in f"{history}\n{question}".lower():
+            log.info("dropping a facility id the caller never named: %r", wanted)
+            plan = {**plan, "arguments": {k: v for k, v in (plan.get("arguments") or {}).items()
+                                          if k != "facility_id"}}
+
     if rate := _plan_for_an_instrument_rate(plan, question, history):
         log.info("a published rate was asked for; reading the catalogue: %s", rate)
         plan = rate
@@ -1855,6 +1953,7 @@ def answer(question: str, ctx: Ctx, history: str = "") -> AgentResponse:
         # all show the same clean figures.
         if _all_null(rows):
             rows, columns = [], []
+        rows, columns = _drop_ranking_internals(rows, columns)
         rows, columns = _narrow_to_the_focus_instrument(rows, columns, plan)
         rows = _quantise_rows(rows)
         rows, columns = _drop_self_identity(rows, columns, ctx)
