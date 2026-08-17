@@ -18,7 +18,7 @@ from typing import Any
 
 from dateutil import parser as date_parser
 
-from server.agent import catalog, progress
+from server.agent import catalog, progress, rewrite
 from server.agent.llm import chat, chat_json
 from server.agent.responses import AgentResponse
 from server.auth import Ctx
@@ -1358,6 +1358,22 @@ def _directory_without_a_ranking(rows: list[dict]) -> str | None:
     return f"{_NO_LOCATION_CAVEAT} The cores on record are {', '.join(listed)}."
 
 
+def _narrow_to_the_focus_instrument(
+    rows: list[dict], columns: list[str], plan: dict
+) -> tuple[list[dict], list[str]]:
+    """Keep only the instrument the question was about, when the plan named one.
+
+    Set by the rate guard, which reaches the catalogue for one instrument and gets its
+    whole core. Never narrows to nothing: if the id is not among the rows, the unfiltered
+    set is a worse answer than none at all but a better one than an empty table.
+    """
+    focus = str(plan.get("focus_instrument") or "").lower()
+    if not focus or not rows:
+        return rows, columns
+    kept = [row for row in rows if str(row.get("id", "")).lower() == focus]
+    return (kept, columns) if kept else (rows, columns)
+
+
 def _forbidden_response(exc: ToolError) -> AgentResponse:
     """The refusal, once, so both the direct and the retried path word it identically."""
     return AgentResponse(
@@ -1457,7 +1473,8 @@ def _plan_at_the_callers_own_scope(plan: dict, question: str) -> dict | None:
 # caller's billing history. Tools that already carry the rate.
 _RATE_TOOLS = frozenset({"get_facility_catalog", "find_facilities", "recommend_instrument"})
 _ASKS_A_RATE_RE = re.compile(
-    r"\bhourly rate\b|\brates?\b|\bpricing\b|\bprice\b|\bcosts?\b|\bper hour\b"
+    r"\bhourly rate\b|\brates?\b|\bpricing\b|\bprice\b|\bcosts?\b"
+    r"|\b(?:per|an?|each)\s+hour\b|\bhow much.{0,20}\bhour\b"
     r"|\bhow much (?:does|do|is|are|would)\b|\bwhat does .{0,30}\bcost\b",
     re.IGNORECASE,
 )
@@ -1469,7 +1486,7 @@ _ASKS_WHAT_THEY_SPENT_RE = re.compile(
 )
 
 
-def _plan_for_an_instrument_rate(plan: dict, question: str) -> dict | None:
+def _plan_for_an_instrument_rate(plan: dict, question: str, history: str = "") -> dict | None:
     """A published hourly rate, read off the catalogue where it actually lives.
 
     "How much does this cost for MALDI-TOF R2 in Riverside Campus" was planned as
@@ -1481,19 +1498,42 @@ def _plan_for_an_instrument_rate(plan: dict, question: str) -> dict | None:
     Questions about the caller's own money are excluded: "how much was I charged" is
     their invoice, and a published rate would be a different number confidently given.
     """
-    if plan.get("mode") == "sql" or plan.get("tool") in _RATE_TOOLS:
+    if plan.get("mode") == "sql":
+        return None
+    # find_facilities and recommend_instrument answer about a SET on purpose — "which
+    # instruments do live-cell imaging, and what do they cost" wants all of them.
+    # get_facility_catalog is the right tool and still the wrong scope for one
+    # instrument's price, so it is narrowed rather than left alone: bailing here because
+    # the tool was already correct is what let "how much is the cost" answer with twelve
+    # rates in a row, and "for a hour or what" with an inventory of the whole core.
+    if plan.get("tool") in (_RATE_TOOLS - {"get_facility_catalog"}):
         return None
     if not _ASKS_A_RATE_RE.search(question):
         return None
     if _ASKS_WHAT_THEY_SPENT_RE.search(question):
         return None
-    from server.agent.action import _instrument_rows, instruments_mentioned
+    from server.agent.action import (
+        _instrument_rows,
+        _last_mentioned,
+        instruments_mentioned,
+    )
 
-    named = instruments_mentioned(question, _instrument_rows())
-    if not named:
+    rows = _instrument_rows()
+    named = instruments_mentioned(question, rows)
+    # "For a hour or what", asked straight after a rate, names no instrument even once
+    # resolved — the rewrite supplies the missing sense, not necessarily the missing noun.
+    # Without one this fell through to instrument-wide usage, which is admin-only, and a
+    # question about a published price came back as an access denial. The instrument the
+    # conversation is already about is the one meant.
+    subject = named[0] if named else _last_mentioned(history, rows)
+    if not subject:
         return None
+    # The catalogue answers for a whole core, so a question about one instrument comes
+    # back beside its neighbours' rates. Asked "how much is the cost", the model read five
+    # rows of them and answered "no total cost is specified". The rows are narrowed to the
+    # instrument asked about before anything composes a sentence from them.
     return {"mode": "tool", "tool": "get_facility_catalog",
-            "arguments": {"facility_id": named[0]}}
+            "arguments": {"facility_id": subject}, "focus_instrument": subject}
 
 
 def _plan_across_every_instrument(plan: dict, question: str) -> dict | None:
@@ -1704,6 +1744,32 @@ def _plan_without_an_invented_window(plan: dict, question: str) -> dict | None:
 
 
 def answer(question: str, ctx: Ctx, history: str = "") -> AgentResponse:
+    # The planner sees the transcript and still plans the words in front of it. "For a
+    # hour or what" — after being told a rate — was planned as a fresh question and came
+    # back with an inventory of every instrument; "what are my 2 requested" reached the
+    # availability tool. The knowledge branch has resolved its follow-ups since it was
+    # written, because retrieval on five stopwords fails loudly. Here the same ellipsis
+    # fails quietly, as a confident answer to a question nobody asked, which is worse.
+    #
+    # Everything downstream then reads the resolved form, guards included. That is safe
+    # because the rewrite only ever substitutes a reference for its antecedent from this
+    # same conversation — it introduces no value that was not already said. The guards
+    # that ask "did the caller give this?" were already matching against history as well
+    # as the message, so resolving changes which sentence carries the words, not whether
+    # the caller supplied them.
+    asked = question
+    if rewrite.is_unresolvable(question, history):
+        log.info("unresolved reference with no history: %r", question[:60])
+        return AgentResponse(
+            response_type="clarify",
+            route="data",
+            text="Which record do you mean? Name it and I'll look it up.",
+            meta={"awaiting": "subject"},
+        )
+    question = rewrite.standalone(question, history)
+    if question != asked:
+        log.info("resolved follow-up %r -> %r", asked[:60], question[:80])
+
     # Cheapest check first, as the knowledge gate does: a question no catalogued source
     # covers, or one whose sources sit above this caller, is refused before the planner
     # is asked to spend a round-trip on it. The gate fails open on anything it cannot
@@ -1726,7 +1792,7 @@ def answer(question: str, ctx: Ctx, history: str = "") -> AgentResponse:
         log.info("superlative question; dropping the planner's window: %s", whole)
         plan = whole
 
-    if rate := _plan_for_an_instrument_rate(plan, question):
+    if rate := _plan_for_an_instrument_rate(plan, question, history):
         log.info("a published rate was asked for; reading the catalogue: %s", rate)
         plan = rate
 
@@ -1789,6 +1855,7 @@ def answer(question: str, ctx: Ctx, history: str = "") -> AgentResponse:
         # all show the same clean figures.
         if _all_null(rows):
             rows, columns = [], []
+        rows, columns = _narrow_to_the_focus_instrument(rows, columns, plan)
         rows = _quantise_rows(rows)
         rows, columns = _drop_self_identity(rows, columns, ctx)
         rows, columns = _drop_paired_ids(rows, columns)

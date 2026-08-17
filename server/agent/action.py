@@ -11,6 +11,7 @@ import calendar
 import logging
 import re
 import textwrap
+import time
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
@@ -360,14 +361,31 @@ def apply_stated_duration(plan: dict[str, Any], message: str) -> dict[str, Any]:
 _MODEL_TOKEN_RE = re.compile(r"\b[A-Za-z]{1,3}\d{1,3}\b")
 
 
+_INSTRUMENT_CACHE: tuple[float, list[tuple[str, str]]] | None = None
+_INSTRUMENT_TTL_S = 60.0
+
+
 def _instrument_rows() -> list[tuple[str, str]]:
+    """(id, name) for every instrument, cached briefly.
+
+    A dozen rows that change when someone installs a microscope, read up to three times
+    per turn by the guards that ask "did the caller name an instrument?" — three round
+    trips for the same static list. Held for a minute so a re-seed still shows up within
+    one, which is faster than anyone can walk to the instrument.
+    """
+    global _INSTRUMENT_CACHE
+    now = time.monotonic()
+    if _INSTRUMENT_CACHE is not None and now - _INSTRUMENT_CACHE[0] < _INSTRUMENT_TTL_S:
+        return _INSTRUMENT_CACHE[1]
     with session_scope() as s:
-        return [
+        rows = [
             (r["id"], r["name"])
             for r in s.execute(
                 text("SELECT id, name FROM infinity.instruments")
             ).mappings().all()
         ]
+    _INSTRUMENT_CACHE = (now, rows)
+    return rows
 
 
 def instruments_mentioned(text_: str, rows: list[tuple[str, str]]) -> list[str]:

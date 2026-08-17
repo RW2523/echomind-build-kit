@@ -1232,3 +1232,25 @@ diminishing returns.
   is true of someone whose slot started this morning and reads as the record having been
   lost. The two cases are now told apart, and the started one names the booking and points
   at the admin, as the cancellation rules require.
+- 2026-08-17 | The data branch resolves its follow-ups, as knowledge already did | The
+  planner sees the transcript and still plans the words in front of it: "for a hour or
+  what", after being told a rate, was planned fresh and answered with an inventory of
+  every instrument. Retrieval fails loudly on five stopwords, which is why knowledge got
+  this first; a lookup fails quietly, as a confident answer to a question nobody asked.
+  Everything downstream reads the resolved form, guards included — the rewrite only ever
+  substitutes a reference for its antecedent in the same conversation, so it introduces
+  no value that was not already said.
+- 2026-08-17 | A rate follow-up keeps the instrument the conversation is about | The
+  rewrite supplies the missing sense, not the missing noun, so a resolved "for a hour or
+  what" still named nothing and fell through to instrument-wide usage — admin-only, so a
+  question about a published price answered "you do not have access".
+- 2026-08-17 | A single-instrument price narrows the catalogue rows | get_facility_catalog
+  answers for a whole core. Asked "how much is the cost" the model read five rates and
+  replied "no total cost is specified"; the rows are narrowed to the instrument asked
+  about before anything composes from them. find_facilities and recommend_instrument are
+  left wide on purpose — a question about which instruments do live-cell imaging wants
+  all of them.
+- 2026-08-17 | The instrument list is cached for a minute | Twelve rows that change when
+  someone installs a microscope, read up to three times per turn by the guards asking
+  whether the caller named one. 14ms per read, three reads a turn, for a list that is
+  static between deployments.

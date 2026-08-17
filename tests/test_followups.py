@@ -1701,3 +1701,61 @@ def test_a_figure_from_a_table_without_rates_is_untouched():
 
     assert name_the_rate_unit("Your total is $412.00.", [{"amount": 412.0}]) == \
         "Your total is $412.00."
+
+
+# --- follow-ups that lean on the turn before them ----------------------------------
+
+
+@pytest.mark.tools
+def test_a_rate_follow_up_keeps_the_instrument_from_the_conversation():
+    """"For a hour or what", asked straight after a rate, names no instrument even once
+    resolved — the rewrite supplies the missing sense, not the missing noun. Without one
+    it fell through to instrument-wide usage, which is admin-only, so a question about a
+    published price came back as an access denial."""
+    from server.agent.data import _plan_for_an_instrument_rate
+
+    usage = {"mode": "tool", "tool": "get_usage_records",
+             "arguments": {"scope": "instrument", "id": "ins-confocal-c2"}}
+    history = ("user: how much is the cost for Confocal C2\n"
+               "assistant: The cost for Confocal C2 is $42.00 per hour.")
+    out = _plan_for_an_instrument_rate(usage, "for a hour or what", history)
+    assert out["arguments"]["facility_id"] == "ins-confocal-c2"
+    assert out["focus_instrument"] == "ins-confocal-c2"
+
+    # Named outright beats the conversation.
+    out = _plan_for_an_instrument_rate(usage, "what does MiSeq M3 cost per hour", history)
+    assert out["arguments"]["facility_id"] == "ins-miseq"
+
+    # Nothing to go on anywhere.
+    assert _plan_for_an_instrument_rate(usage, "for a hour or what", "") is None
+
+
+@pytest.mark.tools
+def test_a_question_about_a_set_of_instruments_is_left_wide():
+    """"Which instruments do live-cell imaging, and what do they cost" wants all of
+    them — only the single-instrument catalogue lookup is narrowed."""
+    from server.agent.data import _plan_for_an_instrument_rate
+
+    for tool in ("find_facilities", "recommend_instrument"):
+        plan = {"mode": "tool", "tool": tool, "arguments": {"technique": "live-cell"}}
+        assert _plan_for_an_instrument_rate(
+            plan, "which instruments do live-cell imaging and what do they cost", ""
+        ) is None
+
+
+def test_rows_narrow_to_the_instrument_that_was_asked_about():
+    """The catalogue answers for a whole core, so "how much is the cost" read five rates
+    and replied "no total cost is specified"."""
+    from server.agent.data import _narrow_to_the_focus_instrument
+
+    rows = [{"id": "ins-confocal-c2", "name": "Confocal C2", "hourly_rate": 42.0},
+            {"id": "ins-confocal-c3", "name": "Confocal C3", "hourly_rate": 46.0}]
+    cols = ["id", "name", "hourly_rate"]
+    kept, _ = _narrow_to_the_focus_instrument(
+        rows, cols, {"focus_instrument": "ins-confocal-c2"})
+    assert [r["name"] for r in kept] == ["Confocal C2"]
+
+    # No focus, or a focus not among the rows: never narrowed to nothing.
+    assert _narrow_to_the_focus_instrument(rows, cols, {})[0] == rows
+    assert _narrow_to_the_focus_instrument(
+        rows, cols, {"focus_instrument": "ins-absent"})[0] == rows
