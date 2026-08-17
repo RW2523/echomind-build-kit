@@ -168,6 +168,30 @@ def subjects_in(text: str) -> tuple[str, ...]:
     return tuple(s for s in SUBJECTS if _SUBJECT_RE[s].search(lowered))
 
 
+# The platform records that a run HAPPENED — the booking, the hours, the samples, the
+# charge — and never what came out of it. There is no results table, no data file, no
+# image anywhere in the schema. Asked for the output the gate saw the word "booking",
+# passed, and the branch answered with booking records presented as results: a different
+# question answered confidently, which is the one failure mode this whole module exists
+# to prevent.
+#
+# Both halves are required, in either order, so the noun has something to belong to.
+# "Show me the results" on its own is not this — it is a request to see the rows we just
+# talked about, and it gets them.
+_OUTPUT_NOUN = (
+    r"\bresults?\b|\braw\s+data\b|\bdata\s+files?\b|\bdatasets?\b|\bimages?\b"
+    r"|\bmicrographs?\b|\bspectra\b|\bspectrum\b|\breadouts?\b|\boutput\b"
+    r"|\bfastq\b|\btraces?\b|\bacquisitions?\b"
+)
+_RUN_NOUN = (
+    r"\bbookings?\b|\bruns?\b|\bsessions?\b|\bexperiments?\b|\bsamples?\b"
+    r"|\bslots?\b|\bvisits?\b"
+)
+ASKS_FOR_RUN_OUTPUT_RE = re.compile(
+    rf"(?=.*(?:{_OUTPUT_NOUN}))(?=.*(?:{_RUN_NOUN}))", re.IGNORECASE | re.DOTALL
+)
+
+
 # --- the read tools ----------------------------------------------------------------
 
 # Purpose, tier and therefore minimum role come from ToolSpec. Only what ToolSpec cannot
@@ -744,6 +768,11 @@ def pre(question: str, ctx: Ctx, history: str = "") -> RelevanceResult:
     considered = sources_for(text)
     subjects = subjects_in(text)
 
+    # Judged on the question alone. Carrying the history in would let one mention of a
+    # booking three turns back make every later "any images?" a refusal.
+    if ASKS_FOR_RUN_OUTPUT_RE.search(question):
+        return RelevanceResult(False, "no_output_recorded", subjects=subjects)
+
     if not considered:
         if _too_little_to_judge(question, history):
             return RelevanceResult(True, "ok", subjects=subjects)
@@ -811,6 +840,13 @@ REASON_TEXT = {
     "no_values": (
         "The platform holds no figures for that, so there is nothing for me to add up. "
         "An empty total is not zero, and I am not going to print it as though it were."
+    ),
+    "no_output_recorded": (
+        "The platform records that a run happened — the booking, the hours it used, the "
+        "samples on it and what it cost — but not what came off the instrument. Results, "
+        "data files, images and spectra are not stored here, so there is nothing for me "
+        "to show you; they live wherever your core delivers them. I can show you the "
+        "booking itself, its usage hours, the charge, or where your samples have got to."
     ),
 }
 

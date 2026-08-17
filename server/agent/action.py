@@ -1048,12 +1048,247 @@ def plan(message: str, ctx: Ctx, history: str = "") -> dict[str, Any]:
     return require_supplied_identity(chosen, f"{message}\n{history}\n{documents}")
 
 
+_BOOKING_TOOLS = frozenset({"cancel_booking", "reschedule_booking"})
+_BOOKING_ID_RE = re.compile(r"\bbk-[a-z0-9]+\b", re.IGNORECASE)
+
+
+def open_bookings_of(ctx: Ctx) -> list[dict[str, Any]]:
+    """The caller's bookings that could still be cancelled or moved, soonest first."""
+    with session_scope() as s:
+        return [
+            dict(row)
+            for row in s.execute(
+                text(
+                    """SELECT b.id, b.starts_at, b.status, i.name AS instrument
+                       FROM infinity.bookings b
+                       JOIN infinity.instruments i ON i.id = b.instrument_id
+                       WHERE b.user_id = :uid
+                         AND b.status NOT IN ('cancelled', 'completed')
+                         AND b.starts_at > now()
+                       ORDER BY b.starts_at"""
+                ),
+                {"uid": ctx.user_id},
+            ).mappings().all()
+        ]
+
+
+def _with_the_booking_being_discussed(
+    plan: dict, message: str, history: str, ctx: Ctx
+) -> dict | None:
+    """The same change, pointed at a booking that actually exists.
+
+    "Can I reschedule to 08:00 to 12:00" — one turn after booking the Bioanalyzer —
+    planned reschedule_booking with an instrument_id and no booking_id at all, and was
+    refused as "That lookup does not take an instrument"; a neighbouring run supplied an
+    id that did not exist and was refused as "No such booking. Check the identifier and
+    try again." Both read as the platform having lost the booking it had just confirmed.
+
+    Resolved the way a person would: an id named in this thread if it is really theirs,
+    otherwise the one booking they have open. Validated against their own records rather
+    than against the text, so an action id quoted back from an approval card cannot pass
+    as a booking id just by having been mentioned.
+    """
+    if plan.get("tool") not in _BOOKING_TOOLS:
+        return None
+    arguments = plan.get("arguments") or {}
+    open_bookings = open_bookings_of(ctx)
+    theirs = {row["id"].lower(): row["id"] for row in open_bookings}
+
+    given = str(arguments.get("booking_id") or "").strip().lower()
+    if given in theirs:
+        return None
+
+    # Most recently mentioned first: a thread that named two bookings means the one just
+    # discussed, not the one from six turns ago.
+    for candidate in reversed(_BOOKING_ID_RE.findall(f"{history}\n{message}")):
+        if candidate.lower() in theirs:
+            log.info("resolved the booking from the conversation: %s", candidate)
+            return {**plan, "arguments": {**arguments, "booking_id": theirs[candidate.lower()]}}
+
+    if len(open_bookings) == 1:
+        only = open_bookings[0]["id"]
+        log.info("the caller has exactly one open booking (%s); using it", only)
+        return {**plan, "arguments": {**arguments, "booking_id": only}}
+    return None
+
+
+def _which_booking(plan: dict, message: str, history: str, ctx: Ctx) -> AgentResponse | None:
+    """Ask which booking to change, naming them, when the thread does not settle it."""
+    if plan.get("tool") not in _BOOKING_TOOLS:
+        return None
+    open_bookings = open_bookings_of(ctx)
+    if str((plan.get("arguments") or {}).get("booking_id") or "").strip().lower() in {
+        row["id"].lower() for row in open_bookings
+    }:
+        return None
+    if not open_bookings:
+        return AgentResponse(
+            response_type="redirect",
+            route="action",
+            text=("You have no upcoming bookings to change. A booking that has already "
+                  "run or been cancelled cannot be moved."),
+            meta={"plan": plan},
+        )
+    listed = "; ".join(
+        f"{row['instrument']} on {row['starts_at']:%Y-%m-%d %H:%M} UTC ({row['id']})"
+        for row in open_bookings[:5]
+    )
+    return AgentResponse(
+        response_type="clarify",
+        route="action",
+        text=f"Which booking do you mean — {listed}?",
+        meta={"plan": plan, "awaiting": "booking_id",
+              "options": [row["id"] for row in open_bookings[:5]]},
+    )
+
+
+def _without_arguments_the_tool_does_not_take(plan: dict) -> dict | None:
+    """Drop arguments the tool has no parameter for, when what is left can still run.
+
+    The read branch already does this on error. A write never got the chance: the planner
+    put instrument_id on reschedule_booking and the signature error went to the user as
+    "That lookup does not take an instrument."
+    """
+    name = plan.get("tool") or ""
+    accepted = tools_mod.accepted_arguments(name)
+    arguments = plan.get("arguments") or {}
+    if not accepted or not set(arguments) - accepted:
+        return None
+    kept = {k: v for k, v in arguments.items() if k in accepted}
+    if tools_mod.required_arguments(name) - set(kept):
+        return None
+    log.info("dropping %s that %s does not take", sorted(set(arguments) - accepted), name)
+    return {**plan, "arguments": kept}
+
+
+def account_codes_of(ctx: Ctx) -> list[str]:
+    """The account codes this caller may charge to, in the order the record lists them."""
+    with session_scope() as s:
+        codes = s.execute(
+            text("SELECT account_codes FROM infinity.users WHERE id = :id"),
+            {"id": ctx.user_id},
+        ).scalar_one_or_none()
+    return [str(code) for code in (codes or [])]
+
+
+def _needs_an_account_code(plan: dict) -> bool:
+    """A write that takes an account code and was planned without one."""
+    name = plan.get("tool") or ""
+    if "account_code" not in tools_mod.accepted_arguments(name):
+        return False
+    return not (plan.get("arguments") or {}).get("account_code")
+
+
+def _with_the_callers_only_account_code(plan: dict, ctx: Ctx) -> dict | None:
+    """The same write, charged to the one account the caller actually has.
+
+    "Book Confocal C2 on 2 April 2027 from 3am to 5am" was planned with no account code,
+    and the tool refused it — "account_code is required" — before the booking's real
+    problem (3am is outside opening hours) was ever reached. The caller was asked for the
+    only value they could possibly have given.
+
+    Only when there is exactly one: with a choice to make it is theirs, and with none
+    there is nothing to fill. Not a guess either way — and the code appears on the
+    approval card, so nothing is charged anywhere before they have read it.
+    """
+    if not _needs_an_account_code(plan):
+        return None
+    codes = account_codes_of(ctx)
+    if len(codes) != 1:
+        return None
+    log.info("filling the caller's only account code %s", codes[0])
+    return {**plan, "arguments": {**(plan.get("arguments") or {}),
+                                  "account_code": codes[0]}}
+
+
+def _which_account_code(plan: dict, ctx: Ctx) -> AgentResponse | None:
+    """Ask which account to charge, when the caller has more than one to choose from."""
+    if not _needs_an_account_code(plan):
+        return None
+    codes = account_codes_of(ctx)
+    if len(codes) < 2:
+        return None
+    return AgentResponse(
+        response_type="clarify",
+        route="action",
+        text=f"Which account should I charge — {' or '.join(codes)}?",
+        meta={"plan": plan, "awaiting": "account_code", "options": codes},
+    )
+
+
 def propose(
     message: str, ctx: Ctx, thread_id: str | None = None, history: str = ""
 ) -> AgentResponse:
     """Create the pending action and return the approval request."""
     chosen = plan(message, ctx, history)
     name = chosen.get("tool")
+
+    if name in tools_mod.WRITE_TOOLS:
+        # Which booking first, and by the strongest check available: matched against the
+        # caller's own open bookings rather than against the words on screen. An action id
+        # quoted back from an approval card is "mentioned in the thread" and is still not
+        # a booking id. When this resolves, the id is real by construction and the
+        # invented-identifier guard below has nothing left to judge.
+        if resolved := _with_the_booking_being_discussed(chosen, message, history, ctx):
+            chosen = resolved
+        elif ask := _which_booking(chosen, message, history, ctx):
+            return ask
+
+    # An identifier nobody gave is not an identifier. "Where is my sample?" planned
+    # track_sample(sample_id="s-12345") — a placeholder shaped like the real thing — and
+    # the tool refused it as a record that never existed, which reads to the caller as the
+    # platform being broken about their data rather than as the assistant having made one
+    # up. The read branch asks instead of guessing; a write, where the guess would be
+    # acted on, has more reason to and not less.
+    # Booking tools are exempt: the block above matched their id against the caller's own
+    # open bookings, which is a stronger test than "did these characters appear on
+    # screen", and a booking resolved from context is correct precisely BECAUSE the caller
+    # never typed it.
+    if name in tools_mod.WRITE_TOOLS and name not in _BOOKING_TOOLS:
+        # Imported here for the same reason data imports this module lazily: neither
+        # branch should have to load the other to be importable.
+        from server.agent.data import _ID_IN_ENGLISH, _invented_record_id
+
+        if invented := _invented_record_id(chosen, message, history):
+            log.info("write plan invented %s=%r; asking instead", invented,
+                     (chosen.get("arguments") or {}).get(invented))
+            return AgentResponse(
+                response_type="clarify",
+                route="action",
+                text=(f"Tell me {_ID_IN_ENGLISH[invented]} and I'll prepare that for "
+                      "your approval. I won't act on a record id I had to guess at."),
+                meta={"plan": chosen, "awaiting": invented},
+            )
+
+        # Onboarding needs the PI to have actually said yes. The planner is told to ask
+        # when they have not, and instead sent pi_ack=false — which the tool refused as
+        # "pi_ack must be true", a field name and a boolean where a question belonged.
+        # Refusing and asking are both correct about the consent; only one of them lets
+        # the caller finish. The acknowledgement itself is still never assumed.
+        if name == "create_onboarding_request" and not (
+            chosen.get("arguments") or {}
+        ).get("pi_ack"):
+            log.info("onboarding planned without pi_ack; asking for it")
+            return AgentResponse(
+                response_type="clarify",
+                route="action",
+                text=("Has the PI acknowledged this new user? Onboarding needs that "
+                      "before I can prepare it — tell me they have and I'll put it up "
+                      "for approval."),
+                meta={"plan": chosen, "awaiting": "pi_ack"},
+            )
+
+    # Every write, booking tools included: the planner put instrument_id on
+    # reschedule_booking and the signature error went to the caller as "That lookup does
+    # not take an instrument."
+    if name in tools_mod.WRITE_TOOLS:
+        if trimmed := _without_arguments_the_tool_does_not_take(chosen):
+            chosen = trimmed
+
+        if repaired := _with_the_callers_only_account_code(chosen, ctx):
+            chosen = repaired
+        elif ask := _which_account_code(chosen, ctx):
+            return ask
 
     if name not in tools_mod.WRITE_TOOLS:
         # Missing information the user alone can supply: ask, rather than inventing it
@@ -1106,7 +1341,10 @@ def propose(
         response_type="approval_request",
         route="action",
         text=(
-            f"I've prepared this, but I haven't done it. {pending['payload_preview']}.\n\n"
+            # The preview already ends in a full stop when it carries a policy sentence —
+            # "...charged at 50% of the booked time.." went out with two.
+            f"I've prepared this, but I haven't done it. "
+            f"{str(pending['payload_preview']).rstrip('.')}.\n\n"
             "Approve it and I'll execute it; decline and nothing happens. "
             "Either way it goes in the audit log."
         ),

@@ -172,7 +172,42 @@ def get_user_profile(ctx: Ctx, user_id: str | None = None) -> dict[str, Any]:
 # --- 2. get_facility_catalog (T0) --------------------------------------------------
 
 
+def _resolve_facility(s, facility_id: str) -> str | None:
+    """A facility's id from whatever the caller called it.
+
+    Matched on the facility's own id, name and code first, then on the instruments inside
+    it: "what is MALDI-TOF R2 used for?" arrived as facility_id="MALDI-TOF R2" and was
+    refused with "No such facility. Check the identifier and try again." — an instrument
+    name is not a wrong identifier, it is a different KIND of identifier, and the core
+    holding that instrument is exactly what the question was about. Everything needed to
+    answer was one join away.
+    """
+    wanted = _normalise(facility_id)
+    if not wanted:
+        return None
+    rows = s.execute(
+        text("SELECT id, name, code FROM infinity.facilities")
+    ).mappings().all()
+    for row in rows:
+        if wanted in (_normalise(row["id"]), _normalise(row["name"]),
+                      _normalise(row["code"])):
+            return row["id"]
+    instruments = s.execute(
+        text("SELECT id, name, facility_id FROM infinity.instruments")
+    ).mappings().all()
+    for row in instruments:
+        if wanted in (_normalise(row["id"]), _normalise(row["name"])):
+            return row["facility_id"]
+    return None
+
+
 def get_facility_catalog(ctx: Ctx, facility_id: str | None = None) -> dict[str, Any]:
+    if facility_id:
+        with session_scope() as s:
+            resolved = _resolve_facility(s, facility_id)
+        if resolved is None:
+            raise not_found("facility")
+        facility_id = resolved
     with session_scope() as s:
         facilities = s.execute(
             text(
@@ -1314,7 +1349,15 @@ def find_facilities(ctx: Ctx, technique: str | None = None,
     wanted_campus = _normalise(campus)
     facilities: list[dict[str, Any]] = []
     for f in facility_rows:
-        if wanted_campus and wanted_campus not in _normalise(f["campus"]):
+        # Matched against the facility's own name and code as well as its campus. A
+        # planner handed "what instruments does the Advanced Imaging Core have?" put the
+        # core's NAME in `campus`, where it matched no campus on file, and every facility
+        # was filtered out — answered as "the Advanced Imaging Core has 0 instruments"
+        # about a core with a Cryo-EM in it. A facility's name is a place the same way its
+        # campus is, and accepting it can only ever match the facility the caller named.
+        if wanted_campus and not any(
+            wanted_campus in _normalise(f[field]) for field in ("campus", "name", "code")
+        ):
             continue
         instruments = by_facility.get(f["id"], [])
         if technique and not instruments:

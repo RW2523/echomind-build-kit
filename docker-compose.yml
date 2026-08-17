@@ -68,7 +68,12 @@ services:
   # EchoMind's tasks. As of 2026-08-09 neither local NVFP4 checkpoint beat Ollama.
   trtllm:
     image: echomind-trtllm:1.2.0rc6
-    container_name: echomind-trtllm
+    # NOT echomind-trtllm: the echomind-enterprise stack already owns that name for its
+    # own 30B-on-8355 container. Sharing the name makes `up` fail on a name collision,
+    # and — worse — invites starting this service from that project's compose, which
+    # carries a healthcheck probing 8355 and so reports unhealthy forever against the
+    # 8B serving on 8000 here.
+    container_name: echomind-trt
     profiles: ["trtllm"]
     restart: unless-stopped
     ipc: host

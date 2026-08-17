@@ -118,6 +118,12 @@ Rules:
   NOT interchangeable: get_billing_summary takes an account_code, never a lab id. For the
   caller's OWN spend or invoice ("how much did I spend", "my invoice"), use one of the
   caller's own account codes listed above — never their lab id.
+- "Latest", "last", "most recent" and "next" are about ORDER, not about a date range.
+  Records already come back newest first, so ask for them UNFILTERED and let the first row
+  be the one meant. Inventing a date_from to stand for "recent" narrows a set the caller
+  can already see: asked for the latest of 17 bookings, a guessed window returned 6 of
+  them, and a window landing past the end of the data returned none at all — an emptiness
+  the caller's own records contradict.
 - Today is {today} (UTC). Resolve "tomorrow", "next week" and every other relative date
   against THAT, never against the age of the data. The seeded records mostly cover up to
   2026-03, so a question about "last month" may legitimately return nothing — say so
@@ -638,6 +644,8 @@ def _answer_from_scalars(question: str, scalars: dict[str, Any]) -> tuple[str, b
         max_tokens=200,
     ).strip()
     draft = humanise_field_names(canonicalize_numbers(draft, [], scalars), set(scalars))
+    draft = drop_a_label_restated_as_a_value(draft, [], scalars)
+    draft = start_with_a_capital(draft, [], scalars)
     if not draft or verify_numbers(draft, [], question, scalars):
         # Deterministic fallback: lead with the reason it cannot be done if there is one,
         # else state the facts plainly.
@@ -830,6 +838,8 @@ def answer_from_rows(
         draft, set(scalars) | {key for row in rows for key in row}
     )
     draft = prefer_names_over_ids(draft, rows)
+    draft = drop_a_label_restated_as_a_value(draft, rows, scalars)
+    draft = start_with_a_capital(draft, rows, scalars)
 
     offenders = verify_numbers(draft, rows, question, scalars)
     if offenders:
@@ -842,6 +852,65 @@ def answer_from_rows(
     if averages and (fixed := _correct_sum_reported_as_average(draft, question, rows)):
         return fixed, False
     return draft, True
+
+
+# "The record shows "trained on confocal" is yes." — a humanised column name, quoted, with
+# its raw value read out beside it. Rule 8 forbids writing a field name, and the label is
+# one wearing a nicer coat: it says nothing the sentence before it did not, and it says it
+# in the schema's words.
+_LABEL_IS_VALUE_RE = re.compile(
+    r"^(?:and\s+)?(?:the\s+)?(?:record|records|data|row|rows|result|results)?\s*"
+    r"(?:shows?|says?|indicates?|confirms?)?\s*"
+    r"[\"'“‘]?(?P<label>[a-z][a-z0-9 _-]{2,40}?)[\"'”’]?\s+"
+    r"(?:is|are|was|were)\s+"
+    r"[\"'“‘]?(?:yes|no|true|false|none|null|0|0\.0+)[\"'”’]?\s*[.!]?\s*$",
+    re.IGNORECASE,
+)
+
+
+def drop_a_label_restated_as_a_value(
+    text: str, rows: list[dict], scalars: dict[str, Any]
+) -> str:
+    """Remove a trailing sentence that only reads a field label back with its value.
+
+    "You are trained on the confocal." answers the question. "The record shows "trained on
+    confocal" is yes." repeats it in the schema's vocabulary, and a reader who did not ask
+    about a column has now been shown one.
+
+    Only ever a trailing sentence, and never the last one standing: a reply that says
+    nothing else is better as an awkward fact than as nothing at all.
+    """
+    parts = re.split(r"(?<=[.!?])\s+", text.strip())
+    if len(parts) < 2:
+        return text
+    labels = {humanise_key(key).lower()
+              for key in set(scalars) | {k for row in rows for k in row}}
+    while len(parts) > 1 and (match := _LABEL_IS_VALUE_RE.match(parts[-1].strip())):
+        if match.group("label").strip().lower() not in labels:
+            break
+        parts.pop()
+    return " ".join(parts)
+
+
+def start_with_a_capital(text: str, rows: list[dict], scalars: dict[str, Any]) -> str:
+    """Open the reply with a capital — unless the first word is a stored value.
+
+    Answers arrived as "the imaging core's opening hours are 08:00-20:00 Mon-Fri." and
+    "the status is requested." Lowercase openings read as a fragment of a log line rather
+    than an answer to a person.
+
+    Rule 4 outranks tidiness: a value is spelled the way the record spells it. If the
+    reply opens ON a value — a status of `in_prep`, an id — it is left exactly as it is.
+    """
+    if not text or not text[0].islower():
+        return text
+    opening = re.match(r"[a-z0-9_-]+", text)
+    if opening:
+        stored = {str(value).lower() for row in rows for value in row.values()}
+        stored |= {str(value).lower() for value in scalars.values()}
+        if opening.group(0) in stored:
+            return text
+    return text[0].upper() + text[1:]
 
 
 def _correct_sum_reported_as_average(draft: str, question: str, rows: list[dict]) -> str | None:
@@ -1108,6 +1177,66 @@ def _availability_disambiguation(question: str, plan: dict) -> AgentResponse | N
     )
 
 
+# Record identifiers as the platform spells them: bk-0071, smp-1042, req-12.
+_NAMED_RECORD_ID_RE = re.compile(r"\b(?:bk|smp|req|prj|inv|act|bkg)-[a-z0-9]{2,}\b",
+                                 re.IGNORECASE)
+
+# Tools that return the records these ids name, so an id absent from their rows is
+# genuinely absent. Deliberately not get_billing_summary: an invoice line does not carry
+# the booking id that produced it, and "not in these rows" would not mean "not on record".
+_ID_BEARING_TOOLS = {"get_my_bookings", "get_request_status"}
+
+
+def _named_record_absent_from(rows: list[dict], plan: dict, question: str) -> str | None:
+    """An id the caller named by hand that is nowhere in what came back.
+
+    "What is the status of booking bk-9999?" planned a lookup that cannot filter by id,
+    got the caller's August bookings, and reported one of them: "the status is requested"
+    — a real status, for a booking they had not asked about, presented as the answer for
+    one that does not exist. Substituting a neighbouring record for the one that was named
+    is the most convincing kind of wrong answer this system can give.
+    """
+    if plan.get("mode") == "sql" or plan.get("tool") not in _ID_BEARING_TOOLS:
+        return None
+    named = {m.lower() for m in _NAMED_RECORD_ID_RE.findall(question)}
+    if not named:
+        return None
+    present = {str(value).lower() for row in rows for value in row.values()}
+    absent = sorted(named - present)
+    # Only when every id named is missing. One of two found is a partial answer worth
+    # giving, and the prose can say which.
+    return absent[0] if len(absent) == len(named) else None
+
+
+def _directory_without_a_ranking(rows: list[dict]) -> str | None:
+    """The cores and where they are, making no claim about which is nearest.
+
+    Values come straight off the rows, so rule 1 holds by construction rather than by
+    checking afterwards — there is no draft here for a distance to get into.
+    """
+    listed = [
+        f"{row['name']} ({row['campus']})" if row.get("campus") else str(row["name"])
+        for row in rows if row.get("name")
+    ]
+    if len(listed) < 2:
+        return None
+    return f"{_NO_LOCATION_CAVEAT} The cores on record are {', '.join(listed)}."
+
+
+def _forbidden_response(exc: ToolError) -> AgentResponse:
+    """The refusal, once, so both the direct and the retried path word it identically."""
+    return AgentResponse(
+        response_type="redirect",
+        route="data",
+        text=(
+            f"{exc.message} I can only show you records you are entitled to see, "
+            "and this is not one of them. "
+            f"{exc.hint}"
+        ),
+        meta={"error": exc.to_dict()["error"]},
+    )
+
+
 def _gate_redirect(
     result: catalog.RelevanceResult, executed_sql: str | None = None, **fields: Any
 ) -> AgentResponse:
@@ -1125,6 +1254,297 @@ def _gate_redirect(
     )
 
 
+# Arguments that name ONE specific record belonging to the caller. These cannot be
+# derived from anything — unlike instrument_id, which is resolved from "Confocal C2", or
+# account_code, which is read off the caller's own profile. If the caller did not say it,
+# there is nothing to resolve it from, and a model asked for one anyway supplies a
+# plausible-looking placeholder: "where is my sample?" planned
+# track_sample(sample_id="s-12345") and "cancel my next booking" planned
+# cancel_booking(booking_id="booking-123"). Neither id exists. The first came back as a
+# flat access denial — the platform telling a user they are not entitled to a record that
+# was never theirs and never existed — and the second as a failed write. Both read to the
+# user as the assistant being broken about THEIR data.
+_RECORD_ID_ARGS = ("sample_id", "barcode", "booking_id", "request_id", "action_id")
+
+# What to ask for when one has been invented, in the caller's words rather than the
+# schema's.
+_ID_IN_ENGLISH = {
+    "sample_id": "which sample — its barcode or id",
+    "barcode": "the sample's barcode",
+    "booking_id": "which booking",
+    "request_id": "which service request",
+    "action_id": "which pending action",
+}
+
+
+def _invented_record_id(plan: dict, question: str, history: str = "") -> str | None:
+    """The name of a record-identifying argument the caller never actually gave.
+
+    Matched against everything the caller has said this thread, not just this turn: "track
+    sample SMP-9" then "where is it now?" is the caller giving the id once, which is once.
+    """
+    arguments = plan.get("arguments") or {}
+    said = f"{history}\n{question}".lower()
+    for argument in _RECORD_ID_ARGS:
+        value = str(arguments.get(argument) or "").strip()
+        if value and value.lower() not in said:
+            return argument
+    return None
+
+
+# "When did I last use the Cryo-EM?" is a question about the caller's own records, and it
+# was planned as get_usage_records(scope="instrument") — the whole instrument's usage,
+# across every lab, which is admin-only. The user was told they had no access to their own
+# history. Rather than predict the permission model here and risk downgrading someone who
+# IS entitled, the narrowing is applied only after a real refusal.
+_FIRST_PERSON_RE = re.compile(r"\b(?:i|me|my|mine|we|us|our|ours)\b", re.IGNORECASE)
+
+
+def _plan_at_the_callers_own_scope(plan: dict, question: str) -> dict | None:
+    """The same question asked only of the caller's own records, or None if it already is.
+
+    A refusal is the right answer to "show me lab B's hours" and the wrong one to "how
+    many hours have I used" — same tool, different reach. Only the second is retried, and
+    only after the wider reading has actually been refused.
+    """
+    if plan.get("mode") == "sql" or plan.get("tool") != "get_usage_records":
+        return None
+    if not _FIRST_PERSON_RE.search(question):
+        return None
+    arguments = plan.get("arguments") or {}
+    if arguments.get("scope") in (None, "user"):
+        return None
+    return {**plan, "arguments": {k: v for k, v in arguments.items()
+                                  if k not in ("scope", "id")} | {"scope": "user"}}
+
+
+# What an instrument costs is a published rate on the catalogue, not something in the
+# caller's billing history. Tools that already carry the rate.
+_RATE_TOOLS = frozenset({"get_facility_catalog", "find_facilities", "recommend_instrument"})
+_ASKS_A_RATE_RE = re.compile(
+    r"\bhourly rate\b|\brates?\b|\bpricing\b|\bprice\b|\bcosts?\b|\bper hour\b"
+    r"|\bhow much (?:does|do|is|are|would)\b|\bwhat does .{0,30}\bcost\b",
+    re.IGNORECASE,
+)
+# The caller's own money, which IS billing history and must not be answered from a rate.
+_ASKS_WHAT_THEY_SPENT_RE = re.compile(
+    r"\binvoice\b|\bbill(?:ed|ing)?\b|\bspend(?:ing)?\b|\bspent\b|\bcharged\b"
+    r"|\bmy charges\b|\bowe\b",
+    re.IGNORECASE,
+)
+
+
+def _plan_for_an_instrument_rate(plan: dict, question: str) -> dict | None:
+    """A published hourly rate, read off the catalogue where it actually lives.
+
+    "How much does this cost for MALDI-TOF R2 in Riverside Campus" was planned as
+    get_usage_records(scope=user) — the caller's own hours — and answered with all
+    seventeen rows of her usage printed as a table. The rate was never consulted, and the
+    question was never answered. Anything that names an instrument and asks its price is
+    a catalogue lookup.
+
+    Questions about the caller's own money are excluded: "how much was I charged" is
+    their invoice, and a published rate would be a different number confidently given.
+    """
+    if plan.get("mode") == "sql" or plan.get("tool") in _RATE_TOOLS:
+        return None
+    if not _ASKS_A_RATE_RE.search(question):
+        return None
+    if _ASKS_WHAT_THEY_SPENT_RE.search(question):
+        return None
+    from server.agent.action import _instrument_rows, instruments_mentioned
+
+    named = instruments_mentioned(question, _instrument_rows())
+    if not named:
+        return None
+    return {"mode": "tool", "tool": "get_facility_catalog",
+            "arguments": {"facility_id": named[0]}}
+
+
+_COORDINATE_ARGS = ("near_latitude", "near_longitude")
+_LOCATION_ARGS = (*_COORDINATE_ARGS, "campus")
+
+
+def _plan_without_an_invented_location(plan: dict, question: str,
+                                       history: str = "") -> dict | None:
+    """The same directory lookup with a place the caller never named taken back off.
+
+    Two ways this went wrong, both from the same planner and both silent:
+
+    "Show me the closest facility nearby" was planned with near_latitude 40.7128,
+    near_longitude -74.0060 — New York City, which nobody had mentioned. The distances
+    were real haversine arithmetic over a fabricated origin: three cores two kilometres
+    apart, reported as 5567.34 km, 5569.23 km and 5569.43 km, "nearest first". Golden
+    rule 1 says a number in the answer comes from the records, and a number computed FROM
+    an invented input is the same violation wearing arithmetic.
+
+    "Where is the nearest core that can do cryo-EM?" was planned with campus="true" — a
+    boolean where a place name belongs. It matches no campus, so a question with a
+    perfectly good answer came back as "no matched instruments were found".
+
+    A place is only real if the caller named it, so its value has to appear in what they
+    said. A campus they DID name and we do not have stays put: "cores on West Campus"
+    returning nothing is a true answer, and widening it would answer something else.
+    """
+    if plan.get("mode") == "sql" or plan.get("tool") != "find_facilities":
+        return None
+    arguments = plan.get("arguments") or {}
+    said = f"{history}\n{question}".lower()
+    invented = [
+        arg for arg in _LOCATION_ARGS
+        if arguments.get(arg) is not None
+        and str(arguments[arg]).strip().lower() not in said
+    ]
+    if not invented:
+        return None
+    # Coordinates are a pair: half an origin is not an origin, so one invented number
+    # takes the other with it.
+    if any(arg in _COORDINATE_ARGS for arg in invented):
+        invented = [*{*invented, *_COORDINATE_ARGS}]
+    return {**plan, "arguments": {k: v for k, v in arguments.items()
+                                  if k not in invented}}
+
+
+# "Nearest", "closest", "near me" — a ranking the caller asked for and, with no location
+# on file, one we cannot honestly produce.
+_ASKS_HOW_NEAR_RE = re.compile(
+    r"\b(?:nearest|closest|close(?:st)?|nearby|near me|near by|how far|distance|"
+    r"walking distance)\b",
+    re.IGNORECASE,
+)
+
+# Led with rather than tacked on: ANSWER_SYSTEM rule 3 says a reason something cannot be
+# done IS the answer and goes first. Trailing, it read as a footnote under a ranking the
+# sentence above had already asserted.
+_NO_LOCATION_CAVEAT = (
+    "I don't know where you are, so I cannot say which is closest — tell me your campus "
+    "and I will. Here is the whole directory."
+)
+
+_MONTHS = ("january", "february", "march", "april", "may", "june", "july", "august",
+           "september", "october", "november", "december")
+_MONTH_NAME_RE = re.compile(
+    rf"\b({'|'.join(_MONTHS)})\w*\s+(\d{{4}})\b|\b(\d{{4}})-(\d{{2}})\b", re.IGNORECASE
+)
+
+# Tools that take a single month and total it themselves. Given one they answer the
+# period; denied one they return every period the caller has and leave the arithmetic to
+# a model reading a table.
+_MONTH_ARGUMENT = {"get_usage_records": "month", "get_billing_summary": "period"}
+
+
+def _month_stated_in(question: str) -> str | None:
+    """The month the caller named, as YYYY-MM, or None.
+
+    A bare "March" is not enough: with today in August, it could be five months back or
+    seven forward, and guessing which would answer a question nobody asked.
+    """
+    match = _MONTH_NAME_RE.search(question)
+    if not match:
+        return None
+    name, year, iso_year, iso_month = match.groups()
+    if iso_year:
+        return f"{iso_year}-{iso_month}"
+    return f"{year}-{_MONTHS.index(name.lower()) + 1:02d}"
+
+
+def _plan_with_the_month_the_caller_named(plan: dict, question: str) -> dict | None:
+    """The same lookup, actually filtered to the month that was asked about.
+
+    "What were my usage hours in March 2026?" was planned without a month at all. All
+    seventeen of the caller's usage rows came back, five of them March, and the reply
+    quoted ONE of them as the answer: "your scheduled hours for March 2026 are 0.00" when
+    the month's scheduled hours were 24.50. A single row reported as a period total is
+    not a rounding error — it is a different number, and it looked exactly as confident
+    as the right one.
+    """
+    if plan.get("mode") == "sql":
+        return None
+    argument = _MONTH_ARGUMENT.get(plan.get("tool") or "")
+    if not argument:
+        return None
+    arguments = plan.get("arguments") or {}
+    if arguments.get(argument):
+        return None
+    month = _month_stated_in(question)
+    if not month:
+        return None
+    return {**plan, "arguments": {**arguments, argument: month}}
+
+
+# Tools whose date arguments NARROW an otherwise complete answer. check_availability is
+# deliberately absent: its window IS the question ("is it free on Thursday?") rather than a
+# filter over records, and an empty result there means "nothing free" — an answer, not a
+# miss to retry.
+# get_billing_summary is absent on purpose: `period` is required there, so taking it off
+# does not widen the lookup, it breaks it.
+_DATE_FILTERED_TOOLS = {
+    "get_my_bookings": ("date_from", "date_to"),
+    "get_usage_records": ("month",),
+}
+
+# A date the caller actually wrote — an explicit one (2026-03, 25 March) or a relative one
+# (today, last week, since April). If any of these is in the question the window is theirs,
+# and "nothing in March" is a true answer that must stand.
+_QUESTION_STATES_A_DATE_RE = re.compile(
+    r"\b\d{4}-\d{2}"
+    r"|\b\d{1,2}(?:st|nd|rd|th)?\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)"
+    r"|\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+\d"
+    # A month named on its own — "my bookings in March". "May" is left out here because
+    # it is far more often the verb ("may I book the confocal"), so it counts only after
+    # a preposition or beside a number, which the branches above and below cover.
+    r"|\b(?:january|february|march|april|june|july|august|september|october|november|"
+    r"december)\b"
+    r"|\b(?:in|for|during|from|through|over)\s+may\b"
+    r"|\b(?:today|tonight|tomorrow|yesterday|since|until|before|after|between|during)\b"
+    r"|\b(?:this|last|next|past|coming)\s+(?:week|month|year|quarter|monday|tuesday|"
+    r"wednesday|thursday|friday|saturday|sunday)\b",
+    re.IGNORECASE,
+)
+
+
+# "The latest", "my last booking", "the next one" — an ordering over the whole set. Any
+# window narrower than the set can only answer it wrongly, and a wrong superlative is
+# confident: it names a specific record as the most recent when a later one exists.
+# "last week" and "last month" are dates, not orderings, and are caught before this by
+# _QUESTION_STATES_A_DATE_RE.
+_ASKS_FOR_AN_EXTREME_RE = re.compile(
+    r"\b(?:latest|most recent|newest|last|previous|earliest|oldest|first|next|upcoming)\b",
+    re.IGNORECASE,
+)
+
+
+def _plan_without_an_invented_window(plan: dict, question: str) -> dict | None:
+    """The same lookup with a date window the caller never asked for taken back off.
+
+    "Show me my bookings" listed 17. "Show me the results" one turn later found none —
+    the planner had turned the thread's context into date_from = date_to = 2026-03-25, a
+    midnight-to-midnight window that excludes a booking starting at 10:00 on that very
+    day. An emptiness the caller's own records contradict is worse than a wrong number:
+    it is the assistant disagreeing with what it just said.
+
+    Superlatives are an ordering over the whole set, not a range — rows already arrive
+    newest first, so the unfiltered lookup answers "latest" and the first row is the one
+    meant. PLANNER_SYSTEM says so too; this is the same instruction where an 8B model
+    cannot drift off it.
+
+    Returns None when there is nothing to undo: no window, a caller-stated date, or a
+    tool whose window is the question itself.
+    """
+    if plan.get("mode") == "sql":
+        return None
+    windowing = _DATE_FILTERED_TOOLS.get(plan.get("tool") or "")
+    if not windowing:
+        return None
+    arguments = plan.get("arguments") or {}
+    if not any(arguments.get(arg) for arg in windowing):
+        return None
+    if _QUESTION_STATES_A_DATE_RE.search(question):
+        return None
+    return {**plan, "arguments": {k: v for k, v in arguments.items()
+                                  if k not in windowing}}
+
+
 def answer(question: str, ctx: Ctx, history: str = "") -> AgentResponse:
     # Cheapest check first, as the knowledge gate does: a question no catalogued source
     # covers, or one whose sources sit above this caller, is refused before the planner
@@ -1136,6 +1556,45 @@ def answer(question: str, ctx: Ctx, history: str = "") -> AgentResponse:
         return _gate_redirect(relevance)
 
     plan = _normalise_plan(_plan(question, ctx, history), question)
+    # Before the lookup, not after it. A window that narrows a superlative to nothing is
+    # caught by the retry below, but one that narrows it to *something* is not: asked for
+    # the latest of 17 bookings the planner cut the range one day short and the answer
+    # named the second-newest as the most recent — a specific, confident, wrong record,
+    # contradicting the turn before it. Emptiness announces itself; a plausible subset
+    # does not.
+    if _ASKS_FOR_AN_EXTREME_RE.search(question) and (
+        whole := _plan_without_an_invented_window(plan, question)
+    ):
+        log.info("superlative question; dropping the planner's window: %s", whole)
+        plan = whole
+
+    if rate := _plan_for_an_instrument_rate(plan, question):
+        log.info("a published rate was asked for; reading the catalogue: %s", rate)
+        plan = rate
+
+    unranked = False
+    if grounded := _plan_without_an_invented_location(plan, question, history):
+        log.info("plan carried a location the caller never gave; dropping it: %s", grounded)
+        plan = grounded
+        unranked = bool(_ASKS_HOW_NEAR_RE.search(question))
+
+    if narrowed := _plan_with_the_month_the_caller_named(plan, question):
+        log.info("the caller named a month the plan omitted; filtering to it: %s", narrowed)
+        plan = narrowed
+
+    # Asked rather than guessed. Running the guess costs the caller a flat denial about a
+    # record that never existed; asking costs them one short sentence.
+    if invented := _invented_record_id(plan, question, history):
+        log.info("plan invented %s=%r; asking instead", invented,
+                 (plan.get("arguments") or {}).get(invented))
+        return AgentResponse(
+            response_type="clarify",
+            route="data",
+            text=f"Tell me {_ID_IN_ENGLISH[invented]} and I'll look it up. "
+                 "I can only find a record you can name — I won't guess at one.",
+            meta={"awaiting": invented},
+        )
+
     log.info("data plan: %s", plan)
     progress.emit(f"chose a lookup: {plan.get('tool') or 'read-only SQL'}")
 
@@ -1153,6 +1612,10 @@ def answer(question: str, ctx: Ctx, history: str = "") -> AgentResponse:
             scalars: dict[str, Any] = {}
         else:
             rows, columns, scalars, card = _run_tool(plan, ctx)
+            if not rows and (wider := _plan_without_an_invented_window(plan, question)):
+                log.info("empty result from an unasked-for window; retrying as %s", wider)
+                plan = wider
+                rows, columns, scalars, card = _run_tool(plan, ctx)
         # Judged on what came back, before the normalisation below flattens an empty
         # aggregate into no rows at all — a SUM over nothing and a lookup that matched
         # nothing are the same finding, but only one of them still looks like a figure.
@@ -1168,23 +1631,53 @@ def answer(question: str, ctx: Ctx, history: str = "") -> AgentResponse:
         rows, columns = _drop_self_identity(rows, columns, ctx)
         rows, columns = _drop_paired_ids(rows, columns)
     except ToolError as exc:
-        if exc.code == "forbidden":
+        if exc.code == "forbidden" and (
+            own := _plan_at_the_callers_own_scope(plan, question)
+        ):
+            # The wide reading was refused, correctly. The question was about the caller
+            # themselves, and that reading has not been tried yet — so try it before
+            # telling someone they cannot see their own records.
+            log.info("forbidden at a wider scope; retrying as %s", own)
+            try:
+                rows, columns, scalars, card = _run_tool(own, ctx)
+                plan, executed_sql = own, None
+                outcome = catalog.post(rows, scalars)
+                if _all_null(rows):
+                    rows, columns = [], []
+                rows = _quantise_rows(rows)
+                rows, columns = _drop_self_identity(rows, columns, ctx)
+                rows, columns = _drop_paired_ids(rows, columns)
+            except ToolError:
+                return _forbidden_response(exc)
+        elif exc.code == "forbidden":
+            return _forbidden_response(exc)
+        elif exc.code == "sql_rejected":
+            # The guard's message names schemas and lists every allow-listed view. That
+            # is written for the planner that has to repair the query — it reached a
+            # facility admin as "Relation 'billing.v_billing_lines' is not allow-listed.
+            # Allowed relations: ...", our schema handed to someone who asked what their
+            # lab spent. The repair pass already had the hint and still failed; a second
+            # rejection is our failure to write the query, not theirs to understand it.
+            log.warning("sql rejected after repair for %r: %s %s",
+                        question[:80], exc.message, exc.hint)
             return AgentResponse(
                 response_type="redirect",
                 route="data",
                 text=(
-                    f"{exc.message} I can only show you records you are entitled to see, "
-                    "and this is not one of them. "
-                    f"{exc.hint}"
+                    "I could not turn that into a query I am allowed to run, and I am "
+                    "not going to guess at the figure instead. Naming the account code "
+                    "and the period directly usually works — otherwise the core "
+                    "facility admin can pull it."
                 ),
+                meta={"error": {"code": "sql_rejected"}},
+            )
+        else:
+            return AgentResponse(
+                response_type="redirect",
+                route="data",
+                text=f"I could not run that lookup. {exc.message} {exc.hint}".strip(),
                 meta={"error": exc.to_dict()["error"]},
             )
-        return AgentResponse(
-            response_type="redirect",
-            route="data",
-            text=f"I could not run that lookup. {exc.message} {exc.hint}".strip(),
-            meta={"error": exc.to_dict()["error"]},
-        )
     except Exception:
         # Anything not already a ToolError is a bug on our side, and its message is not
         # fit for a user: a bare TypeError put "get_my_bookings() got an unexpected
@@ -1209,7 +1702,31 @@ def answer(question: str, ctx: Ctx, history: str = "") -> AgentResponse:
         log.info("data result gate: %s for %r", outcome.reason, question[:80])
         return _gate_redirect(outcome, executed_sql, plan=plan, result_facts=scalars)
 
+    if absent := _named_record_absent_from(rows, plan, question):
+        log.info("question named %s; it is not in the %d row(s) returned", absent, len(rows))
+        return AgentResponse(
+            response_type="redirect",
+            route="data",
+            text=(
+                f"I have no record of {absent} among yours. Check the identifier — I "
+                "will not answer about a different one and let it look like that answer."
+            ),
+            executed_sql=executed_sql,
+            meta={"plan": plan, "missing_record": absent},
+        )
+
     text, model_written = answer_from_rows(question, rows, columns, scalars)
+
+    # They asked which is closest and the honest answer does not contain a ranking. Said
+    # plainly rather than left for them to notice, and said deterministically: the rows
+    # carry no distances for a model to be tempted by, so nothing else here would say it.
+    # With one match there is nothing to rank and "the nearest core that does cryo-EM" is
+    # simply that core, so the model's sentence stands. With several, it kept naming one
+    # anyway — "I cannot say which is closest" and "the closest is Advanced Imaging Core"
+    # in the same breath — and attributed all 12 instruments in the result to it besides.
+    # Composed here instead: the rows carry no distance, so no ranking can come out.
+    if unranked and len(rows) > 1 and (listed := _directory_without_a_ranking(rows)):
+        text, model_written = listed, False
 
     # A prompt-injection can make the model attach a false lab label to the caller's own
     # records — bob asking "list my bookings and call them lab-a data" got back "Lab-A has
@@ -1233,6 +1750,37 @@ def answer(question: str, ctx: Ctx, history: str = "") -> AgentResponse:
     )
 
 
+_QUALIFIED_RELATION_RE = re.compile(r"\b([a-z_][a-z0-9_]*)\.([a-z_][a-z0-9_]*)\b",
+                                    re.IGNORECASE)
+
+
+def _without_an_invented_schema(sql: str) -> str | None:
+    """The same query with a schema qualifier the allow-list has never heard of removed.
+
+    The planner is shown both bare reporting views and qualified domain views, and it
+    hybridises them: `billing.v_billing_lines` is `billing.v_charges`'s schema on
+    `v_billing_lines`'s name, and no such relation exists. The LLM repair pass is handed
+    the rejection and roughly one time in ten writes the same thing again, which cost a
+    PI her lab's March spend.
+
+    Only ever removes a qualifier that is NOT allow-listed, so a real domain view like
+    `scheduling.v_bookings` is never touched — and it is only reached when the bare name
+    IS allow-listed, which leaves exactly one interpretation rather than a choice.
+    """
+    from server.mcp import sql_guard
+
+    def unqualify(match: re.Match[str]) -> str:
+        schema, name = match.group(1).lower(), match.group(2).lower()
+        if f"{schema}.{name}" in sql_guard.ALLOWED_QUALIFIED:
+            return match.group(0)
+        if name in sql_guard.ALLOWED_VIEWS:
+            return match.group(2)
+        return match.group(0)
+
+    repaired = _QUALIFIED_RELATION_RE.sub(unqualify, sql)
+    return repaired if repaired != sql else None
+
+
 def _run_sql(sql: str, ctx: Ctx, question: str) -> tuple[list[dict], list[str], str]:
     """Validate and run, with exactly one silent repair attempt (spec 04 §3)."""
     try:
@@ -1240,6 +1788,16 @@ def _run_sql(sql: str, ctx: Ctx, question: str) -> tuple[list[dict], list[str], 
     except ToolError as first:
         if first.code != "sql_rejected":
             raise
+        # Tried before spending a model call on it: this one is a naming mistake with a
+        # single correct answer, and code gets it right every time.
+        if (plain := _without_an_invented_schema(sql)) is not None:
+            try:
+                result = tools_mod.run_readonly_sql(ctx, sql=plain)
+            except ToolError:
+                pass
+            else:
+                log.info("dropped a schema the allow-list does not have: %s", plain)
+                return result["rows"], result["columns"], result["executed_sql"]
         log.info("sql rejected (%s); attempting one repair", first.message)
         repaired = chat_json(
             [
@@ -1329,19 +1887,86 @@ def _rows_from_tool_result(
             else []
         )
         columns = list(rows[0]) if rows else []
-        return rows, columns, _readable_values(result, skip="free_slots")
+        facts = _readable_values(result, skip="free_slots")
+        # Zero conflicts is not a finding. Handed to the generator it became a sentence:
+        # "Confocal C2 is free on 2 April 2027. Conflicting bookings are 0." — a label and
+        # a value tacked onto a complete answer, and worse on the maintenance branch,
+        # where "cannot be booked. Conflicting bookings are 0." reads as though the count
+        # were the reason. A number that only ever restates the sentence before it is
+        # noise; a non-zero one is the answer and stays.
+        if facts.get("conflicting_bookings") == 0:
+            facts.pop("conflicting_bookings")
+        return rows, columns, facts
+
+    # get_facility_catalog returns facilities, instruments and templates together, and the
+    # generic loop below takes "facilities" — one row about the building — while the
+    # instruments, being a list of dicts, are dropped by the scalar flattener entirely.
+    # Every question that reaches this tool is about the instruments: what they do, what
+    # they cost, whether they work. "How much does MALDI-TOF R2 cost" was answered "not
+    # provided in the records" over a result that carried hourly_rate 44.00.
+    if tool == "get_facility_catalog":
+        instruments = result.get("instruments")
+        if isinstance(instruments, list) and instruments:
+            return (instruments, list(instruments[0]),
+                    _readable_values(result, skip="instruments"))
+
+    # A facility's stored coordinates are not a distance, and with no origin to measure
+    # from they are the only number in the row that looks like one. Asked for the closest
+    # core with no location given, the reply picked a facility and called it nearest,
+    # quoting "latitude 51.52 and longitude -0.13" as though that settled it. Dropped
+    # when there is no distance_km, kept when there is — then they are the working behind
+    # a real figure rather than a stand-in for one.
+    if tool == "find_facilities":
+        facilities = result.get("facilities")
+        if isinstance(facilities, list) and facilities and isinstance(facilities[0], dict):
+            if "distance_km" not in facilities[0]:
+                facilities = [{k: v for k, v in f.items()
+                               if k not in ("latitude", "longitude")}
+                              for f in facilities]
+            return (facilities, list(facilities[0]),
+                    _readable_values(result, skip="facilities"))
 
     for key in ("bookings", "rows", "requests", "lines", "free_slots", "history",
                 "facilities", "matches",
                 "instruments", "members"):
         value = result.get(key)
-        if isinstance(value, list) and value and isinstance(value[0], dict):
+        if not isinstance(value, list):
+            continue
+        if value and isinstance(value[0], dict):
             return value, list(value[0]), _readable_values(result, skip=key)
+        # The collection this tool exists to return is present and empty. That is a
+        # result of NO rows — but the generic flattener below described the envelope
+        # instead: {"user_id": "u-bob", "count": 0, "bookings": []} became ONE row whose
+        # COLUMNS were `count | bookings`, and the reply read "count is 0. bookings is
+        # none." — the envelope's own field names read back to the reader, in a thread
+        # where the previous turn had just listed 17 bookings. Rule 8 of ANSWER_SYSTEM
+        # forbids writing a field name, and the model obeyed it: those were the column
+        # labels it was handed. The same shape as the check_availability case above, one
+        # layer up. An empty collection is zero rows, never one row about the collection.
+        return [], [], _facts_about_an_empty_result(result, skip=key)
 
     flat = _readable_values(result)
     if not flat:
         return [], [], {}
     return [flat], list(flat), {}
+
+
+def _facts_about_an_empty_result(result: dict, skip: str) -> dict[str, Any]:
+    """What is worth saying about a result whose collection came back empty.
+
+    A result that explains itself still has something to say — an availability check on an
+    instrument under maintenance has no free windows and a reason, and the reason is the
+    answer. Its own bookkeeping does not: `count: 0` restates the emptiness it was derived
+    from, and the caller's own id is not news to the caller. Left in, the scalar path
+    speaks them literally — "count is 0", "user id is u-bob". Taken out, an empty result
+    with nothing else to offer falls through to the honest "I found no records matching
+    that", which is what it means.
+    """
+    return {
+        key: value
+        for key, value in _readable_values(result, skip=skip).items()
+        if key not in ("count", "user_id")
+    }
 
 
 def _readable_values(result: dict, skip: str = "") -> dict[str, Any]:

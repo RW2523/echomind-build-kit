@@ -1019,3 +1019,134 @@ diminishing returns.
   under a heading that made no distinction between them. With the caller's own documents
   labelled as the only source of values, the scene passes 16/16 consecutive runs where it
   had passed roughly two in three.
+- 2026-08-16 | The trtllm container is echomind-trt, not echomind-trtllm | The sibling
+  echomind-enterprise stack already runs a container under the latter name serving its
+  30B on 8355. Sharing a name meant `up` collided, and the container actually running
+  here had been started from that project's compose — inheriting its 8355 healthcheck
+  and so reporting unhealthy forever while serving the 8B on 8000 perfectly. A distinct
+  name keeps a real outage distinguishable from that noise.
+- 2026-08-16 | TRTLLM_MODEL is pinned in .env beside LLM_MODEL | The compose default is
+  Llama-3.1-8B-Instruct-FP4 while the app asks for Qwen3-8B-FP4; recreating the
+  container without the pin would serve a model no request names, and every call would
+  404 on an unknown model rather than fail loudly at startup.
+- 2026-08-16 | An empty collection is zero rows, never one row about the collection |
+  get_my_bookings returning {"count": 0, "bookings": []} fell through the row flattener
+  to the generic path, which described the ENVELOPE: one row whose columns were `count`
+  and `bookings`, and an answer reading "count is 0. bookings is none." Rule 8 of
+  ANSWER_SYSTEM forbids writing a field name and the model obeyed it — those were the
+  column labels it was handed. Same shape as the check_availability fix, one layer up, so
+  it is fixed for every tool rather than one more of them.
+- 2026-08-16 | A superlative drops the planner's date window before the lookup runs |
+  "The latest of my bookings" is an ordering over the whole set; rows already arrive
+  newest first. Asked for it the planner invented a range, and a range that stops one day
+  short does not fail loudly — it named the second-newest booking as the most recent, in
+  the turn after listing all 17 correctly. Emptiness announces itself, a plausible subset
+  does not, so the window comes off up front and an empty result retries unfiltered.
+  PLANNER_SYSTEM says the same thing in words; on an 8B model the words did not hold.
+- 2026-08-16 | The convo suite checks columns, not just prose, for a leaked envelope |
+  Its field-name guard matches two words joined by an underscore, so "count is 0" — the
+  exact defect the suite exists to catch — passed it twice. Scanning for bare words would
+  flag `status` and `instrument`, which are columns AND ordinary English; `count` is a
+  fact about a result set and never a column of one, so the check is structural.
+- 2026-08-16 | The platform records that a run happened, never what came off the
+  instrument | There is no results table, no data file and no image in the schema, but
+  "results of my latest booking" mentions a booking, so the relevance gate passed it and
+  the branch answered with booking records presented as results. Both an output noun and
+  a run noun are now required, so "show me the results" on its own still means "show me
+  those rows" and gets them.
+- 2026-08-16 | An identifier the caller never gave is asked for, not guessed | "Where is
+  my sample?" planned track_sample(sample_id="s-12345") and "cancel my next booking"
+  planned cancel_booking(booking_id="booking-12345"). The first surfaced as a flat access
+  denial about a record that never existed, the second as a failed write; both read as
+  the platform being broken about the caller's own data. Instrument ids and account codes
+  are exempt because they are resolved from something real — a name, the caller's profile.
+- 2026-08-16 | A refused first-person question is retried at the caller's own scope |
+  "When did I last use the Cryo-EM?" was planned as instrument-wide usage, which is
+  admin-only, and a user was told they could not see their own history. Retried only
+  after a real refusal, so nobody entitled to the wider read is quietly narrowed.
+- 2026-08-16 | An id the caller named is never answered with a neighbouring record |
+  "Status of booking bk-9999?" returned the caller's August bookings and reported one of
+  them: a real status, for a booking they had not asked about. Restricted to tools whose
+  rows carry those ids — an invoice line has no booking id, so absence there proves
+  nothing.
+- 2026-08-16 | A month the caller named is filtered on; one they did not is dropped |
+  Omitted, "my usage in March 2026" returned all 17 rows and one was quoted as the
+  month's total (0.00 against a real 24.50). Invented, "when did I last use the Cryo-EM"
+  was filtered to an empty August and reported as zero hours. The same fact — only the
+  caller's own words set the window — in both directions.
+- 2026-08-16 | The SQL guard's allow-list is for the planner, not the reader | A facility
+  admin asking what their lab spent got "Relation 'billing.v_billing_lines' is not
+  allow-listed. Allowed relations: ..." — our schema, in place of their figure. The
+  repair pass already gets the hint; a second rejection is our failure to write the query.
+- 2026-08-16 | A caller with exactly one account code is not asked which to charge |
+  "Book Confocal C2 from 3am to 5am" was refused for a missing account_code before its
+  real problem — 3am is outside opening hours — was ever reached, so the caller was asked
+  for the only value they could possibly have given. Filled only when there is exactly
+  one: with a choice it is theirs to make, and the code appears on the approval card
+  either way, so nothing is charged before they have read it.
+- 2026-08-16 | Onboarding without the PI's acknowledgement asks, rather than refusing |
+  The planner is told to ask when consent has not been given and instead sent
+  pi_ack=false, which the tool refused as "pi_ack must be true" — a field name and a
+  boolean where a question belonged. Refusing and asking are equally correct about the
+  consent; only one of them lets the caller finish. The acknowledgement is still never
+  assumed on their behalf.
+- 2026-08-16 | A label read back with its value is dropped from the answer | "You are
+  trained on the confocal." answers the question; "The record shows "trained on confocal"
+  is yes." repeats it in the schema's vocabulary, which is rule 8 wearing a nicer coat.
+  Only ever a trailing sentence whose label belongs to THIS result, and never the last
+  one standing — an awkward fact beats no answer.
+- 2026-08-16 | A schema the allow-list never had is dropped before a model is asked to
+  fix it | The planner is shown bare reporting views and qualified domain views, and
+  hybridises them: `billing.v_billing_lines` is billing.v_charges' schema on
+  v_billing_lines' name. The LLM repair pass gets the rejection and roughly one time in
+  ten writes the same thing again, which cost a PI her lab's March spend. Only a
+  qualifier that is NOT allow-listed is removed, and only when the bare name IS — so
+  scheduling.v_bookings keeps its schema, and there is one interpretation rather than a
+  choice.
+- 2026-08-16 | A place the caller never named is not measured from | "Show me the closest
+  facility nearby" was planned with near_latitude 40.7128, near_longitude -74.0060 — New
+  York — and three cores two kilometres apart came back as 5567.34 km, 5569.23 km and
+  5569.43 km, "nearest first". Real haversine arithmetic over a fabricated origin is
+  golden rule 1 broken with extra steps. The same planner sent campus="true" for "the
+  nearest core that can do cryo-EM", which matched no campus and turned a good answer
+  into "no matched instruments found". A campus the caller DID name and we do not have
+  still stands: "nothing on West Campus" is true.
+- 2026-08-16 | With no location and more than one match, the list is composed in code |
+  Stripping the invented origin was not enough — the model kept naming a closest anyway,
+  contradicting the caveat one sentence later, and attributed all 12 instruments in the
+  result to the one core it picked. Rows carrying no distance cannot yield a ranking if
+  no draft is written. One match is exempt: "the nearest core that does cryo-EM" is
+  simply that core.
+- 2026-08-16 | The catalogue answers about instruments, and by whatever name they are
+  called | get_facility_catalog matched facility_id on the id alone, so "what is
+  MALDI-TOF R2 used for?" was refused as "No such facility" — an instrument name is a
+  different KIND of identifier, not a wrong one, and its core was one join away. Its rows
+  are now the instruments too: the generic flattener took "facilities" (one row about a
+  building) and dropped the instruments as a list of dicts, so "how much does MALDI-TOF
+  R2 cost" answered "not provided in the records" over a result holding hourly_rate 44.00.
+- 2026-08-16 | A published rate is read from the catalogue, never from usage | "How much
+  does this cost for MALDI-TOF R2" was planned as the caller's own usage records and
+  answered by printing all seventeen rows of them. Questions about their own money —
+  invoice, spend, charged — are excluded, because a published rate is a different number
+  and would be given just as confidently.
+- 2026-08-16 | Asking to change a booking is an action, even ending in a question mark |
+  "Can I cancel the booking" classified as data and came back as a list of the caller's
+  bookings and their statuses — a read where a proposal belonged. SYSTEM already says
+  wanting something to happen is an action however it is phrased; on this wording the
+  model heard the question mark. Nothing executes either way: the action branch prepares
+  a card that still needs approval, so reading it as an action when they were only
+  wondering costs one decline. Questions about the RULES — how do I cancel, what am I
+  charged if I cancel — stay knowledge, with their citations.
+- 2026-08-16 | Which booking is resolved against the caller's records, not the transcript
+  | "Can I reschedule to 08:00 to 12:00", one turn after booking the Bioanalyzer, planned
+  no booking_id at all ("That lookup does not take an instrument") and in a neighbouring
+  run planned one that did not exist ("No such booking"). Both read as the platform
+  losing a booking it had just confirmed. Resolution takes an id named in the thread only
+  if it is really theirs, else their one open booking, else asks and names them — so an
+  action id quoted back off an approval card cannot pass as a booking id merely by having
+  appeared on screen. This supersedes the text-matching guard for these two tools, since
+  a booking resolved from context is right precisely BECAUSE nobody typed it.
+- 2026-08-16 | A write drops arguments its tool has no parameter for | The read branch
+  already repaired this on error; a write never got the chance, so the planner putting
+  instrument_id on reschedule_booking reached the caller as "That lookup does not take an
+  instrument." Only when what remains can still run.

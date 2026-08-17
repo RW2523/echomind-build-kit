@@ -97,6 +97,31 @@ def conversations() -> list[Conversation]:
             ],
         ),
         Conversation(
+            "latest-booking-followup", "bob",
+            "17 bookings, then \"count is 0. bookings is none.\" one turn later.",
+            [
+                Turn("show my booking", kind="rows_answer", contains=("17",)),
+                # The platform records that a run happened, not what came off the
+                # instrument — so the honest answer names the gap instead of handing back
+                # booking rows relabelled as results. What it must never do is the
+                # original defect: describe an empty envelope in its own field names.
+                Turn("show me the results of my latest booking",
+                     kind="redirect",
+                     contains=("not stored here",),
+                     absent=("0 bookings", "bookings is none", "count is 0")),
+                # The booking itself is still a question with an answer, and "latest" is
+                # an ordering over the whole set rather than a date range to guess at. The
+                # guess landed past the end of the data, the empty envelope was rendered
+                # as one row, and its column names became the sentence.
+                Turn("what was my latest booking?",
+                     kind="rows_answer",
+                     contains=("MALDI-TOF R2",),
+                     absent=("0 bookings", "bookings is none", "count is 0"),
+                     check=lambda r: None if r.get("rows") else
+                     "no rows: an empty result was described instead of reported"),
+            ],
+        ),
+        Conversation(
             "opening-hours", "alice",
             "The hours availability publishes are the hours booking enforces.",
             [
@@ -338,6 +363,16 @@ class Runner:
         }
         if leaked:
             problems.append(f"field name(s) in prose: {sorted(leaked)}")
+
+        # A single-word field name is invisible to the regex above — it wants two words
+        # joined by an underscore — which is how "count is 0. bookings is none." passed a
+        # suite whose whole job is catching exactly that. Caught structurally rather than
+        # in the prose: scanning for bare words would flag `status` and `instrument`,
+        # which are column names AND ordinary English. `count` is not. It is a fact ABOUT
+        # a result set and never a column of one, so a row carrying it is the envelope
+        # being rendered as its own contents.
+        if "count" in (reply.get("columns") or []):
+            problems.append("result envelope rendered as a row (a 'count' column)")
         return problems
 
     def run(self, only: str | None) -> int:

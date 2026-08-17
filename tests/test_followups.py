@@ -420,9 +420,19 @@ from server.agent.action import (  # noqa: E402
     relative_date_target,
 )
 from server.agent.data import (  # noqa: E402
+    _ASKS_FOR_AN_EXTREME_RE,
+    _QUESTION_STATES_A_DATE_RE,
     _display,
+    _invented_record_id,
+    drop_a_label_restated_as_a_value,
     _mentions_unsupported_lab,
+    _month_stated_in,
+    _named_record_absent_from,
+    _plan_at_the_callers_own_scope,
+    _plan_with_the_month_the_caller_named,
+    _plan_without_an_invented_window,
     _rows_from_tool_result,
+    start_with_a_capital,
 )
 
 
@@ -468,6 +478,288 @@ def test_availability_result_never_exposes_its_schema_as_columns():
     # generator read a free slot back as a booking. The meaning rides in the key.
     assert columns == ["free_from", "free_until"]
     assert rows[0]["free_from"] == "2027-04-08T08:00:00Z"
+
+
+def test_an_empty_collection_is_no_rows_not_a_row_about_the_collection():
+    """"count is 0. bookings is none." — the envelope's own field names, read back to a
+    caller whose previous turn had just listed 17 bookings. An empty list is zero rows."""
+    empty = {"user_id": "u-bob", "count": 0, "bookings": []}
+    rows, columns, scalars = _rows_from_tool_result(empty, "get_my_bookings")
+    assert rows == [] and columns == []
+    # Nothing left to speak: the honest "I found no records matching that" is the answer,
+    # not "count is 0" and not the caller's own id read back to them.
+    assert scalars == {}
+
+
+def test_an_empty_collection_still_reports_what_explains_it():
+    """Emptiness with a reason keeps the reason — only the bookkeeping is dropped."""
+    empty = {"account_code": "ACC-B1", "period": "2026-05", "count": 0, "lines": []}
+    rows, columns, scalars = _rows_from_tool_result(empty, "get_billing_summary")
+    assert rows == [] and columns == []
+    assert scalars == {"account_code": "ACC-B1", "period": "2026-05"}
+
+
+@pytest.mark.parametrize(
+    ("question", "arguments", "widened"),
+    [
+        # The transcript: 17 bookings, then none, because "latest" became a date.
+        ("show me the results", {"date_from": "2026-03-25", "date_to": "2026-03-25"}, True),
+        ("show me the results of my latest booking", {"date_from": "2026-03-01"}, True),
+        ("what was my most recent booking", {"date_from": "2026-08-01"}, True),
+        # A window the caller asked for is theirs: "nothing in March" is a true answer,
+        # and widening it would answer a question nobody put.
+        ("what did I book in 2026-03", {"date_from": "2026-03-01"}, False),
+        ("my bookings in March", {"date_from": "2026-03-01"}, False),
+        ("my bookings in May", {"date_from": "2026-05-01"}, False),
+        # "May" as the verb is not a date, so this one still widens.
+        ("may I see my latest booking", {"date_from": "2026-08-01"}, True),
+        ("did I book anything last week", {"date_from": "2026-08-09"}, False),
+        ("anything booked since April", {"date_from": "2026-04-01"}, False),
+        ("what am I booked on today", {"date_from": "2026-08-16"}, False),
+        # Nothing to undo.
+        ("show my bookings", {}, False),
+    ],
+)
+def test_only_an_unasked_for_date_window_is_taken_back_off(question, arguments, widened):
+    plan = {"mode": "tool", "tool": "get_my_bookings", "arguments": arguments}
+    result = _plan_without_an_invented_window(plan, question)
+    assert (result is not None) == widened
+    if widened:
+        assert result["arguments"] == {}
+        assert result["tool"] == "get_my_bookings"
+
+
+@pytest.mark.parametrize(
+    ("question", "is_extreme"),
+    [
+        ("show me the results of my latest booking", True),
+        ("what was my most recent booking", True),
+        ("my last booking", True),
+        ("what is my next booking", True),
+        # Dates, not orderings — and caught as dates before the ordering rule is reached.
+        ("did I book anything last week", False),
+        ("my bookings last month", False),
+        ("show me the results", False),
+        ("show my bookings", False),
+    ],
+)
+def test_a_superlative_is_told_apart_from_a_date(question, is_extreme):
+    """"last week" is a window the caller chose; "my last booking" is an ordering over
+    every booking they have. Only the second one may drop the planner's range."""
+    asks = bool(_ASKS_FOR_AN_EXTREME_RE.search(question))
+    dated = bool(_QUESTION_STATES_A_DATE_RE.search(question))
+    assert (asks and not dated) == is_extreme
+
+
+@pytest.mark.parametrize(
+    ("arguments", "question", "invented"),
+    [
+        # The transcript: an id nobody gave, which came back as a flat access denial.
+        ({"sample_id": "s-12345"}, "where is my sample?", "sample_id"),
+        ({"booking_id": "booking-123"}, "cancel my next booking", "booking_id"),
+        ({"barcode": "SMP-0001"}, "track my sample", "barcode"),
+        # An id the caller actually gave, in either turn's spelling.
+        ({"sample_id": "smp-1042"}, "where is sample smp-1042?", None),
+        ({"barcode": "SMP-0001"}, "track barcode smp-0001 please", None),
+        # Ids the system resolves rather than invents are not record identifiers.
+        ({"instrument_id": "ins-confocal-c2"}, "is Confocal C2 free?", None),
+        ({"account_code": "ACC-A1"}, "what is on my invoice?", None),
+        ({}, "show my bookings", None),
+    ],
+)
+def test_an_identifier_the_caller_never_gave_is_asked_for(arguments, question, invented):
+    plan = {"mode": "tool", "tool": "track_sample", "arguments": arguments}
+    assert _invented_record_id(plan, question) == invented
+
+
+def test_an_identifier_given_earlier_in_the_thread_counts_as_given():
+    plan = {"mode": "tool", "tool": "track_sample", "arguments": {"barcode": "SMP-7"}}
+    assert _invented_record_id(plan, "where is it now?", "user: track SMP-7") is None
+
+
+@pytest.mark.parametrize(
+    ("question", "arguments", "narrowed"),
+    [
+        # "I" — the wide reading was refused, and the caller's own is untried.
+        ("when did I last use the Cryo-EM?", {"scope": "instrument", "id": "ins-em"}, True),
+        ("how many hours have we used?", {"scope": "lab", "id": "lab-a"}, True),
+        # Not first person: the refusal is the right answer and stands.
+        ("how many hours did lab B use?", {"scope": "lab", "id": "lab-b"}, False),
+        ("how much has the MiSeq been used?", {"scope": "instrument", "id": "ins-m3"}, False),
+        # Already the caller's own scope — nothing narrower to try.
+        ("how many hours have I used?", {"scope": "user"}, False),
+    ],
+)
+def test_a_refused_first_person_question_is_retried_at_the_callers_own_scope(
+    question, arguments, narrowed
+):
+    plan = {"mode": "tool", "tool": "get_usage_records", "arguments": arguments}
+    result = _plan_at_the_callers_own_scope(plan, question)
+    assert (result is not None) == narrowed
+    if narrowed:
+        assert result["arguments"] == {"scope": "user"}
+
+
+@pytest.mark.parametrize(
+    ("question", "rows", "absent"),
+    [
+        # The transcript: a real status for a booking nobody asked about.
+        ("what is the status of booking bk-9999?", [{"id": "bk-0071"}], "bk-9999"),
+        ("status of bk-9999 and bk-8888?", [{"id": "bk-0071"}], "bk-8888"),
+        # Found: answer normally.
+        ("what is the status of booking bk-0071?", [{"id": "bk-0071"}], None),
+        # One of two found is a partial answer worth giving.
+        ("bk-0071 and bk-9999?", [{"id": "bk-0071"}], None),
+        # No id named at all.
+        ("show my bookings", [{"id": "bk-0071"}], None),
+    ],
+)
+def test_an_id_the_caller_named_is_never_answered_with_a_different_record(
+    question, rows, absent
+):
+    plan = {"mode": "tool", "tool": "get_my_bookings", "arguments": {}}
+    assert _named_record_absent_from(rows, plan, question) == absent
+
+
+def test_an_invoice_line_missing_a_booking_id_is_not_called_absent():
+    """get_billing_summary rows do not carry booking ids, so "not in these rows" would
+    not mean "not on record" — the check stays away from tools that cannot know."""
+    plan = {"mode": "tool", "tool": "get_billing_summary", "arguments": {}}
+    rows = [{"description": "Cryo-EM Titan usage", "amount": "290.00"}]
+    assert _named_record_absent_from(rows, plan, "what did bk-0071 cost?") is None
+
+
+@pytest.mark.parametrize(
+    ("draft", "rows", "opened"),
+    [
+        ("the status is requested.", [{"id": "bk-1"}], "The status is requested."),
+        ("the imaging core's opening hours are 08:00-20:00.", [],
+         "The imaging core's opening hours are 08:00-20:00."),
+        ("You have 17 bookings.", [], "You have 17 bookings."),
+        ("", [], ""),
+        # Rule 4 outranks tidiness: a reply opening ON a stored value keeps its spelling.
+        ("in_prep is where it has got to.", [{"status": "in_prep"}],
+         "in_prep is where it has got to."),
+        ("bk-0071 is the latest.", [{"id": "bk-0071"}], "bk-0071 is the latest."),
+    ],
+)
+def test_an_answer_opens_with_a_capital_unless_it_opens_on_a_value(draft, rows, opened):
+    assert start_with_a_capital(draft, rows, {}) == opened
+
+
+def test_zero_conflicts_is_not_a_finding_worth_a_sentence():
+    """"Confocal C2 is free. Conflicting bookings are 0." — a label and a value tacked
+    onto a complete answer. A non-zero count is the answer and stays."""
+    free = {"instrument_name": "Confocal C2", "bookable": True,
+            "requested_window_free": True, "conflicting_bookings": 0, "free_slots": []}
+    _, _, scalars = _rows_from_tool_result(free, "check_availability")
+    assert "conflicting_bookings" not in scalars
+
+    busy = {**free, "requested_window_free": False, "conflicting_bookings": 3}
+    _, _, scalars = _rows_from_tool_result(busy, "check_availability")
+    assert scalars["conflicting_bookings"] == 3
+
+
+@pytest.mark.parametrize(
+    ("question", "month"),
+    [
+        ("what were my usage hours in March 2026?", "2026-03"),
+        ("my usage for 2026-03", "2026-03"),
+        ("what did I spend in December 2025?", "2025-12"),
+        # A bare month could be five months back or seven forward. Guessing answers a
+        # question nobody asked.
+        ("what were my usage hours in March?", None),
+        ("how many hours have I used?", None),
+    ],
+)
+def test_only_an_unambiguous_month_is_read_out_of_the_question(question, month):
+    assert _month_stated_in(question) == month
+
+
+def test_a_month_the_caller_named_is_actually_filtered_on():
+    """All 17 usage rows came back and ONE March row was quoted as the March total:
+    "scheduled hours are 0.00" for a month whose scheduled hours were 24.50."""
+    plan = {"mode": "tool", "tool": "get_usage_records", "arguments": {"scope": "user"}}
+    out = _plan_with_the_month_the_caller_named(plan, "my usage hours in March 2026?")
+    assert out["arguments"] == {"scope": "user", "month": "2026-03"}
+
+    # get_billing_summary spells the same idea "period".
+    plan = {"mode": "tool", "tool": "get_billing_summary",
+            "arguments": {"account_code": "ACC-A1"}}
+    out = _plan_with_the_month_the_caller_named(plan, "my invoice for March 2026")
+    assert out["arguments"]["period"] == "2026-03"
+
+    # A month the planner already supplied is left exactly as it is.
+    plan = {"mode": "tool", "tool": "get_usage_records",
+            "arguments": {"scope": "user", "month": "2026-02"}}
+    assert _plan_with_the_month_the_caller_named(plan, "usage in March 2026") is None
+
+
+def test_a_month_the_planner_invented_for_a_superlative_comes_off_too():
+    """"When did I last use the Cryo-EM?" was planned with month=2026-08, matched no
+    rows, and reported "scheduled hours of 0, tracked hours of 0" — a usage figure for a
+    month the caller never mentioned, about an instrument they last used in January."""
+    plan = {"mode": "tool", "tool": "get_usage_records",
+            "arguments": {"scope": "user", "month": "2026-08"}}
+    out = _plan_without_an_invented_window(plan, "when did I last use the Cryo-EM?")
+    assert out["arguments"] == {"scope": "user"}
+
+    # A month the caller did name stays put.
+    assert _plan_without_an_invented_window(
+        plan, "what did I use in August 2026?"
+    ) is None
+
+
+def test_a_required_period_is_never_stripped():
+    """get_billing_summary cannot run without a period, so widening would break it."""
+    plan = {"mode": "tool", "tool": "get_billing_summary",
+            "arguments": {"account_code": "ACC-A1", "period": "2026-03"}}
+    assert _plan_without_an_invented_window(plan, "what was my last invoice?") is None
+
+
+@pytest.mark.parametrize(
+    ("draft", "rows", "scalars", "kept"),
+    [
+        # The transcript: the answer, then the same fact in the schema's words.
+        ('You are trained on the confocal. The record shows "trained on confocal" is yes.',
+         [{"training_confocal": True}], {}, "You are trained on the confocal."),
+        ("Confocal C2 is free on 2 April 2027. Conflicting bookings are 0.",
+         [], {"conflicting_bookings": 0}, "Confocal C2 is free on 2 April 2027."),
+        # Never the last sentence standing: an awkward fact beats no answer.
+        ('The record shows "trained on confocal" is yes.', [{"training_confocal": True}],
+         {}, 'The record shows "trained on confocal" is yes.'),
+        # A real value is not a label restatement, however it is phrased.
+        ("The status is requested. The account code is ACC-A1.",
+         [{"status": "requested", "account_code": "ACC-A1"}], {},
+         "The status is requested. The account code is ACC-A1."),
+        # A label this result does not have is somebody's prose, and is left alone.
+        ("It is free. Widget count is 0.", [{"status": "x"}], {},
+         "It is free. Widget count is 0."),
+        ("You have 17 bookings. All are completed.", [{"status": "completed"}], {},
+         "You have 17 bookings. All are completed."),
+    ],
+)
+def test_a_label_read_back_with_its_value_is_dropped(draft, rows, scalars, kept):
+    assert drop_a_label_restated_as_a_value(draft, rows, scalars) == kept
+
+
+def test_an_availability_window_is_never_widened():
+    """check_availability's window IS the question. No free slots on Thursday is an
+    answer; re-asking without the Thursday answers something else entirely."""
+    plan = {"mode": "tool", "tool": "check_availability",
+            "arguments": {"instrument_id": "ins-c2", "date_from": "2027-04-08",
+                          "date_to": "2027-04-08"}}
+    assert _plan_without_an_invented_window(plan, "is Confocal C2 free") is None
+
+
+def test_a_populated_collection_is_unaffected_by_the_empty_case():
+    populated = {"user_id": "u-bob", "count": 1, "bookings": [
+        {"id": "bk-0071", "instrument": "MALDI-TOF R2", "status": "completed"}]}
+    rows, columns, scalars = _rows_from_tool_result(populated, "get_my_bookings")
+    assert columns == ["id", "instrument", "status"]
+    assert rows[0]["id"] == "bk-0071"
+    # The count stays a result fact about the whole set, never merged into the rows.
+    assert scalars["count"] == 1
 
 
 def test_relative_month_phrase_resolves_against_today():
@@ -842,3 +1134,290 @@ def test_both_planners_resolve_relative_dates_from_the_same_clock():
     today = datetime.now(UTC).date()
     kind, value = relative_date_target("book it tomorrow", today)
     assert kind == "day" and value.toordinal() == today.toordinal() + 1
+
+
+# --- writes: the fields only the caller can settle ---------------------------------
+
+
+@pytest.mark.tools
+def test_the_callers_only_account_code_is_filled_in(ctxs):
+    """"Book Confocal C2 from 3am to 5am" was refused for a missing account_code before
+    its real problem — 3am is outside opening hours — was ever reached. Alice has exactly
+    one code, so asking her for it asks for the only value she could have given."""
+    from server.agent.action import _with_the_callers_only_account_code, account_codes_of
+
+    assert account_codes_of(ctxs["alice"]) == ["ACC-A1"]
+    plan = {"tool": "request_booking",
+            "arguments": {"instrument_id": "ins-confocal-c2",
+                          "starts_at": "2027-04-02T09:00:00Z",
+                          "ends_at": "2027-04-02T11:00:00Z"}}
+    out = _with_the_callers_only_account_code(plan, ctxs["alice"])
+    assert out["arguments"]["account_code"] == "ACC-A1"
+
+
+@pytest.mark.tools
+def test_a_code_the_planner_already_chose_is_left_alone(ctxs):
+    from server.agent.action import _with_the_callers_only_account_code
+
+    plan = {"tool": "request_booking",
+            "arguments": {"instrument_id": "ins-confocal-c2", "account_code": "ACC-A1"}}
+    assert _with_the_callers_only_account_code(plan, ctxs["alice"]) is None
+
+
+@pytest.mark.tools
+def test_a_tool_that_takes_no_account_code_is_never_given_one(ctxs):
+    from server.agent.action import _with_the_callers_only_account_code
+
+    plan = {"tool": "cancel_booking", "arguments": {"booking_id": "bk-0071"}}
+    assert _with_the_callers_only_account_code(plan, ctxs["alice"]) is None
+
+
+@pytest.mark.tools
+def test_with_more_than_one_account_the_choice_stays_the_callers(ctxs):
+    """Filling one in would charge an account they did not pick. Asking is the answer."""
+    from server.agent.action import _which_account_code, _with_the_callers_only_account_code
+
+    codes = ["ACC-A1", "ACC-A2"]
+
+    import server.agent.action as action_mod
+
+    original = action_mod.account_codes_of
+    action_mod.account_codes_of = lambda ctx: codes
+    try:
+        plan = {"tool": "request_booking", "arguments": {"instrument_id": "ins-confocal-c2"}}
+        assert _with_the_callers_only_account_code(plan, ctxs["alice"]) is None
+        ask = _which_account_code(plan, ctxs["alice"])
+        assert ask.response_type == "clarify"
+        assert "ACC-A1" in ask.text and "ACC-A2" in ask.text
+    finally:
+        action_mod.account_codes_of = original
+
+
+# --- SQL the planner hybridised out of two real view names -------------------------
+
+
+@pytest.mark.parametrize(
+    ("sql", "repaired"),
+    [
+        # billing.v_charges' schema on v_billing_lines' name. No such relation exists,
+        # and the LLM repair pass writes it again often enough to cost a demo scene.
+        ("SELECT SUM(amount) FROM billing.v_billing_lines WHERE lab_id = 'lab-a'",
+         "SELECT SUM(amount) FROM v_billing_lines WHERE lab_id = 'lab-a'"),
+        ("SELECT * FROM reporting.v_bookings", "SELECT * FROM v_bookings"),
+        # A real domain view keeps its schema: v_bookings exists in two spaces and they
+        # are not the same view.
+        ("SELECT * FROM scheduling.v_bookings", None),
+        ("SELECT * FROM billing.v_charges", None),
+        ("SELECT * FROM v_billing_lines", None),
+        # Nothing to fall back to, so the guard's own rejection stands.
+        ("SELECT * FROM nonsense.made_up", None),
+    ],
+)
+def test_a_schema_the_allow_list_never_had_is_dropped(sql, repaired):
+    from server.agent.data import _without_an_invented_schema
+
+    assert _without_an_invented_schema(sql) == repaired
+
+
+# --- a location nobody gave, and a rate read from the wrong place ------------------
+
+
+@pytest.mark.parametrize(
+    ("question", "arguments", "stripped"),
+    [
+        # The transcript: New York, which nobody mentioned. Three cores two kilometres
+        # apart came back as 5567.34 km, 5569.23 km and 5569.43 km, "nearest first".
+        ("Show me the closes facility nearby?",
+         {"near_latitude": "40.7128", "near_longitude": "-74.0060"}, True),
+        ("which core is closest?", {"near_latitude": 51.5, "near_longitude": -0.1}, True),
+        # Coordinates the caller actually typed are theirs and stay.
+        ("cores near 51.5243, -0.1339",
+         {"near_latitude": "51.5243", "near_longitude": "-0.1339"}, False),
+        # A boolean where a place name belongs: matches no campus, so a question with a
+        # good answer came back "no matched instruments were found".
+        ("where is the nearest core that can do cryo-EM?",
+         {"technique": "cryo-em", "campus": "true"}, True),
+        # A campus the caller DID name stays, even one we do not have — "nothing on West
+        # Campus" is a true answer, and widening it would answer something else.
+        ("cores on West Campus", {"campus": "West Campus"}, False),
+        ("what instruments does the Advanced Imaging Core have?",
+         {"technique": "imaging", "campus": "Advanced Imaging Core"}, False),
+        # Nothing to strip.
+        ("where is the nearest cryo-EM core", {"technique": "cryo-em"}, False),
+    ],
+)
+def test_a_location_the_caller_never_gave_is_not_measured_from(
+    question, arguments, stripped
+):
+    from server.agent.data import _plan_without_an_invented_location
+
+    plan = {"mode": "tool", "tool": "find_facilities", "arguments": arguments}
+    out = _plan_without_an_invented_location(plan, question)
+    assert (out is not None) == stripped
+    if stripped:
+        # Whatever was invented is gone; whatever the caller did say survives.
+        for argument in ("near_latitude", "near_longitude", "campus"):
+            assert str(out["arguments"].get(argument, "")).lower() in question.lower() \
+                or argument not in out["arguments"]
+        assert out["arguments"].get("technique") == arguments.get("technique")
+
+
+@pytest.mark.parametrize(
+    ("question", "instrument"),
+    [
+        ("how much does this cost for MALDI-TOF R2 in Riverside Campus", "ins-maldi"),
+        ("what is the hourly rate for Confocal C2?", "ins-confocal-c2"),
+        ("what does the MiSeq M3 cost per hour", "ins-miseq"),
+        # The caller's own money is their invoice, not a published rate.
+        ("how much was I charged for Confocal C2 in March", None),
+        ("what is on my invoice for MALDI-TOF R2", None),
+        # No instrument named, so there is no rate to look up.
+        ("how much does it cost", None),
+        ("show my bookings", None),
+    ],
+)
+@pytest.mark.tools
+def test_a_published_rate_is_read_from_the_catalogue(question, instrument):
+    """"How much does MALDI-TOF R2 cost" was planned as the caller's own usage records
+    and answered by printing all seventeen rows of them."""
+    from server.agent.data import _plan_for_an_instrument_rate
+
+    plan = {"mode": "tool", "tool": "get_usage_records", "arguments": {"scope": "user"}}
+    out = _plan_for_an_instrument_rate(plan, question)
+    assert (out or {}).get("arguments", {}).get("facility_id") == instrument
+    if instrument:
+        assert out["tool"] == "get_facility_catalog"
+
+
+@pytest.mark.tools
+def test_a_catalogue_lookup_resolves_whatever_the_caller_called_the_place(ctxs):
+    """"What is MALDI-TOF R2 used for?" arrived as facility_id="MALDI-TOF R2" and was
+    refused as "No such facility" — an instrument name is a different kind of
+    identifier, not a wrong one, and its core was one join away."""
+    from server.mcp import tools as tools_mod
+
+    for spelling in ("MALDI-TOF R2", "ins-maldi", "Mass Spectrometry Core"):
+        result = tools_mod.get_facility_catalog(ctxs["alice"], facility_id=spelling)
+        assert result["facilities"][0]["name"] == "Mass Spectrometry Core"
+        assert "MALDI-TOF R2" in {i["name"] for i in result["instruments"]}
+
+    with pytest.raises(Exception, match="No such facility"):
+        tools_mod.get_facility_catalog(ctxs["alice"], facility_id="not-a-thing")
+
+
+def test_several_cores_and_no_location_produces_no_ranking():
+    """"I cannot say which is closest" and "the closest is Advanced Imaging Core" in the
+    same breath, with all 12 instruments in the result attributed to that one core."""
+    from server.agent.data import _directory_without_a_ranking
+
+    rows = [{"name": "Advanced Imaging Core", "campus": "North Campus"},
+            {"name": "Genomics Core", "campus": "North Campus"},
+            {"name": "Mass Spectrometry Core", "campus": "Riverside Campus"}]
+    text = _directory_without_a_ranking(rows)
+    assert "Mass Spectrometry Core (Riverside Campus)" in text
+    assert "cannot say which is closest" in text
+    for word in ("closest is", "nearest is", "km"):
+        assert word not in text
+
+    # One match is not a ranking: "the nearest core that does cryo-EM" is simply that
+    # core, so the composed answer stands and this returns nothing.
+    assert _directory_without_a_ranking(rows[:1]) is None
+
+
+# --- changing a booking the conversation is already about --------------------------
+
+
+@pytest.mark.parametrize(
+    ("message", "is_action"),
+    [
+        # The transcript: answered as a read, listing bookings and their statuses.
+        ("can I cancel the booking", True),
+        ("cancel my next booking", True),
+        ("can I reschedule it", True),
+        ("reschedule it to 9am", True),
+        ("move it to Friday", True),
+        ("cancel bk-0f45f1dd", True),
+        ("shorten the booking to 2 hours", True),
+        # The rules, not the record. These keep their citations.
+        ("what does the cancellation policy say?", False),
+        ("what am I charged if I cancel a booking 12 hours before", False),
+        ("how do I cancel a booking?", False),
+        ("what happens if I cancel it", False),
+        ("is there a fee to cancel it", False),
+        # Neither.
+        ("show my bookings", False),
+        ("what is my next booking?", False),
+    ],
+)
+def test_asking_to_change_a_booking_is_an_action_not_a_lookup(message, is_action):
+    from server.agent.router import (
+        _ABOUT_THE_RULES_RE,
+        _HYPOTHETICAL_RE,
+        ASKS_TO_CHANGE_A_BOOKING_RE,
+    )
+
+    routed = bool(
+        ASKS_TO_CHANGE_A_BOOKING_RE.search(message)
+        and not _HYPOTHETICAL_RE.search(message)
+        and not _ABOUT_THE_RULES_RE.search(message)
+    )
+    assert routed == is_action
+
+
+@pytest.mark.tools
+def test_the_booking_under_discussion_is_resolved_from_the_thread(ctxs):
+    """"Can I reschedule to 08:00 to 12:00" planned no booking_id at all and was refused
+    as "That lookup does not take an instrument"; a neighbouring run supplied one that
+    did not exist and was refused as "No such booking"."""
+    from server.agent.action import _with_the_booking_being_discussed, open_bookings_of
+
+    open_ = open_bookings_of(ctxs["alice"])
+    if not open_:
+        pytest.skip("no open bookings seeded for alice")
+    real = open_[0]["id"]
+
+    # No id at all, resolved from the id named earlier in the thread.
+    plan = {"tool": "reschedule_booking", "arguments": {"starts_at": "x", "ends_at": "y"}}
+    out = _with_the_booking_being_discussed(
+        plan, "can I reschedule it", f"assistant: your latest booking is {real}",
+        ctxs["alice"],
+    )
+    assert out["arguments"]["booking_id"] == real
+
+    # An id already valid is left exactly as it is.
+    plan = {"tool": "cancel_booking", "arguments": {"booking_id": real}}
+    assert _with_the_booking_being_discussed(plan, "cancel it", "", ctxs["alice"]) is None
+
+
+@pytest.mark.tools
+def test_an_action_id_from_an_approval_card_is_not_a_booking_id(ctxs):
+    """It was "mentioned in the thread", which a substring check accepts and the caller's
+    own records do not."""
+    from server.agent.action import _with_the_booking_being_discussed
+
+    plan = {"tool": "cancel_booking", "arguments": {"booking_id": "act-fbb6d203d097"}}
+    history = "assistant: action act-fbb6d203d097 · recorded in the audit log"
+    out = _with_the_booking_being_discussed(plan, "cancel it", history, ctxs["alice"])
+    assert out is None or out["arguments"]["booking_id"].startswith("bk-")
+
+
+@pytest.mark.tools
+def test_a_write_drops_arguments_its_tool_has_no_parameter_for():
+    from server.agent.action import _without_arguments_the_tool_does_not_take
+
+    plan = {"tool": "reschedule_booking",
+            "arguments": {"booking_id": "bk-1", "starts_at": "a", "ends_at": "b",
+                          "instrument_id": "ins-bioanalyzer"}}
+    out = _without_arguments_the_tool_does_not_take(plan)
+    assert "instrument_id" not in out["arguments"]
+    assert out["arguments"]["booking_id"] == "bk-1"
+
+    # Nothing surplus, nothing to do.
+    assert _without_arguments_the_tool_does_not_take(
+        {"tool": "cancel_booking", "arguments": {"booking_id": "bk-1"}}
+    ) is None
+
+    # Trimming that would leave a required argument missing is not a repair.
+    assert _without_arguments_the_tool_does_not_take(
+        {"tool": "reschedule_booking", "arguments": {"instrument_id": "ins-x"}}
+    ) is None

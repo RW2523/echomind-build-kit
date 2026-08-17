@@ -158,6 +158,32 @@ _SELF_RECORD_RE = re.compile(
 # "if I cancel", "if I miss it" — a conditional is a question about the rules, and the
 # rules live in the knowledge branch with the citations to prove them.
 _HYPOTHETICAL_RE = re.compile(r"\b(?:if|when|suppose|say)\s+i\b", re.IGNORECASE)
+
+# Changing a booking the conversation is already about.
+#
+# "Can I cancel the booking" classified as data and came back as a list of the caller's
+# bookings with their statuses — a read where a proposal belonged. SYSTEM already says
+# wanting something to happen is an action even when phrased as a question, and on this
+# phrasing the model heard the question mark instead. Nothing is executed either way:
+# the action branch prepares a card the caller still has to approve, so the cost of
+# reading this as an action when they only wondered is one declined proposal.
+#
+# Deliberately narrow. It needs a change verb AND something definite to change — "the
+# booking", "it", an id. "Cancellation" never matches; \bcancel\b does not fire inside it.
+_CHANGE_VERB = r"cancel|reschedul\w*|move|rebook|shorten|postpone"
+_CHANGE_TARGET = r"it|that|this|the booking|my booking|my next booking|bk-[a-z0-9]+"
+ASKS_TO_CHANGE_A_BOOKING_RE = re.compile(
+    rf"\b(?:{_CHANGE_VERB})\b[^?.]{{0,40}}?\b(?:{_CHANGE_TARGET})\b",
+    re.IGNORECASE,
+)
+# Asking how the rules work, or what a change would cost, is knowledge — and it stays
+# knowledge even though it names the same verb. "How do I cancel a booking?" wants the
+# procedure; "what am I charged if I cancel it" wants the policy, with its citation.
+_ABOUT_THE_RULES_RE = re.compile(
+    r"\bhow (?:do|can|should|would) i\b|\bwhat happens\b|\bpolic\w+\b|\brules?\b"
+    r"|\bcharged?\b|\bfees?\b|\bcosts?\b|\bpenalt\w+\b|\bnotice\b|\ballowed to\b",
+    re.IGNORECASE,
+)
 SMALLTALK_RE = re.compile(
     r"^\s*(hi|hey|hello|yo|thanks|thank you|cheers|good morning|good afternoon|"
     r"who are you|what can you do|help)\b[\s!.?]*$",
@@ -171,6 +197,12 @@ def route(message: str, history: str = "") -> tuple[str, str]:
         return "smalltalk", "greeting pattern"
     if DOCUMENT_REQUEST_RE.search(message):
         return "action", "asks for a document by name"
+    if (
+        ASKS_TO_CHANGE_A_BOOKING_RE.search(message)
+        and not _HYPOTHETICAL_RE.search(message)
+        and not _ABOUT_THE_RULES_RE.search(message)
+    ):
+        return "action", "asks to change a booking"
     if _SELF_RECORD_RE.search(message) and not _HYPOTHETICAL_RE.search(message):
         return "data", "asks about the caller's own record"
 
