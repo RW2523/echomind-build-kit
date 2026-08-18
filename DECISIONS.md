@@ -1414,3 +1414,17 @@ diminishing returns.
   instrument name, so a recommendation quoted faithfully arrives wearing the markup.
   Asking the generator not to copy it did not hold — the asterisks are inside the sentence
   it is being faithful to, and faithfulness is the thing we most want it doing.
+- 2026-08-18 | k04's citation was right; the diagnosis was wrong | RAGAS scores k04's
+  answer 0.667, and the second sentence — about the transfer share, cited to [1] — looked
+  like a mis-citation worth chasing. It is not: data-management.md is small enough that
+  both the 30-day and the 90-day retention facts land in the SAME chunk, so [1] states
+  both and the marker is correct. Checked before keeping the fix, not after.
+  The fix built for it is reverted. It asked the judge for a `stated_in` source per claim
+  so a SUPPORTED claim pointing at the wrong chunk could be repointed — a real gap, since
+  the existing repair pass only rescues claims already marked unsupported. But the extra
+  required field cost the 8B judge accuracy elsewhere: k02 fell from faithfulness 1.0 to
+  0.0 and the aggregate from 0.958 to 0.833, and reverting restored both exactly. A
+  verification path is the last place to carry speculative complexity, and a defect that
+  does not exist is not worth a schema the judge answers less reliably.
+  If a genuinely mis-cited supported claim ever turns up, the seam is `check()` in
+  faithfulness.py and the repair pass beneath it already knows how to repoint.
