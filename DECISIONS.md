@@ -1384,3 +1384,9 @@ diminishing returns.
   COMPLETES. It approves some actions on purpose: an approval that is always declined is
   an approval never tested, so journey B cancels what journey A books and the two net out.
   Its `count` check now exempts SQL, where COUNT(*) is legitimately named `count`.
+- 2026-08-18 | Three behavioural suites, each asking a different question | `make convo`
+  asserts what a turn SAYS, `make journeys` that a journey COMPLETES, and `make questions`
+  that a reply is HONEST when the question is asked badly — misspelt, elliptical,
+  ambiguous, adversarial, about records that do not exist. `make api-check` covers the
+  transport: every endpoint, and every refusal it owes. None pins a figure that demo use
+  can move; what they check is the ways an answer is wrong regardless of the number in it.

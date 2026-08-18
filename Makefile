@@ -20,7 +20,7 @@ ifeq ($(strip $(MCP_PORT)),)
 MCP_PORT := 8090
 endif
 
-.PHONY: help venv up down logs seed api mcp ui test eval demo convo journeys ingest fmt clean
+.PHONY: help venv up down logs seed api mcp ui test eval demo convo journeys questions api-check ingest fmt clean
 
 help:
 	@echo "EchoMind Local — targets"
@@ -104,6 +104,12 @@ convo: venv
 
 journeys: venv
 	$(PY) -m scripts.journeys
+
+questions: venv
+	$(PY) -m scripts.questions
+
+api-check: venv
+	$(PY) -m scripts.api_check
 
 fmt: venv
 	$(VENV)/bin/ruff check --fix . && $(VENV)/bin/ruff format .
