@@ -1935,3 +1935,23 @@ def test_a_word_for_the_thing_being_listed_is_not_a_filter():
     for word in ("cryo-EM", "live-cell imaging", "cell sorting", "microtomy"):
         plan = {"mode": "tool", "tool": "find_facilities", "arguments": {"technique": word}}
         assert _plan_without_an_entity_word_as_a_filter(plan) is None
+
+
+def test_a_question_with_nothing_in_it_is_asked_about_not_refused():
+    """"How much?" on a fresh thread brushed a billing source, found none this caller may
+    read lab-wide, and came back "answering that would mean reading records beyond what
+    your account covers" — an accusation of reaching, at someone who has not reached. A
+    neighbouring run totalled an empty set and said "$0"."""
+    from server.agent.data import _WORDS_RE
+
+    def contentless(q, history=""):
+        return not history.strip() and len(_WORDS_RE.findall(q)) < 3
+
+    assert contentless("how much?")
+    assert contentless("how much")
+    assert contentless("12345")
+    # With history there is something to resolve against, and the follow-up path has it.
+    assert not contentless("how much?", "user: what is on my March invoice?")
+    # A real question is never contentless, however short.
+    assert not contentless("show my bookings")
+    assert not contentless("what cores are there?")

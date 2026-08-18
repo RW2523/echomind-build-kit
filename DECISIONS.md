@@ -1370,3 +1370,17 @@ diminishing returns.
   now count completed bookings — seeded, never minted by the application — so the
   question stays answerable and the number stays put. d02/d05/d06 are recomputed against
   the nine-month data.
+- 2026-08-18 | A question with nothing in it is asked about, never refused | "How much?"
+  on a fresh thread brushed a billing source, found none this caller may read lab-wide,
+  and answered "answering that would mean reading records beyond what your account
+  covers" — an accusation of reaching, at someone who has not reached. A neighbouring run
+  totalled an empty set and said "$0". Both answer a question nobody finished asking.
+  Only without history: with it there is something to resolve against, and "how much?"
+  after an invoice turn is a real question with a real answer.
+- 2026-08-18 | The journeys suite lives in the repo, as `make journeys` | It found the
+  booking proposed into a slot that had already begun, the clarify that could not be
+  answered, and the approval that executed into the past — none of which the conversation
+  suite can see, because it asserts what a turn SAYS and this asserts that a journey
+  COMPLETES. It approves some actions on purpose: an approval that is always declined is
+  an approval never tested, so journey B cancels what journey A books and the two net out.
+  Its `count` check now exempts SQL, where COUNT(*) is legitimately named `count`.

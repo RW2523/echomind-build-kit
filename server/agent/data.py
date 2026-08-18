@@ -187,6 +187,8 @@ Absolute rules:
    records are, never what the question wishes they were."""
 
 NUMBER_RE = re.compile(r"\d[\d,]*(?:\.\d+)?")
+# Words with meaning of their own, for deciding whether a question has been asked at all.
+_WORDS_RE = re.compile(r"[A-Za-z][A-Za-z0-9'-]*")
 
 # For rewriting, match only standalone numbers. Without the lookarounds the canonicaliser
 # treats "14:00" as the two numbers 14 and 00, and rewriting 00 to a row's "0" turns a
@@ -2036,6 +2038,24 @@ def answer(question: str, ctx: Ctx, history: str = "") -> AgentResponse:
         question = rewrite.standalone(question, history)
     if question != asked:
         log.info("resolved follow-up %r -> %r", asked[:60], question[:80])
+
+    # A question with nothing in it cannot be refused for overreach: "how much?" on a
+    # fresh thread brushed a billing source, found none this caller may read lab-wide, and
+    # came back "answering that would mean reading records beyond what your account
+    # covers" — an accusation of reaching, at someone who has not reached. A neighbouring
+    # run totalled an empty set and said "$0". Both are answers to a question nobody
+    # finished asking. With history there IS something to resolve against, and the
+    # follow-up path handles it; without, the only honest move is to ask.
+    if not history.strip() and len(_WORDS_RE.findall(question)) < 3:
+        log.info("nothing to go on in %r; asking", question[:40])
+        return AgentResponse(
+            response_type="clarify",
+            route="data",
+            text=("What would you like to know? I can look up your bookings, usage hours, "
+                  "invoices, samples and service requests, or what the instruments and "
+                  "cores can do."),
+            meta={"awaiting": "question"},
+        )
 
     # Cheapest check first, as the knowledge gate does: a question no catalogued source
     # covers, or one whose sources sit above this caller, is refused before the planner
