@@ -1353,3 +1353,20 @@ diminishing returns.
   identical — same instrument, period and amount, billed twice — so "every row distinct"
   asserted something about the fixture rather than about paging. What paging owes is that
   walking it reaches each row exactly once.
+- 2026-08-18 | A question about the whole set drops the planner's window before it runs |
+  Nine months of history made a long-standing bug visible: the planner reaches for
+  date_from = 2026-01-01 as "this year", and "how many completed bookings do I have?"
+  answered 13 where the truth was 30. Nothing announced it — the subset was plausible,
+  the arithmetic over it exact. The superlative guard already existed and did not fire,
+  because this is not a superlative and the result was not empty, which is the case the
+  retry was built for. Emptiness announces itself; a plausible subset does not.
+- 2026-08-18 | An error about an argument the caller never gave is not shown to them |
+  Asked the status of booking bk-9999, the reply was "date_from is not a valid ISO-8601
+  timestamp. Use e.g. 2026-03-18T09:00:00Z" — a parameter name and a wire format handed
+  to someone who never mentioned a date. An argument they DID supply keeps its message:
+  "Say which account code to charge, e.g. ACC-A1" is advice they can act on.
+- 2026-08-18 | The golden set counts what the demo cannot move | d03/d04 pinned total
+  bookings, which the app appends to, so approving one booking turned the eval red. They
+  now count completed bookings — seeded, never minted by the application — so the
+  question stays answerable and the number stays put. d02/d05/d06 are recomputed against
+  the nine-month data.

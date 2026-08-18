@@ -1585,6 +1585,29 @@ def _sql_grouped_by_instrument(sql: str) -> str | None:
     return tree.sql(dialect="postgres")
 
 
+# Parameter names a tool complains about. If one of these is named in an error and the
+# caller never mentioned anything like it, the complaint is about our own plan.
+_PLANNER_ARGUMENTS = ("date_from", "date_to", "starts_at", "ends_at", "month", "period",
+                      "instrument_id", "facility_id", "project_id", "scope", "sample_id",
+                      "barcode", "request_id", "booking_id", "near_latitude",
+                      "near_longitude", "technique", "campus")
+
+
+def _blames_an_argument_the_caller_never_gave(
+    exc: ToolError, question: str, history: str = ""
+) -> str | None:
+    """The argument a tool is objecting to, when the caller never supplied it."""
+    if exc.code != "invalid_params":
+        return None
+    said = f"{history}\n{question}".lower()
+    blob = f"{exc.message} {exc.hint}".lower()
+    for argument in _PLANNER_ARGUMENTS:
+        spoken = argument.replace("_", " ")
+        if argument in blob and argument not in said and spoken not in said:
+            return argument
+    return None
+
+
 def _forbidden_response(exc: ToolError) -> AgentResponse:
     """The refusal, once, so both the direct and the retried path word it identically."""
     return AgentResponse(
@@ -1934,6 +1957,18 @@ _QUESTION_STATES_A_DATE_RE = re.compile(
 )
 
 
+# "How many do I have", "in total", "all my bookings" — a question about the whole set,
+# which a date window silently answers differently. Nine months of history made this
+# visible: the planner reaches for 2026-01-01 as "this year", drops the 2025 half, and
+# "how many completed bookings do I have?" answered 13 where the truth was 30. Nothing
+# announced it — the subset was plausible, the arithmetic over it exact, and the only way
+# to catch it is to notice the window was never asked for.
+_ASKS_ABOUT_THE_WHOLE_SET_RE = re.compile(
+    r"\bhow many\b|\bin total\b|\btotal number\b|\baltogether\b|\bever\b"
+    r"|\ball (?:my|of my|the)\b|\bevery\b",
+    re.IGNORECASE,
+)
+
 # "The latest", "my last booking", "the next one" — an ordering over the whole set. Any
 # window narrower than the set can only answer it wrongly, and a wrong superlative is
 # confident: it names a specific record as the most recent when a later one exists.
@@ -2018,10 +2053,11 @@ def answer(question: str, ctx: Ctx, history: str = "") -> AgentResponse:
     # named the second-newest as the most recent — a specific, confident, wrong record,
     # contradicting the turn before it. Emptiness announces itself; a plausible subset
     # does not.
-    if _ASKS_FOR_AN_EXTREME_RE.search(question) and (
-        whole := _plan_without_an_invented_window(plan, question)
-    ):
-        log.info("superlative question; dropping the planner's window: %s", whole)
+    if (
+        _ASKS_FOR_AN_EXTREME_RE.search(question)
+        or _ASKS_ABOUT_THE_WHOLE_SET_RE.search(question)
+    ) and (whole := _plan_without_an_invented_window(plan, question)):
+        log.info("question is about the whole set; dropping the planner's window: %s", whole)
         plan = whole
 
     # A facility id the caller never named, that resolves to nothing, is not a filter —
@@ -2161,10 +2197,25 @@ def answer(question: str, ctx: Ctx, history: str = "") -> AgentResponse:
                 meta={"error": {"code": "sql_rejected"}},
             )
         else:
+            # An argument the CALLER supplied gets its error verbatim: "Say which account
+            # code to charge, e.g. ACC-A1" is advice they can act on. An argument the
+            # planner invented does not — asked the status of booking bk-9999, the reply
+            # was "date_from is not a valid ISO-8601 timestamp. Use e.g.
+            # 2026-03-18T09:00:00Z", a parameter name and a wire format handed to someone
+            # who never mentioned a date. That is our mistake described in our vocabulary.
+            invented = _blames_an_argument_the_caller_never_gave(exc, question, history)
+            if invented:
+                log.warning("tool rejected planner-supplied %s: %s", invented, exc.message)
             return AgentResponse(
                 response_type="redirect",
                 route="data",
-                text=f"I could not run that lookup. {exc.message} {exc.hint}".strip(),
+                text=(
+                    "I could not put that into a lookup I could run. Try naming the "
+                    "record, the period or the instrument directly — or the core "
+                    "facility admin can pull it."
+                    if invented
+                    else f"I could not run that lookup. {exc.message} {exc.hint}".strip()
+                ),
                 meta={"error": exc.to_dict()["error"]},
             )
     except Exception:
