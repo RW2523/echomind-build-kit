@@ -1,6 +1,6 @@
 ---
 title: Instrument Catalogue Notes
-version: "1.0"
+version: "1.1"
 visibility: public
 ---
 
@@ -47,8 +47,45 @@ a sequencing run, not after.
 
 **MALDI-TOF R2** — rapid identification and imaging mass spectrometry.
 
+## Flow Cytometry Core
+
+**Aurora Spectral Analyser** — the default analyser. Spectral unmixing means you can run
+crowded panels without the compensation arithmetic a conventional analyser demands. It
+counts cells; it does not keep them.
+
+**Fusion Cell Sorter** — use it when you need the cells back. Sorting is slower and dearer
+than analysis, so analyse first and sort only what you will actually culture or sequence.
+Book the biosafety cabinet configuration for anything human-derived.
+
+**Helios Mass Cytometer** — metal tags instead of fluorophores, so no spectral overlap at
+all and roughly forty-five parameters. Slower acquisition and the cells are consumed;
+choose it when panel size genuinely defeats the Aurora.
+
+## Histology and Pathology Core
+
+**Axio Slide Scanner** — digitises stained slides for quantification or sharing. Scan at
+20x unless you can say why 40x is needed; the files are four times the size and rarely
+four times as useful.
+
+**Cryostat CM3** — frozen sections, and the right choice when the antigen will not survive
+fixation. Sections are less flat than paraffin; do not use it for morphology you intend to
+publish.
+
+**Microtome RM7** — paraffin sections for routine morphology and multiplex staining. The
+better choice whenever fixation is acceptable.
+
+**Multiplex IHC Stainer** — up to eight markers on one slide. Panel design is the hard
+part and staff will not run an unvalidated panel; bring a validated one or book time to
+work it out first.
+
 ## Choosing quickly
 
 If the question is "which imaging instrument", the short answer is: fixed sample →
 Confocal C2; live sample → Spinning Disk SD1; dim signal → Confocal C3; large cleared
 volume → Light Sheet LS7. For anything structural at molecular resolution, Cryo-EM.
+
+For cells in suspension: counting or phenotyping → Aurora Spectral Analyser; cells needed
+back → Fusion Cell Sorter; a panel too large for either → Helios Mass Cytometer. For
+tissue on a slide: fixation acceptable → Microtome RM7; antigen fixation-sensitive →
+Cryostat CM3; more than two markers → Multiplex IHC Stainer; quantification or sharing →
+Axio Slide Scanner.

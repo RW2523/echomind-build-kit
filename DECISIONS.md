@@ -1390,3 +1390,27 @@ diminishing returns.
   ambiguous, adversarial, about records that do not exist. `make api-check` covers the
   transport: every endpoint, and every refusal it owes. None pins a figure that demo use
   can move; what they check is the ways an answer is wrong regardless of the number in it.
+- 2026-08-18 | Which instrument you SHOULD use is knowledge; which CAN is data | The
+  catalogue records capability and the data branch read it correctly — asked about
+  live-cell imaging it named Confocal C2, C3 and Spinning Disk SD1, all three of which
+  list the technique. Instrument Catalogue Notes records judgement, and says the opposite
+  about two of them: the point scanners are "slower than the spinning disk for live
+  imaging". A list led by the instruments the facility documents as worse is not a
+  recommendation, and no column in the catalogue could ever say so. The notes were
+  extended to all nineteen instruments first, so the advice layer covers what the router
+  now sends it — routing to a document that stops at twelve would have traded a poor
+  answer for a refusal.
+- 2026-08-18 | An answer stops when the question is answered | k04 refused four runs in
+  five, and not at the gate: the generator wrote a correct "30 days after acquisition [1]"
+  and then a second sentence about the transfer share, and the judge discarded the whole
+  reply over the part nobody asked for. Every extra sentence is another claim that must
+  stand alone.
+- 2026-08-18 | Terseness is about length, never about whether to answer | The first
+  wording of that rule said "related material you were given is not the question", which
+  read as permission to decline whenever the sources said more than was asked: "what
+  format do sample barcodes use?" started returning INSUFFICIENT against a source that
+  spells the format out. Rule 2 alone decides whether to answer.
+- 2026-08-18 | Markdown emphasis is stripped in code | The notes write ** around every
+  instrument name, so a recommendation quoted faithfully arrives wearing the markup.
+  Asking the generator not to copy it did not hold — the asterisks are inside the sentence
+  it is being faithful to, and faithfulness is the thing we most want it doing.

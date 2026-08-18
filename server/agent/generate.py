@@ -30,8 +30,22 @@ you never rely on any. Rules, in order of importance:
    already been permission-checked for this specific reader, so material marked private,
    personal or secret is material they are entitled to read: answer from it normally.
 3. Never invent a citation index. Only cite indices that exist in the sources.
-4. Be concise and direct: two to five sentences unless the question needs a list.
-5. Write in plain prose for a working scientist. No preamble, no "based on the sources".
+4. Answer the question that was asked and then stop. Every extra sentence is another
+   claim that has to stand on its own against the sources, and a single unsupported one
+   discards the whole reply — asked how long data is kept on an instrument PC, a correct
+   "30 days after acquisition [1]" was thrown away because the sentence volunteered after
+   it, about the transfer share, could not be verified. One or two sentences suit most
+   questions; use more only when the question genuinely has more parts.
+   This rule is about LENGTH and never about whether to answer. If the sources state the
+   answer, give it, however much else they also state — an earlier wording of this rule
+   was read as permission to decline whenever the sources said more than was asked, and
+   "what format do sample barcodes use?" started coming back as {INSUFFICIENT} against a
+   source that spells the format out. Rule 2 alone decides that, and only when the answer
+   is genuinely absent.
+5. Write in plain prose for a working scientist. No preamble, no "based on the sources",
+   and no markdown: the sources use ** around instrument names and copying it through puts
+   asterisks on screen. The data branch has said this for longer; both branches speak to
+   the same reader.
 """
 
 USER = """QUESTION:
@@ -212,6 +226,26 @@ def apply_citation_corrections(text: str, corrections: list[tuple[str, int]]) ->
     return " ".join(s.strip() for s in out if s.strip())
 
 
+_EMPHASIS_RE = re.compile(r"(\*{1,3})(?!\s)(.+?)(?<!\s)\1", re.DOTALL)
+
+
+def strip_markdown_emphasis(text: str) -> str:
+    """Take the asterisks off. The sources wear them; the reader should not.
+
+    Instrument Catalogue Notes writes "**Spinning Disk SD1** — the right choice", and a
+    recommendation quoted faithfully arrives with the markup attached. Asking the
+    generator not to copy it did not hold: the asterisks are inside the sentence it is
+    being faithful to, and faithfulness is the thing we most want it doing.
+
+    Only paired emphasis around non-space content, so a lone asterisk in a footnote or a
+    stored value keeps its character.
+    """
+    previous = None
+    while previous != text:
+        previous, text = text, _EMPHASIS_RE.sub(r"\2", text)
+    return text
+
+
 def generate(question: str, chunks: list[RetrievedChunk]) -> tuple[str, list[Citation], bool]:
     """Return (text, citations, sufficient).
 
@@ -237,7 +271,9 @@ def generate(question: str, chunks: list[RetrievedChunk]) -> tuple[str, list[Cit
         log.info("generation declined for lack of context")
         return "", [], False
 
-    text = strip_meta_sentences(strip_invalid_citations(raw, len(chunks)))
+    text = strip_markdown_emphasis(
+        strip_meta_sentences(strip_invalid_citations(raw, len(chunks)))
+    )
 
     if reads_as_a_hedge(text):
         # It declined, then answered anyway. Take the declining half at its word.

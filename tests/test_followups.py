@@ -1955,3 +1955,52 @@ def test_a_question_with_nothing_in_it_is_asked_about_not_refused():
     # A real question is never contentless, however short.
     assert not contentless("show my bookings")
     assert not contentless("what cores are there?")
+
+
+# --- which one you SHOULD use, and saying it plainly --------------------------------
+
+
+@pytest.mark.parametrize(
+    ("message", "is_recommendation"),
+    [
+        # The catalogue says which instruments CAN; the notes say which you SHOULD, and
+        # say the opposite about two of them — the point scanners are documented as
+        # "slower than the spinning disk for live imaging".
+        ("Which imaging instrument should I use for live-cell imaging?", True),
+        ("which instrument should I use for cell sorting?", True),
+        ("what should I use for RNA-seq?", True),
+        ("which is the best microscope for a dim signal", True),
+        ("recommend an instrument for proteomics", True),
+        # Capability and price are records, and stay with the records.
+        ("which instruments can do cryo-EM?", False),
+        ("what does the MiSeq M3 do?", False),
+        ("how much does Confocal C2 cost?", False),
+        ("show my bookings", False),
+    ],
+)
+def test_asking_which_to_use_is_a_recommendation_not_a_capability_list(
+    message, is_recommendation
+):
+    from server.agent.router import _ASKS_FOR_A_RECOMMENDATION_RE
+
+    assert bool(_ASKS_FOR_A_RECOMMENDATION_RE.search(message)) == is_recommendation
+
+
+@pytest.mark.parametrize(
+    ("raw", "plain"),
+    [
+        # Instrument Catalogue Notes writes ** around every instrument name, so a
+        # recommendation quoted faithfully arrives wearing the markup.
+        ("**MiSeq M3** — small runs [1].", "MiSeq M3 — small runs [1]."),
+        ("*italic* and **bold** together", "italic and bold together"),
+        ("***triple*** emphasis", "triple emphasis"),
+        # A lone asterisk is not emphasis and keeps its character.
+        ("a lone * asterisk stays", "a lone * asterisk stays"),
+        ("2 * 3 = 6", "2 * 3 = 6"),
+        ("no markup here at all", "no markup here at all"),
+    ],
+)
+def test_markdown_emphasis_is_taken_off_the_answer(raw, plain):
+    from server.agent.generate import strip_markdown_emphasis
+
+    assert strip_markdown_emphasis(raw) == plain

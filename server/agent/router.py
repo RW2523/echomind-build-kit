@@ -41,7 +41,9 @@ Routes:
                 address, opening hours, how far away it is, and what an instrument can do
                 — its techniques, modality and sample types. Those are recorded fields on
                 the facility and instrument, so "which core does cryo-EM", "where is the
-                nearest one", and "what should I use for live-cell imaging" are all data.
+                nearest one" and "which instruments can do cryo-EM" are all data. Asking
+                which one you SHOULD use is a recommendation and belongs to knowledge:
+                the catalogue records capability, the notes record judgement.
 - "action"      the user wants to CHANGE something or produce a document: book an
                 instrument, submit a service request, onboard a new user, generate a
                 report. Requests to do, create, book, submit, register, or generate.
@@ -74,8 +76,11 @@ Worked examples:
 - "What account codes can I charge to?"             -> data (mine, on my profile)
 - "Who is in my project?"                           -> data (a record)
 - "Where is the nearest core that does cryo-EM?"    -> data (facility location)
-- "Which instrument should I use for RNA-seq?"      -> data (instrument capability)
-- "I want to image live cells, what can I use?"     -> data (instrument capability)
+- "Which instruments can do cryo-EM?"               -> data (instrument capability)
+- "What does the MiSeq M3 do?"                      -> data (instrument capability)
+- "Which instrument should I use for RNA-seq?"      -> knowledge (a recommendation: the
+  catalogue says which CAN, the Instrument Catalogue Notes say which you SHOULD, and only
+  the second is an answer to "should")
 - "What are the imaging core's opening hours?"      -> data (a facility record)
 - "How do I prepare a sample for cryo-EM?"          -> knowledge (a procedure)
 
@@ -155,6 +160,27 @@ _SELF_RECORD_RE = re.compile(
     re.IGNORECASE,
 )
 
+# "Which should I use for X?" — a recommendation, not a capability list.
+#
+# The catalogue records which instruments CAN do a thing, and the data branch reads it
+# correctly: asked about live-cell imaging it named Confocal C2, C3 and Spinning Disk SD1,
+# all three of which list the technique. The Instrument Catalogue Notes record which one
+# you SHOULD use, and say the opposite about two of them — the point scanners are "slower
+# than the spinning disk for live imaging", and the SD1 is "the right choice ... gentler on
+# the sample". A list led by the two instruments the facility documents as worse is not a
+# recommendation, and the catalogue has no column that could ever say so.
+#
+# Narrow deliberately: it needs a word of ADVICE, not merely a question about instruments.
+# "Which instruments can do cryo-EM", "what does the MiSeq do", "what does it cost" all
+# stay with the records, where they belong.
+_ASKS_FOR_A_RECOMMENDATION_RE = re.compile(
+    r"\b(?:which|what)\b[^?.]{0,40}\bshould i\b"
+    r"|\bwhat should i use\b|\bwhich would you (?:recommend|suggest)\b"
+    r"|\brecommend\b[^?.]{0,30}\b(?:instrument|microscope|sequencer|scope|machine)\b"
+    r"|\b(?:best|right)\b[^?.]{0,30}\b(?:instrument|microscope|sequencer|scope|machine|choice|one)\b",
+    re.IGNORECASE,
+)
+
 # "if I cancel", "if I miss it" — a conditional is a question about the rules, and the
 # rules live in the knowledge branch with the citations to prove them.
 _HYPOTHETICAL_RE = re.compile(r"\b(?:if|when|suppose|say)\s+i\b", re.IGNORECASE)
@@ -197,6 +223,8 @@ def route(message: str, history: str = "") -> tuple[str, str]:
         return "smalltalk", "greeting pattern"
     if DOCUMENT_REQUEST_RE.search(message):
         return "action", "asks for a document by name"
+    if _ASKS_FOR_A_RECOMMENDATION_RE.search(message):
+        return "knowledge", "asks which to use, not which exist"
     if (
         ASKS_TO_CHANGE_A_BOOKING_RE.search(message)
         and not _HYPOTHETICAL_RE.search(message)
