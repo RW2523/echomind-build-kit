@@ -1,6 +1,6 @@
 ---
 title: Instrument Catalogue Notes
-version: "1.1"
+version: "1.2"
 visibility: public
 ---
 
@@ -80,9 +80,10 @@ work it out first.
 
 ## Choosing quickly
 
-If the question is "which imaging instrument", the short answer is: fixed sample →
-Confocal C2; live sample → Spinning Disk SD1; dim signal → Confocal C3; large cleared
-volume → Light Sheet LS7. For anything structural at molecular resolution, Cryo-EM.
+If the question is "which instrument should I use", the short answer is: fixed samples and
+routine immunofluorescence → Confocal C2; live-cell imaging and fast timelapse → Spinning
+Disk SD1; a dim signal → Confocal C3; large cleared volumes and whole-mount → Light Sheet
+LS7. For anything structural at molecular resolution, Cryo-EM Titan.
 
 For cells in suspension: counting or phenotyping → Aurora Spectral Analyser; cells needed
 back → Fusion Cell Sorter; a panel too large for either → Helios Mass Cytometer. For

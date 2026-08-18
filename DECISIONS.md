@@ -1428,3 +1428,17 @@ diminishing returns.
   does not exist is not worth a schema the judge answers less reliably.
   If a genuinely mis-cited supported claim ever turns up, the seam is `check()` in
   faithfulness.py and the repair pass beneath it already knows how to repoint.
+- 2026-08-18 | The notes answer the question in the words people ask it in | "Which
+  imaging instrument should I use for live-cell imaging?" answered; "which instrument
+  should I use for live-cell imaging?" declined, 4/4 — one word apart, same user, same
+  document. The gate passed both; the generator declined the second, because the quick-
+  reference line read "live sample → Spinning Disk SD1" while the caller typed "live-cell
+  imaging". Routing advice to knowledge made this visible: the data branch would have
+  listed something, and knowledge refuses when retrieval misses. Fixed in the corpus, not
+  by lowering a threshold — a document that cannot be found by its own subject is the
+  defect. Correctness rose 0.910 to 0.942 as a side effect.
+- 2026-08-18 | RUNBOOK.md states the configuration and the measurement behind each value |
+  The model, embeddings and reranker were all chosen from numbers in eval_reports/ and
+  nothing wrote that down. It also names the two settings that separate a demo posture
+  from a shared one, because DEMO_LOGIN_ENABLED is the whole authentication story on any
+  URL other people can reach.
