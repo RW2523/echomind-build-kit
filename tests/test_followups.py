@@ -1919,3 +1919,19 @@ def test_how_a_match_was_ranked_is_not_part_of_the_answer():
     assert "score" not in trimmed[0] and "why_matched" not in trimmed[0]
     assert "why_matched" not in cols
     assert trimmed[0]["hourly_rate"] == 22.0
+
+
+def test_a_word_for_the_thing_being_listed_is_not_a_filter():
+    """"What cores are there?" became find_facilities(technique="core") and answered
+    "there are no cores listed in the records" about five of them. No instrument performs
+    the technique "core"."""
+    from server.agent.data import _plan_without_an_entity_word_as_a_filter
+
+    for word in ("core", "cores", "labs", "instruments", "everything"):
+        plan = {"mode": "tool", "tool": "find_facilities", "arguments": {"technique": word}}
+        assert _plan_without_an_entity_word_as_a_filter(plan)["arguments"] == {}
+
+    # A real technique is exactly what the filter is for.
+    for word in ("cryo-EM", "live-cell imaging", "cell sorting", "microtomy"):
+        plan = {"mode": "tool", "tool": "find_facilities", "arguments": {"technique": word}}
+        assert _plan_without_an_entity_word_as_a_filter(plan) is None

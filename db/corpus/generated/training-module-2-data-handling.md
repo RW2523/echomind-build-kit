@@ -6,7 +6,7 @@ visibility: public
 
 # Training Module 2 — Data Handling
 
-A 8-hour module on data handling. Where acquisition data lands, how long it survives, and how to get it off the instrument PC. This module is additional to instrument
+A 2-hour module on data handling. Where acquisition data lands, how long it survives, and how to get it off the instrument PC. This module is additional to instrument
 training and does not by itself grant booking rights on any instrument.
 
 ## Who it is for

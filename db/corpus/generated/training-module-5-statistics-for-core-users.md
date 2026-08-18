@@ -6,7 +6,7 @@ visibility: public
 
 # Training Module 5 — Statistics for Core Users
 
-A 8-hour module on statistics for core users. Replication and pseudo-replication, worked through on real facility datasets. This module is additional to instrument
+A 3-hour module on statistics for core users. Replication and pseudo-replication, worked through on real facility datasets. This module is additional to instrument
 training and does not by itself grant booking rights on any instrument.
 
 ## Who it is for

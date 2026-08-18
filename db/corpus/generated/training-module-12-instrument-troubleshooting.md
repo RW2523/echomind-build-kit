@@ -6,7 +6,7 @@ visibility: public
 
 # Training Module 12 — Instrument Troubleshooting
 
-A 8-hour module on instrument troubleshooting. First-line checks that resolve most faults, and the point at which to stop and call staff. This module is additional to instrument
+A 4-hour module on instrument troubleshooting. First-line checks that resolve most faults, and the point at which to stop and call staff. This module is additional to instrument
 training and does not by itself grant booking rights on any instrument.
 
 ## Who it is for

@@ -1127,7 +1127,16 @@ _NON_WORD_RE = re.compile(r"[^a-z0-9]+")
 # Points per piece of evidence. An instrument whose recorded technique is literally what
 # the caller asked for is the answer; everything else is corroboration, so the exact
 # match has to outweigh any amount of incidental word overlap.
-_TECHNIQUE_EXACT_POINTS = 10
+# An exact technique match is a different KIND of evidence from token overlap, so it has
+# to outrank any amount of it — the catalogue records this machine as doing the literal
+# thing that was asked for. At 10 it merely tied: asked for single-cell RNA-seq, the
+# Fusion Cell Sorter accumulated 3+3+2+2 from the words "cell" and "singl" appearing in
+# its techniques and sample types, drew level with NovaSeq X's exact "RNA-seq", and won
+# the alphabetical tie-break. A sorter is a reasonable upstream step and it is not the
+# answer to "which instrument sequences this". The ceiling on overlap is 3+2+2+1 = 8 per
+# matching token, so exact matches start above where overlap can reach on one token and
+# the test that says so — an exact match must outrank overlap — holds by construction.
+_TECHNIQUE_EXACT_POINTS = 25
 _TOKEN_POINTS = {"techniques": 3, "modality": 2, "sample types": 2, "specification": 1}
 
 

@@ -22,9 +22,9 @@ later.
 
 ## Method
 
-1. Equilibrate samples to 4 °C for 5 minutes.
+1. Equilibrate samples to 4 °C for 10 minutes.
 2. Apply the working solution at the dilution recorded in the lab's reagent register.
-3. Incubate for 5 minutes with gentle agitation.
+3. Incubate for 10 minutes with gentle agitation.
 4. Wash three times; do not let the sample dry between washes.
 
 ## Notes

@@ -1528,6 +1528,63 @@ def _narrow_to_the_focus_instrument(
     return (kept, columns) if kept else (rows, columns)
 
 
+_QUOTED_MONEY_RE = re.compile(r"\$\s?(\d[\d,]*(?:\.\d{1,2})?)")
+_BILLING_RELATIONS = ("v_billing_lines", "v_charges")
+
+
+def _amount_the_caller_quoted(question: str) -> Decimal | None:
+    """A specific sum the question is asking to have explained."""
+    match = _QUOTED_MONEY_RE.search(question)
+    if not match:
+        return None
+    with contextlib.suppress(InvalidOperation):
+        return Decimal(match.group(1).replace(",", ""))
+    return None
+
+
+def _explains_the_amount(rows: list[dict], amount: Decimal) -> bool:
+    """Does any single value in the result actually equal the figure asked about?"""
+    for row in rows:
+        for value in row.values():
+            with contextlib.suppress(InvalidOperation, TypeError, ValueError):
+                if value is not None and not isinstance(value, bool) and Decimal(
+                    str(value)
+                ) == amount:
+                    return True
+    return False
+
+
+def _sql_grouped_by_instrument(sql: str) -> str | None:
+    """The same billing query, broken down far enough for the figure to appear.
+
+    "Why was lab A charged $412 in March?" is the demo's verifiable number — Lab A,
+    2026-03, Confocal C2, asserted to the penny by test_march_billing_story_is_exact. The
+    planner grouped by account_code instead, so 412.00 was never a row, and the reply said
+    the rows showed no such charge. True of those rows, and the wrong rows.
+
+    PLANNER_SYSTEM already says a quoted amount needs a grouping fine enough to show it.
+    This is that instruction where the model cannot skip it, and it only runs when the
+    first attempt has already failed to explain the figure.
+    """
+    try:
+        import sqlglot
+        from sqlglot import expressions as exp
+
+        tree = sqlglot.parse_one(sql, read="postgres")
+    except Exception:  # noqa: BLE001 - an unparseable plan is the guard's problem, not ours
+        return None
+    if not isinstance(tree, exp.Select):
+        return None
+    tables = {t.name.lower() for t in tree.find_all(exp.Table)}
+    if not tables & set(_BILLING_RELATIONS):
+        return None
+    grouped = {c.name.lower() for c in (tree.args.get("group") or exp.Group()).find_all(exp.Column)}
+    if "instrument" in grouped:
+        return None
+    tree = tree.select("instrument", append=True).group_by("instrument", append=True)
+    return tree.sql(dialect="postgres")
+
+
 def _forbidden_response(exc: ToolError) -> AgentResponse:
     """The refusal, once, so both the direct and the retried path word it identically."""
     return AgentResponse(
@@ -1711,6 +1768,28 @@ def _plan_across_every_instrument(plan: dict, question: str) -> dict | None:
     if instruments_mentioned(question, _instrument_rows()):
         return None
     return {"mode": "tool", "tool": "get_facility_catalog", "arguments": {}}
+
+
+# Words for the THING being listed, which a planner sometimes hands over as the thing to
+# filter by. "What cores are there?" became find_facilities(technique="core") and answered
+# "there are no cores listed in the records" about five of them. No instrument performs
+# the technique "core", and none ever will.
+_ENTITY_WORDS = frozenset({
+    "core", "cores", "lab", "labs", "laboratory", "laboratories", "facility",
+    "facilities", "instrument", "instruments", "device", "devices", "equipment",
+    "machine", "machines", "everything", "all", "any",
+})
+
+
+def _plan_without_an_entity_word_as_a_filter(plan: dict) -> dict | None:
+    """Drop a `technique` that is only a word for what is being listed."""
+    if plan.get("mode") == "sql" or plan.get("tool") != "find_facilities":
+        return None
+    arguments = plan.get("arguments") or {}
+    technique = str(arguments.get("technique") or "").strip().lower()
+    if not technique or technique not in _ENTITY_WORDS:
+        return None
+    return {**plan, "arguments": {k: v for k, v in arguments.items() if k != "technique"}}
 
 
 _COORDINATE_ARGS = ("near_latitude", "near_longitude")
@@ -1911,16 +1990,15 @@ def answer(question: str, ctx: Ctx, history: str = "") -> AgentResponse:
     # that ask "did the caller give this?" were already matching against history as well
     # as the message, so resolving changes which sentence carries the words, not whether
     # the caller supplied them.
+    # Resolution only. is_unresolvable belongs to the knowledge branch, where a question
+    # that is nothing but a dangling pronoun retrieves five stopwords and must be asked
+    # about; borrowed here it refused "what cores are there?" with "which record do you
+    # mean" — "there" is on its referential list, and an existential "are there" is not a
+    # reference to anything. A lookup with nothing to go on is already answered honestly
+    # by the relevance gate below, which is the check built for this branch.
     asked = question
-    if rewrite.is_unresolvable(question, history):
-        log.info("unresolved reference with no history: %r", question[:60])
-        return AgentResponse(
-            response_type="clarify",
-            route="data",
-            text="Which record do you mean? Name it and I'll look it up.",
-            meta={"awaiting": "subject"},
-        )
-    question = rewrite.standalone(question, history)
+    if rewrite.refers_back(question, history):
+        question = rewrite.standalone(question, history)
     if question != asked:
         log.info("resolved follow-up %r -> %r", asked[:60], question[:80])
 
@@ -1966,6 +2044,10 @@ def answer(question: str, ctx: Ctx, history: str = "") -> AgentResponse:
         log.info("no instrument was named; reading all of them instead: %s", survey)
         plan = survey
 
+    if listing := _plan_without_an_entity_word_as_a_filter(plan):
+        log.info("dropping an entity word used as a technique filter: %s", listing)
+        plan = listing
+
     unranked = False
     if grounded := _plan_without_an_invented_location(plan, question, history):
         log.info("plan carried a location the caller never gave; dropping it: %s", grounded)
@@ -2004,6 +2086,17 @@ def answer(question: str, ctx: Ctx, history: str = "") -> AgentResponse:
         if plan.get("mode") == "sql":
             rows, columns, executed_sql = _run_sql(plan.get("sql", ""), ctx, question)
             scalars: dict[str, Any] = {}
+            # The caller quoted a figure and the result does not contain it. Before
+            # telling them their own number is not in the records, break the same query
+            # down far enough for it to show.
+            quoted = _amount_the_caller_quoted(question)
+            if quoted is not None and not _explains_the_amount(rows, quoted):
+                finer = _sql_grouped_by_instrument(plan.get("sql", ""))
+                if finer:
+                    log.info("%s not in the result; regrouping by instrument", quoted)
+                    with contextlib.suppress(ToolError):
+                        rows, columns, executed_sql = _run_sql(finer, ctx, question)
+                        plan = {**plan, "sql": finer}
         else:
             rows, columns, scalars, card = _run_tool(plan, ctx)
             if not rows and (wider := _plan_without_an_invented_window(plan, question)):

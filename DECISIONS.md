@@ -1313,3 +1313,43 @@ diminishing returns.
   types, the modality and the room; the table underneath already shows those, so listing
   them is not thoroughness, it is making the reader search the sentence for the figure
   they wanted. Bullet lists went with it: the table is where a list belongs.
+- 2026-08-17 | The demo carries nine months, five cores and nineteen instruments | Three
+  months made every "has this gone up or down?" question unanswerable — two points and a
+  guess — and three cores made "which core does X" a question with one plausible answer.
+  The window and the invoice periods move together so a booking always has a period to be
+  billed in, and 2026-01/02/03 are unchanged inside it: the March story that
+  test_march_billing_story_is_exact pins to the penny still holds. Flow cytometry and
+  histology were chosen because they add techniques nothing else in the catalogue does —
+  sorting, cryosectioning, multiplex IHC — so discovery has somewhere new to go.
+- 2026-08-17 | A quoted amount is regrouped until it appears | "Why was lab A charged $412
+  in March?" is the demo's verifiable number, asserted to the penny. The planner grouped
+  by account_code, so 412.00 was never a row, and the reply said the rows showed no such
+  charge — true of those rows, and the wrong rows. PLANNER_SYSTEM already required a
+  grouping fine enough to show a quoted figure; this is that instruction where the model
+  cannot skip it, and it only runs when the first attempt has already failed to explain
+  the number.
+- 2026-08-17 | An exact technique match outranks any amount of overlap | At 10 points it
+  merely tied: asked for single-cell RNA-seq, the Fusion Cell Sorter accumulated 3+3+2+2
+  from "cell" and "singl" appearing across its fields, drew level with NovaSeq X's exact
+  "RNA-seq", and won on alphabetical tie-break. A sorter is a reasonable upstream step and
+  is not the answer to "which instrument sequences this". The invariant the test already
+  stated now holds by construction rather than by luck.
+- 2026-08-17 | A lookup resolves a follow-up only when it leans on one | needs_rewrite
+  rewrites anything four words or shorter, which retrieval wants — "The warm-up?" is two
+  stopwords otherwise — and a lookup must not. "Show me Alice's bookings" is four words
+  and perfectly clear; rewritten against a previous turn about a hypoxia note it produced
+  an answer about that note, in the one conversation whose entire point is refusing to
+  answer about someone else's records. Shortness is not dependence.
+- 2026-08-17 | A word for the thing being listed is not a filter | "What cores are there?"
+  became find_facilities(technique="core") and answered "there are no cores listed in the
+  records" about five of them.
+- 2026-08-17 | An ambiguous follow-up must be honest, not answered | "And if I cancel
+  earlier than that?" reads both ways — earlier in the clock is more notice, which is
+  free — and the model reached for the inverse: "cancel earlier than 24 hours before ...
+  50% of the booked time". Two runs in three the faithfulness judge caught it. The suite
+  now asserts the turn cites or declines, because insisting it answer asks the system to
+  be confident about something the sources do not settle.
+- 2026-08-17 | Paging is asserted as a multiset, not a set | Two invoice lines can be
+  identical — same instrument, period and amount, billed twice — so "every row distinct"
+  asserted something about the fixture rather than about paging. What paging owes is that
+  walking it reaches each row exactly once.

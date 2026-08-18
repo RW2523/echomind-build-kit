@@ -6,7 +6,7 @@ visibility: public
 
 # Training Module 10 — Records and Traceability
 
-A 8-hour module on records and traceability. What the cores record, where it lives, and how to read it back months later. This module is additional to instrument
+A 2-hour module on records and traceability. What the cores record, where it lives, and how to read it back months later. This module is additional to instrument
 training and does not by itself grant booking rights on any instrument.
 
 ## Who it is for

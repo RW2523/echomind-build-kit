@@ -6,7 +6,7 @@ visibility: public
 
 # Training Module 6 — Reagent Management
 
-A 2-hour module on reagent management. Stock, expiry, and why an undated open container is worse than an empty shelf. This module is additional to instrument
+A 4-hour module on reagent management. Stock, expiry, and why an undated open container is worse than an empty shelf. This module is additional to instrument
 training and does not by itself grant booking rights on any instrument.
 
 ## Who it is for

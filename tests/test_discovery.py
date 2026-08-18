@@ -157,8 +157,8 @@ def test_a_technique_containing_a_sql_wildcard_matches_nothing(ctxs):
 
 def test_a_blank_technique_is_the_absence_of_a_filter(ctxs):
     """A planner spells "no technique given" as both None and "", and means the same."""
-    assert T.find_facilities(ctxs["bob"], technique="")["matched"] == 3
-    assert T.find_facilities(ctxs["bob"], technique="   ")["matched"] == 3
+    assert T.find_facilities(ctxs["bob"], technique="")["matched"] == 5
+    assert T.find_facilities(ctxs["bob"], technique="   ")["matched"] == 5
 
 
 def test_a_modality_is_searchable_as_well_as_a_technique(ctxs):
@@ -169,14 +169,16 @@ def test_a_modality_is_searchable_as_well_as_a_technique(ctxs):
 
 def test_a_campus_filter_narrows_the_directory(ctxs):
     out = T.find_facilities(ctxs["bob"], campus="Riverside")
-    assert [f["id"] for f in out["facilities"]] == ["fac-massspec"]
-    assert T.find_facilities(ctxs["bob"], campus="north")["matched"] == 2
+    # Riverside gained the histology core when the directory grew; both sit there, and
+    # the filter is doing its job precisely when it returns both rather than one.
+    assert [f["id"] for f in out["facilities"]] == ["fac-histology", "fac-massspec"]
+    assert T.find_facilities(ctxs["bob"], campus="north")["matched"] == 3
 
 
 def test_the_whole_directory_is_returned_when_nothing_is_asked_for(ctxs):
     out = T.find_facilities(ctxs["bob"])
-    assert out["matched"] == 3
-    assert out["matched_instruments"] == 12
+    assert out["matched"] == 5
+    assert out["matched_instruments"] == 19
     assert all(f["distance_km"] is None for f in out["facilities"] if "distance_km" in f)
 
 
@@ -396,7 +398,7 @@ def test_both_dispatch_through_call(ctxs):
 
 def test_a_plain_user_may_use_both_tools(ctxs):
     """T0: a facility directory is public information — no lab or facility filter."""
-    assert T.find_facilities(ctxs["bob"])["matched"] == 3
+    assert T.find_facilities(ctxs["bob"])["matched"] == 5
     assert T.recommend_instrument(ctxs["bob"], goal="sequencing")["matched"] > 0
 
 

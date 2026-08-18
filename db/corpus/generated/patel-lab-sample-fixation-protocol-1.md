@@ -16,15 +16,15 @@ Covers fixation of fresh material only; anything already frozen follows the cryo
 
 ## Reagents
 
-Prepare fresh on the day. Anything held longer than 24 hours at 4 °C is discarded
+Prepare fresh on the day. Anything held longer than 24 hours at 37 °C is discarded
 rather than used — the failure mode is silent and shows up as inconsistent results a week
 later.
 
 ## Method
 
-1. Equilibrate samples to 4 °C for 30 minutes.
+1. Equilibrate samples to 37 °C for 15 minutes.
 2. Apply the working solution at the dilution recorded in the lab's reagent register.
-3. Incubate for 30 minutes with gentle agitation.
+3. Incubate for 15 minutes with gentle agitation.
 4. Wash three times; do not let the sample dry between washes.
 
 ## Notes

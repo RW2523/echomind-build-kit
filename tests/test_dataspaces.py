@@ -311,7 +311,7 @@ def test_the_row_cap_is_reported_on_every_page(client, tokens):
     assert body["cap"] == sql_guard.MAX_ROWS
     assert body["limit"] == 10
     assert body["returned"] == 10
-    assert body["total"] == 500
+    assert body["total"] == 1500
     assert str(body["cap"]) in body["cap_note"]
     assert str(body["total"]) in body["cap_note"]
 
@@ -326,14 +326,32 @@ def test_paging_reaches_every_row_without_repeating_one(client, tokens):
     """The reason the response names its ordering: a LIMIT with no ORDER BY pages over an
     order Postgres never promised, so page two can repeat a row from page one and drop
     another entirely."""
+    whole_rows: list[dict] = []
+    while True:
+        chunk = _admin(
+            client, tokens,
+            f"/dataspaces/rows/reporting/v_billing_lines?limit=200&offset={len(whole_rows)}",
+        )
+        whole_rows += chunk["rows"]
+        if len(chunk["rows"]) < 200:
+            break
+    whole = {"rows": whole_rows}
+
     seen: list[str] = []
-    for offset in (0, 50):
+    for offset in range(0, len(whole["rows"]), 50):
         page = _admin(
             client, tokens, f"/dataspaces/rows/reporting/v_billing_lines?limit=50&offset={offset}"
         )
         assert page["ordered_by"]
         seen += [json.dumps(row, sort_keys=True) for row in page["rows"]]
-    assert len(seen) == len(set(seen)) == 91
+
+    # Compared as a multiset, not a set. Two invoice lines can be identical — the same
+    # instrument, period and amount, billed twice — and asserting every row distinct was
+    # asserting something about the fixture rather than about paging. What paging owes is
+    # that walking it reaches each row exactly once, which is this.
+    assert sorted(seen) == sorted(
+        json.dumps(row, sort_keys=True) for row in whole["rows"]
+    )
 
 
 def test_money_and_timestamps_survive_the_json_round_trip(client, tokens):
@@ -432,5 +450,5 @@ def test_the_infinity_tables_are_still_readable_by_this_console(client, tokens):
     the console being wrong and the console being restricted."""
     body = _admin(client, tokens, "/dataspaces/rows/infinity/instruments?limit=3")
     assert body["kind"] == "table"
-    assert body["total"] == 12
+    assert body["total"] == 19
     assert len(body["rows"]) == 3

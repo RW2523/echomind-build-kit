@@ -29,8 +29,14 @@ CHECKPOINT_SCHEMA = "echomind"
 # Everything is generated relative to this instant. 2026-03-31 makes the three invoice
 # periods 2026-01/02/03 and the 90-day booking window line up exactly.
 REFERENCE = datetime(2026, 3, 31, 17, 0, tzinfo=UTC)
-WINDOW_DAYS = 90
-PERIODS = ["2026-01", "2026-02", "2026-03"]
+# Nine months rather than three. Three made every "has this gone up or down?" question
+# unanswerable — two points and a guess — and left seasonal questions with nothing to see.
+# The window and the invoice periods move together so a booking always has a period to be
+# billed in, and 2026-01/02/03 are still in it exactly as they were: the March story that
+# test_march_billing_story_is_exact pins to the penny is untouched.
+WINDOW_DAYS = 270
+PERIODS = ["2025-07", "2025-08", "2025-09", "2025-10", "2025-11", "2025-12",
+           "2026-01", "2026-02", "2026-03"]
 
 RNG_SEED = 1337
 
@@ -52,6 +58,14 @@ FACILITIES = [
      "Riverside Campus", "Perutz Laboratories", "Basement, Rooms B.01-B.09",
      "88 Sanger Street, Riverside Campus", 51.498220, -0.176500,
      "massspec-core@example.edu", "09:00-18:00 Mon-Fri"),
+    ("fac-flow", "Flow Cytometry Core", "FLOW",
+     "North Campus", "Sanger Building", "Level 1, Rooms 1.04-1.09",
+     "7 Rutherford Way, North Campus", 51.525020, -0.131870,
+     "flow-core@example.edu", "08:30-18:30 Mon-Fri"),
+    ("fac-histology", "Histology and Pathology Core", "HIST",
+     "Riverside Campus", "Hodgkin Annexe", "Ground floor, Rooms G.01-G.06",
+     "12 Sanger Street, Riverside Campus", 51.497410, -0.174330,
+     "histology-core@example.edu", "08:00-17:00 Mon-Fri"),
 ]
 
 # (id, facility, name, hourly_rate, status, modality, room, techniques, sample_types, spec)
@@ -119,6 +133,46 @@ INSTRUMENTS = [
      ["MALDI-TOF", "peptide mass fingerprinting", "microbial identification", "intact mass"],
      ["peptides", "intact proteins", "microbial isolates"],
      "MALDI-TOF for rapid intact mass, fingerprinting and organism ID."),
+    # --- Flow Cytometry Core --------------------------------------------------
+    ("ins-aurora", "fac-flow", "Aurora Spectral Analyser", 58.00, "available",
+     "flow cytometry", "1.04",
+     ["spectral flow cytometry", "immunophenotyping", "high-parameter panels",
+      "cell cycle analysis"],
+     ["single-cell suspensions", "whole blood", "dissociated tissue"],
+     "5-laser spectral analyser, up to 40 parameters, autofluorescence extraction."),
+    ("ins-fusion-sorter", "fac-flow", "Fusion Cell Sorter", 96.00, "available",
+     "flow cytometry", "1.06",
+     ["cell sorting", "single-cell deposition", "index sorting", "immunophenotyping"],
+     ["single-cell suspensions", "dissociated tissue", "bacteria"],
+     "4-way sorter with 70/85/100 um nozzles and biosafety cabinet, index sorting to 384."),
+    ("ins-cytof", "fac-flow", "Helios Mass Cytometer", 132.00, "maintenance",
+     "mass cytometry", "1.09",
+     ["mass cytometry", "CyTOF", "high-parameter panels", "immunophenotyping"],
+     ["single-cell suspensions", "dissociated tissue"],
+     "Metal-tagged antibody cytometry, ~45 parameters, no spectral overlap."),
+    # --- Histology and Pathology Core ------------------------------------------
+    ("ins-slide-scanner", "fac-histology", "Axio Slide Scanner", 26.00, "available",
+     "digital pathology", "G.02",
+     ["slide scanning", "whole slide imaging", "brightfield histology",
+      "fluorescence scanning"],
+     ["stained slides", "tissue sections", "TMA blocks"],
+     "Brightfield and 4-channel fluorescence, 20x/40x, 120-slide loader."),
+    ("ins-cryostat", "fac-histology", "Cryostat CM3", 18.00, "available",
+     "sample preparation", "G.04",
+     ["cryosectioning", "frozen sectioning", "tissue preparation"],
+     ["frozen tissue", "OCT blocks"],
+     "Motorised cryostat, 1-60 um sections, chamber to -35 C."),
+    ("ins-microtome", "fac-histology", "Microtome RM7", 15.00, "available",
+     "sample preparation", "G.05",
+     ["microtomy", "paraffin sectioning", "tissue preparation"],
+     ["FFPE blocks", "paraffin blocks"],
+     "Rotary microtome for FFPE, 0.5-100 um, with water bath and section transfer."),
+    ("ins-multiplex-ihc", "fac-histology", "Multiplex IHC Stainer", 44.00, "available",
+     "histochemistry", "G.06",
+     ["multiplex immunohistochemistry", "immunostaining", "chromogenic staining",
+      "tissue preparation"],
+     ["FFPE blocks", "tissue sections", "stained slides"],
+     "Automated multiplex IHC, up to 8 markers per slide, 30-slide capacity."),
 ]
 
 LABS = [
@@ -128,6 +182,8 @@ LABS = [
     ("lab-d", "Haruki Lab (Neuroscience)"),
     ("lab-e", "Novak Lab (Immunology)"),
     ("lab-f", "Silva Lab (Plant Sciences)"),
+    ("lab-g", "Adeyemi Lab (Cancer Biology)"),
+    ("lab-h", "Lindqvist Lab (Developmental Biology)"),
 ]
 
 ACCOUNT_CODES = [
@@ -135,6 +191,7 @@ ACCOUNT_CODES = [
     ("ACC-B1", "lab-b"), ("ACC-B2", "lab-b"),
     ("ACC-C1", "lab-c"), ("ACC-D1", "lab-d"),
     ("ACC-E1", "lab-e"), ("ACC-F1", "lab-f"),
+    ("ACC-G1", "lab-g"), ("ACC-G2", "lab-g"), ("ACC-H1", "lab-h"),
 ]
 
 FILLER_NAMES = [
@@ -142,7 +199,9 @@ FILLER_NAMES = [
     "Ivo Petrov", "Jia Chen", "Kofi Mensah", "Lena Brandt", "Mateo Rossi",
     "Nina Berg", "Omar Farouk", "Priya Raman", "Quinn Doyle", "Rosa Iglesias",
     "Sven Aalto", "Tara Byrne", "Umar Sayeed", "Vera Novak", "Wes Larkin",
-    "Yara Costa",
+    "Yara Costa", "Zoe Mbeki", "Arun Deshpande", "Bea Lindholm", "Caleb Osei",
+    "Dilara Yilmaz", "Emil Sorensen", "Fatima Zahra", "Goran Petrovic",
+    "Hina Matsumoto", "Idris Bello", "Jonas Weber", "Kiara Santos",
 ]
 
 TEMPLATES = [
@@ -405,7 +464,7 @@ def seed() -> None:
             + [DEMO_USERS["asha"]["id"]] * 8
             + [DEMO_USERS["cora"]["id"]] * 3
         )
-        for n in range(200):
+        for n in range(620):
             uid = guaranteed[n] if n < len(guaranteed) else rng.choice(user_ids)
             iid = rng.choice(instrument_ids)
             offset_min = rng.randrange(0, WINDOW_DAYS * 24 * 60, 30)
@@ -437,7 +496,7 @@ def seed() -> None:
         #     (120 of those with no booking at all — walk-up usage) ---
         usage = []
         active_bookings = [b for b in bookings if b["status"] in ("confirmed", "completed")]
-        for n in range(320):
+        for n in range(980):
             b = active_bookings[n % len(active_bookings)]
             usage.append({
                 "id": f"ur-{n:04d}",
@@ -448,7 +507,7 @@ def seed() -> None:
                 "ends_at": b["ends_at"],
                 "source": "scheduled",
             })
-        for n in range(320, 500):
+        for n in range(980, 1500):
             attached = n < 380  # 60 tracked records reconcile to a booking, 120 do not
             if attached:
                 b = active_bookings[(n * 7) % len(active_bookings)]
@@ -496,7 +555,7 @@ def seed() -> None:
 
         requests, samples = [], []
         sample_n = 0
-        for n in range(40):
+        for n in range(130):
             uid = (DEMO_USERS["alice"]["id"] if n < 6
                    else DEMO_USERS["bob"]["id"] if n < 10
                    else rng.choice(user_ids))
@@ -624,7 +683,7 @@ def seed() -> None:
 
         # --- 60 maintenance events ---
         events = []
-        for n in range(60):
+        for n in range(180):
             kind = ["preventive", "repair", "alert"][n % 3]
             occurred = window_start + timedelta(minutes=rng.randrange(0, WINDOW_DAYS * 24 * 60))
             downtime = {"preventive": rng.randrange(1, 5), "repair": rng.randrange(4, 48),

@@ -517,7 +517,7 @@ def test_the_facility_catalogue_exposes_location_and_capability():
     ctx = Ctx(user_id="u-alice", name="Alice", role="user", lab_ids=("lab-a",),
               facility_ids=(), raw={})
     out = T.get_facility_catalog(ctx)
-    assert len(out["facilities"]) == 3 and len(out["instruments"]) == 12
+    assert len(out["facilities"]) == 5 and len(out["instruments"]) == 19
     facility = next(f for f in out["facilities"] if f["id"] == "fac-imaging")
     for key in ("campus", "building", "room", "address", "opening_hours", "contact_email"):
         assert facility.get(key), f"{key} missing from the catalogue"

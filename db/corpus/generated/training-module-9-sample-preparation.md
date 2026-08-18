@@ -6,7 +6,7 @@ visibility: public
 
 # Training Module 9 — Sample Preparation
 
-A 2-hour module on sample preparation. Where preparation choices constrain every downstream measurement. This module is additional to instrument
+A 8-hour module on sample preparation. Where preparation choices constrain every downstream measurement. This module is additional to instrument
 training and does not by itself grant booking rights on any instrument.
 
 ## Who it is for

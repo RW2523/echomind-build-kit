@@ -6,7 +6,7 @@ visibility: public
 
 # Training Module 8 — Quality Control Basics
 
-A 8-hour module on quality control basics. Reading the daily QC record and recognising drift before it costs a dataset. This module is additional to instrument
+A 2-hour module on quality control basics. Reading the daily QC record and recognising drift before it costs a dataset. This module is additional to instrument
 training and does not by itself grant booking rights on any instrument.
 
 ## Who it is for

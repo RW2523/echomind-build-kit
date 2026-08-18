@@ -73,6 +73,24 @@ def needs_rewrite(question: str, history: str) -> bool:
     return len(question.split()) <= MAX_WORDS_ALWAYS_REWRITE
 
 
+def refers_back(question: str, history: str) -> bool:
+    """Does this message actually lean on the turn before it?
+
+    The strict half of needs_rewrite, without its length rule. Retrieval wants that rule:
+    "The warm-up?" carries no pronoun, retrieves on two stopwords, and a rewrite is the
+    only thing that saves it — a bad rewrite there costs a redirect, which is recoverable.
+
+    A lookup pays differently. "Show me Alice's bookings" is four words and perfectly
+    clear, and being rewritten against a previous turn about a hypoxia note produced "The
+    private marker in your hypoxia timecourse note is not present in the records" — an
+    answer to a question nobody asked, in a conversation whose entire point was refusing
+    to answer about someone else's records. Shortness is not dependence.
+    """
+    if not history.strip() or not question.strip():
+        return False
+    return bool(_DEPENDENT_RE.search(question) or _CONTINUATION_RE.match(question))
+
+
 def is_unresolvable(question: str, history: str) -> bool:
     """A message that is almost nothing but a reference, with no conversation behind it.
 

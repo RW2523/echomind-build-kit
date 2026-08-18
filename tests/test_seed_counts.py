@@ -10,16 +10,16 @@ pytestmark = pytest.mark.seed_counts
 
 # Exactly the volumes stated in spec 01.
 EXPECTED_COUNTS = {
-    "infinity.facilities": 3,
-    "infinity.instruments": 12,
-    "infinity.labs": 6,
-    "infinity.users": 25,
-    "infinity.bookings": 200,
-    "infinity.usage_records": 500,
+    "infinity.facilities": 5,
+    "infinity.instruments": 19,
+    "infinity.labs": 8,
+    "infinity.users": 37,
+    "infinity.bookings": 620,
+    "infinity.usage_records": 1500,
     "infinity.request_templates": 8,
-    "infinity.service_requests": 40,
+    "infinity.service_requests": 130,
     "infinity.projects": 4,
-    "infinity.maintenance_events": 60,
+    "infinity.maintenance_events": 180,
 }
 
 # Approving a booking, a service request or an onboarding writes to these three tables,
@@ -69,7 +69,11 @@ def test_three_monthly_invoice_periods(db):
     periods = db.execute(
         text("SELECT DISTINCT period FROM infinity.invoices ORDER BY period")
     ).scalars().all()
-    assert periods == ["2026-01", "2026-02", "2026-03"]
+    # Nine months, not three: two points and a guess is not a trend, and every "has this
+    # gone up since the summer?" question was unanswerable. 2026-01/02/03 are still in it
+    # unchanged, which is what keeps the March story below exact.
+    assert periods == ["2025-07", "2025-08", "2025-09", "2025-10", "2025-11", "2025-12",
+                       "2026-01", "2026-02", "2026-03"]
 
 
 def test_invoice_totals_match_their_lines(db):

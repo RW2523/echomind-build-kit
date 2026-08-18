@@ -6,7 +6,7 @@ visibility: public
 
 # Training Module 7 — Experimental Design Clinic
 
-A 2-hour module on experimental design clinic. Bring a planned experiment; leave knowing what the instrument can and cannot tell you. This module is additional to instrument
+A 3-hour module on experimental design clinic. Bring a planned experiment; leave knowing what the instrument can and cannot tell you. This module is additional to instrument
 training and does not by itself grant booking rights on any instrument.
 
 ## Who it is for

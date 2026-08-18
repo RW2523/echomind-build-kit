@@ -50,8 +50,8 @@ def test_1_get_user_profile_defaults_to_caller(ctxs):
 
 def test_2_get_facility_catalog(ctxs):
     out = T.get_facility_catalog(ctxs["alice"])
-    assert len(out["facilities"]) == 3
-    assert len(out["instruments"]) == 12
+    assert len(out["facilities"]) == 5
+    assert len(out["instruments"]) == 19
     assert len(out["templates"]) == 8
     assert any(i["name"] == "Confocal C2" for i in out["instruments"])
 

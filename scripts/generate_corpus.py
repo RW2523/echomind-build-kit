@@ -59,6 +59,14 @@ INSTRUMENTS = [
     ("Orbitrap Exploris", "Mass Spectrometry Core", "orbitrap mass spectrometer", 96.00),
     ("Q-TOF 6546", "Mass Spectrometry Core", "quadrupole time-of-flight system", 61.00),
     ("MALDI-TOF R2", "Mass Spectrometry Core", "MALDI time-of-flight system", 44.00),
+    ("Aurora Spectral Analyser", "Flow Cytometry Core", "spectral flow analyser", 58.00),
+    ("Fusion Cell Sorter", "Flow Cytometry Core", "four-way cell sorter", 96.00),
+    ("Helios Mass Cytometer", "Flow Cytometry Core", "mass cytometer", 132.00),
+    ("Axio Slide Scanner", "Histology and Pathology Core", "whole slide scanner", 26.00),
+    ("Cryostat CM3", "Histology and Pathology Core", "motorised cryostat", 18.00),
+    ("Microtome RM7", "Histology and Pathology Core", "rotary microtome", 15.00),
+    ("Multiplex IHC Stainer", "Histology and Pathology Core",
+     "automated multiplex IHC stainer", 44.00),
 ]
 
 LABS = [
@@ -68,6 +76,8 @@ LABS = [
     ("lab-d", "Haruki Lab", "neuroscience"),
     ("lab-e", "Novak Lab", "immunology"),
     ("lab-f", "Silva Lab", "plant sciences"),
+    ("lab-g", "Adeyemi Lab", "cancer biology"),
+    ("lab-h", "Lindqvist Lab", "developmental biology"),
 ]
 
 CONSUMABLES = [

@@ -6,7 +6,7 @@ visibility: public
 
 # Training Module 11 — Cross-Core Projects
 
-A 8-hour module on cross-core projects. Sequencing work across two cores without losing the thread between them. This module is additional to instrument
+A 4-hour module on cross-core projects. Sequencing work across two cores without losing the thread between them. This module is additional to instrument
 training and does not by itself grant booking rights on any instrument.
 
 ## Who it is for

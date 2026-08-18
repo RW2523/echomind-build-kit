@@ -6,7 +6,7 @@ visibility: public
 
 # Training Module 4 — Image Analysis
 
-A 3-hour module on image analysis. Reproducible processing: keeping the pipeline with the data rather than in someone's notebook. This module is additional to instrument
+A 2-hour module on image analysis. Reproducible processing: keeping the pipeline with the data rather than in someone's notebook. This module is additional to instrument
 training and does not by itself grant booking rights on any instrument.
 
 ## Who it is for

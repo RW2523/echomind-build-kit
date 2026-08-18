@@ -6,7 +6,7 @@ visibility: public
 
 # Training Module 1 — Instrument Induction
 
-A 8-hour module on instrument induction. How the booking system, the account code and the instrument PC fit together. This module is additional to instrument
+A 4-hour module on instrument induction. How the booking system, the account code and the instrument PC fit together. This module is additional to instrument
 training and does not by itself grant booking rights on any instrument.
 
 ## Who it is for
